@@ -28,7 +28,18 @@ def _setup(tmp_path: Path, catalog: BrandCatalog) -> tuple[AssetStore, Database,
     db.migrate()
     episode = Episode.create(catalog, "red", "colors-red")
     db.create_episode(catalog, episode)
-    return AssetStore(tmp_path / "assets", db), db, episode
+    store = AssetStore(tmp_path / "assets", db)
+    store.record_approval(
+        ApprovalDecision(
+            target_id=episode.episode_id,
+            target_kind="episode",
+            status="approved",
+            actor="reviewer",
+            policy_version="1",
+            decided_at=datetime.now(UTC),
+        )
+    )
+    return store, db, episode
 
 
 def _put(
@@ -171,7 +182,9 @@ def test_pure_plan_requires_transitive_rights() -> None:
             ),
         )
         selected[requirement.key] = artifact_id
-    snapshot = PlanSnapshot("episode-1", slots, {}, scene_ids, None, ("brand-reference-uncleared",))
+    snapshot = PlanSnapshot(
+        "episode-1", slots, {}, scene_ids, None, ("brand-reference-uncleared",), "approved"
+    )
     result = plan(snapshot, "release")
     assert result.action == "rights"
     assert result.artifact_id == "brand-reference-uncleared"

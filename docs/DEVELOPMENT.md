@@ -9,7 +9,7 @@ uv run mypy src
 uv run pytest -q
 ```
 
-The numbered migrations create the durable identity, artifact-validation and continuation schemas. For a local smoke check, load `brands/tovitunes`, create an `Episode` for concept `red`, then call `Database.migrate()` and `Database.create_episode()`. Reopening the database preserves the pinned brand, curriculum and character-pack revisions. The [artifact store guide](ARTIFACT_STORE.md) covers file ingestion, decisions, selection and recovery. The [continuation guide](CONTINUATION.md) covers dry planning, request identity and leases. `CharacterAssetPack` v1 is a draft metadata shell; no canonical art is approved yet.
+The numbered migrations create the durable identity, artifact-validation and continuation schemas. For a local smoke check, load `brands/tovitunes`, create an `Episode` for concept `red`, then call `Database.migrate()` and `Database.create_episode()`. Reopening the database preserves the pinned brand, curriculum and character-pack revisions. The [artifact store guide](ARTIFACT_STORE.md) covers file ingestion, decisions, selection and recovery. The [continuation guide](CONTINUATION.md) covers dry planning, request identity and leases. The [creative draft guide](CREATIVE.md) covers the objective, premise and lyrics review gates with an offline fake. `CharacterAssetPack` v1 is a draft metadata shell; no canonical art is approved yet.
 
 Runtime paths in `config.example.yaml` are relative to that file. Copy it to a local config before running code that needs a database. Keep `data/`, `secrets/` and generated media out of Git. Publication is disabled and the expected YouTube channel ID is unset by default. No provider, renderer or uploader is active yet.
 

@@ -417,6 +417,20 @@ class AssetStore:
                 return False, str(exc)
         return True, None
 
+    def deselect(self, artifact_id: str) -> bool:
+        """Forget a selected pointer while retaining its immutable version and decisions."""
+        with closing(self.database.connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = connection.execute(
+                    "DELETE FROM artifact_selections WHERE artifact_id = ?", (artifact_id,)
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return cursor.rowcount > 0
+
     def selected(
         self, owner_scope: Literal["episode", "brand"], owner_id: str, kind: str, slot_key: str
     ) -> ArtifactRecord | None:

@@ -48,6 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             json.dumps(
                 {
                     "episode_id": snapshot.episode_id,
+                    "objective_approval": snapshot.objective_approval,
                     "goal": goal,
                     "scene_ids": snapshot.scene_ids,
                     "next_action": asdict(result),
