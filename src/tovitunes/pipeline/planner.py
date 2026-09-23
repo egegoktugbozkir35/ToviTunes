@@ -61,6 +61,7 @@ class PlanSnapshot:
     scene_ids: tuple[str, ...] = ()
     storyboard_problem: str | None = None
     uncleared_rights: tuple[str, ...] = ()
+    objective_approval: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,8 @@ def _classify(candidate: CandidateFact) -> Action:
 
 def plan(snapshot: PlanSnapshot, goal: Goal) -> PlanResult:
     """Pure decision over one snapshot; callers must recheck before side effects."""
+    if snapshot.objective_approval != "approved":
+        return PlanResult("review", "learning_objective", "pinned objective needs human approval")
     selected_by_key: dict[str, str] = {}
     for node in requirements(goal, snapshot.scene_ids):
         slot = (node.kind, node.slot_key)
@@ -224,6 +227,11 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
         ).fetchone()
         if episode is None:
             raise KeyError(episode_id)
+        objective_decision = connection.execute(
+            "SELECT status FROM approval_decisions WHERE episode_id = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (episode_id,),
+        ).fetchone()
         rows = connection.execute(
             "SELECT artifact_id, kind, slot_key, created_at FROM artifact_versions "
             "WHERE episode_id = ? ORDER BY created_at DESC, rowid DESC",
@@ -310,6 +318,7 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
         scene_ids=scene_ids,
         storyboard_problem=storyboard_problem,
         uncleared_rights=tuple(sorted(uncleared)),
+        objective_approval=objective_decision["status"] if objective_decision else None,
     )
 
 

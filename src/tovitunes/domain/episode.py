@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tovitunes.catalog import BrandCatalog
+from tovitunes.domain.creative import EpisodeSpec as EpisodeSpec
 
 
 class PinnedCharacterPack(BaseModel):
@@ -68,21 +69,4 @@ class Episode(BaseModel):
             ),
             created_at=datetime.now(UTC),
         )
-
-
-class EpisodeSpec(BaseModel):
-    """Reviewed creative specification before music and timed scenes exist."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: int = Field(default=1, ge=1, le=1)
-    episode_id: str
-    objective_id: str
-    premise: str
-    cast: tuple[str, ...] = Field(min_length=1)
-    setting: str
-    teaching_vocabulary: tuple[str, ...] = Field(min_length=1)
-    story_beats: tuple[str, ...] = Field(min_length=1)
-    lyrics: str
-    desired_structure: str
 
