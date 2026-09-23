@@ -21,6 +21,6 @@ db.create_episode(catalog, episode)
 print(db.get_episode(episode.episode_id).model_dump_json(indent=2))
 ```
 
-See [the architecture proposal](docs/ARCHITECTURE_PROPOSAL.md), [artifact store guide](docs/ARTIFACT_STORE.md), and [development guide](docs/DEVELOPMENT.md) for scope and verification commands.
+See [the architecture proposal](docs/ARCHITECTURE_PROPOSAL.md), [artifact store guide](docs/ARTIFACT_STORE.md), [continuation guide](docs/CONTINUATION.md), and [development guide](docs/DEVELOPMENT.md) for scope and verification commands.
 
 

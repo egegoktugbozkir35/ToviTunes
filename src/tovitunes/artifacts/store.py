@@ -64,9 +64,15 @@ class ValidationResult:
 
 class AssetStore:
     def __init__(
-        self, root: Path, database: Database, *, generated_source_roots: Sequence[Path] = ()
+        self,
+        root: Path,
+        database: Database,
+        *,
+        generated_source_roots: Sequence[Path] = (),
+        initialize: bool = True,
     ) -> None:
-        root.mkdir(parents=True, exist_ok=True)
+        if initialize:
+            root.mkdir(parents=True, exist_ok=True)
         if root.is_symlink():
             raise ValueError("asset root cannot be a symlink")
         self.root = root.resolve(strict=True)
@@ -76,8 +82,9 @@ class AssetStore:
         )
         for name in (".staging", "quarantine"):
             directory = self.root / name
-            directory.mkdir(exist_ok=True)
-            resolved = directory.resolve(strict=True)
+            if initialize:
+                directory.mkdir(exist_ok=True)
+            resolved = directory.resolve(strict=False)
             if directory.is_symlink() or not resolved.is_relative_to(self.root):
                 raise ValueError(f"asset {name} directory is not trusted")
 
@@ -289,6 +296,13 @@ class AssetStore:
         except (FileNotFoundError, ValueError, OSError) as exc:
             return ValidationResult(False, (type(exc).__name__,))
 
+    def read_json(self, artifact_id: str) -> object:
+        record = self.get(artifact_id)
+        if record.mime_type != "application/json" or not self.inspect(artifact_id).valid:
+            raise ValueError("JSON artifact is invalid")
+        path = self._trusted_path(record.relative_path, must_exist=True)
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def record_rights(self, decision: RightsDecision) -> None:
         with closing(self.database.connect()) as connection:
             connection.execute(
@@ -393,6 +407,15 @@ class AssetStore:
                 connection.rollback()
                 raise
         return self.get(artifact_id)
+
+    def eligibility(self, artifact_id: str) -> tuple[bool, str | None]:
+        """Read-only gate check for the planner; selection rechecks it under a write lock."""
+        with closing(self.database.connect()) as connection:
+            try:
+                self._eligible(connection, artifact_id, set())
+            except (KeyError, ValueError) as exc:
+                return False, str(exc)
+        return True, None
 
     def selected(
         self, owner_scope: Literal["episode", "brand"], owner_id: str, kind: str, slot_key: str
