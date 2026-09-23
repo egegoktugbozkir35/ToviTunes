@@ -1,0 +1,51 @@
+schema_version: 1
+prompt_version: music-benchmark-v1
+common_brief: >-
+  Create an original 35-second English preschool song for ages 3–6.
+  Use a warm, clear vocal and simple memorable melody. Keep the supplied
+  lyrics exactly, with the target teaching word easy to hear. Avoid named
+  artist, song, franchise and copyrighted-character imitation. No long intro.
+requested_duration_seconds: 35
+minimum_attempts_per_provider_case: 2
+cases:
+  - id: red
+    objective: Identify red in a familiar object.
+    target_words: [red]
+    lyrics: |
+      Red, red, a red ball rolls.
+      Red, red, see it go!
+      Tovi points and says, "It's red!"
+      Red, red, now we know.
+  - id: blue
+    objective: Identify blue in a familiar object.
+    target_words: [blue]
+    lyrics: |
+      Blue, blue, a blue kite flies.
+      Blue, blue, in the sky!
+      Tovi points and says, "It's blue!"
+      Blue, blue, way up high.
+  - id: three
+    objective: Count three visible objects.
+    target_words: [three]
+    lyrics: |
+      One, two, three, three stars shine.
+      Count them with me, one more time.
+      One, two, three, we see three.
+      Three bright stars for you and me.
+  - id: circle
+    objective: Recognize a circle as a round shape.
+    target_words: [circle]
+    lyrics: |
+      Circle, circle, round we go.
+      A circle has no corners, no!
+      Tovi draws a circle here.
+      Circle, circle, clap and cheer.
+  - id: happy
+    objective: Recognize and name a happy feeling.
+    target_words: [happy]
+    lyrics: |
+      Happy, happy, I can smile.
+      Happy, happy, stay a while.
+      Tovi feels happy, sings with me.
+      Happy, happy as can be.
+
