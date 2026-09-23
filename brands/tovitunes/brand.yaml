@@ -1,0 +1,13 @@
+schema_version: 1
+brand_id: tovitunes
+version: 1.0.0
+name: ToviTunes
+language: en
+target_age_min: 3
+target_age_max: 6
+duration_min_seconds: 30
+duration_max_seconds: 45
+curriculum_file: curriculum/colors.v1.yaml
+characters:
+  - tovi
+

@@ -1,0 +1,45 @@
+schema_version: 1
+curriculum_id: colors
+version: 1.0.0
+concepts:
+  - concept_id: red
+    objective_id: colors.red.identify
+    objective: "Identify red in a clearly shown familiar object."
+    target_vocabulary: [red]
+  - concept_id: blue
+    objective_id: colors.blue.identify
+    objective: "Identify blue in a clearly shown familiar object."
+    target_vocabulary: [blue]
+  - concept_id: yellow
+    objective_id: colors.yellow.identify
+    objective: "Identify yellow in a clearly shown familiar object."
+    target_vocabulary: [yellow]
+  - concept_id: green
+    objective_id: colors.green.identify
+    objective: "Identify green in a clearly shown familiar object."
+    target_vocabulary: [green]
+  - concept_id: orange
+    objective_id: colors.orange.identify
+    objective: "Identify orange in a clearly shown familiar object."
+    target_vocabulary: [orange]
+  - concept_id: purple
+    objective_id: colors.purple.identify
+    objective: "Identify purple in a clearly shown familiar object."
+    target_vocabulary: [purple]
+  - concept_id: pink
+    objective_id: colors.pink.identify
+    objective: "Identify pink in a clearly shown familiar object."
+    target_vocabulary: [pink]
+  - concept_id: black
+    objective_id: colors.black.identify
+    objective: "Identify black in a clearly shown familiar object."
+    target_vocabulary: [black]
+  - concept_id: white
+    objective_id: colors.white.identify
+    objective: "Identify white in a clearly shown familiar object."
+    target_vocabulary: [white]
+  - concept_id: rainbow
+    objective_id: colors.rainbow.review
+    objective: "Recognize and name several previously taught colors."
+    target_vocabulary: [red, blue, yellow, green]
+

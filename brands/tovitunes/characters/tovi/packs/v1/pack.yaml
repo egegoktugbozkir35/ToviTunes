@@ -1,0 +1,15 @@
+schema_version: 1
+pack_id: tovi-pack-v1
+character_id: tovi
+version: 1.0.0
+readiness: draft
+palette: {}
+canonical_views: []
+expressions: []
+wing_poses: []
+mouth_states: []
+reusable_sprites: []
+rig_data: null
+allowed_accessories: []
+forbidden_changes: []
+

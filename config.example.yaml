@@ -1,0 +1,7 @@
+schema_version: 1
+database_path: data/tovitunes.db
+data_root: data
+brand_root: brands/tovitunes
+publication_enabled: false
+expected_youtube_channel_id: null
+

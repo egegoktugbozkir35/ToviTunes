@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv-cache/
+.pytest-tmp/
+worktest/
+*.pyc
+*.egg-info/
+data/
+secrets/
+cache/
+*.db
+*.db-shm
+*.db-wal
+
