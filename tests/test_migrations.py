@@ -20,7 +20,7 @@ def test_episode_survives_reopen_and_migration_is_idempotent(
     reopened.migrate()
     assert reopened.get_episode(episode.episode_id) == episode
     with reopened.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM episode_character_packs").fetchone()[0] == 1
     second = Episode.create(catalog, "blue", "colors-red")
     with pytest.raises(sqlite3.IntegrityError):
