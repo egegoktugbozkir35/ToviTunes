@@ -65,10 +65,13 @@ class Provenance(BaseModel):
 
     @model_validator(mode="after")
     def source_identity(self) -> "Provenance":
-        if self.source_kind == "provider" and not self.provider:
-            raise ValueError("provider provenance requires provider name")
-        if self.source_kind == "manual" and not self.operator:
-            raise ValueError("manual provenance requires operator")
+        provider_complete = self.provider and self.model and self.request_id
+        if self.source_kind == "provider" and not provider_complete:
+            raise ValueError("provider provenance requires provider, model, and request ID")
+        if self.source_kind == "manual" and not (self.operator and self.source_uri):
+            raise ValueError("manual provenance requires operator and source URI")
+        if self.source_kind == "deterministic" and not self.provider:
+            raise ValueError("deterministic provenance requires tool name")
         return self
 
     @classmethod

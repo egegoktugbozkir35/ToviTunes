@@ -63,12 +63,17 @@ class ValidationResult:
 
 
 class AssetStore:
-    def __init__(self, root: Path, database: Database) -> None:
+    def __init__(
+        self, root: Path, database: Database, *, generated_source_roots: Sequence[Path] = ()
+    ) -> None:
         root.mkdir(parents=True, exist_ok=True)
         if root.is_symlink():
             raise ValueError("asset root cannot be a symlink")
         self.root = root.resolve(strict=True)
         self.database = database
+        self.generated_source_roots = tuple(
+            path.resolve(strict=True) for path in generated_source_roots
+        )
         for name in (".staging", "quarantine"):
             directory = self.root / name
             directory.mkdir(exist_ok=True)
@@ -105,6 +110,11 @@ class AssetStore:
         source_path = source.resolve(strict=True)
         if not source_path.is_file():
             raise ValueError("source is not a regular file")
+        if provenance.source_kind != "manual" and not any(
+            source_path.is_relative_to(approved_root)
+            for approved_root in self.generated_source_roots
+        ):
+            raise ValueError("generated source is outside configured trusted roots")
         suffix = source_path.suffix.lower()
         staging = self.root / ".staging" / f"{identity.artifact_id}{suffix}"
         digest = sha256()
@@ -184,6 +194,31 @@ class AssetStore:
                             "passed",
                             digest.hexdigest(),
                             json.dumps(facts, sort_keys=True),
+                            _now(),
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT INTO rights_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            str(uuid4()),
+                            identity.artifact_id,
+                            "unknown",
+                            "system:ingestion",
+                            None,
+                            "ingest-v1",
+                            _now(),
+                        ),
+                    )
+                    connection.execute(
+                        "INSERT INTO approval_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            str(uuid4()),
+                            None,
+                            identity.artifact_id,
+                            "pending",
+                            "system:ingestion",
+                            None,
+                            "ingest-v1",
                             _now(),
                         ),
                     )
@@ -304,11 +339,12 @@ class AssetStore:
         if approval is None or approval["status"] != "approved":
             raise ValueError("artifact lacks current approval")
         rights = connection.execute(
-            "SELECT status FROM rights_decisions WHERE artifact_id = ? "
-            "ORDER BY rowid DESC LIMIT 1",
+            "SELECT status FROM rights_decisions WHERE artifact_id = ? ORDER BY rowid DESC LIMIT 1",
             (artifact_id,),
         ).fetchone()
-        if rights is not None and rights["status"] == "blocked":
+        if rights is None:
+            raise ValueError("artifact lacks rights state")
+        if rights["status"] == "blocked":
             raise ValueError("artifact rights are blocked")
         dependencies = connection.execute(
             "SELECT input_artifact_id, input_sha256 FROM artifact_dependencies "

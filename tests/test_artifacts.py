@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from tovitunes.artifacts.media import InvalidMedia
 from tovitunes.artifacts.store import AssetStore, InputDependency
@@ -54,6 +55,17 @@ def test_ingest_review_select_and_reopen(tmp_path: Path, catalog: BrandCatalog) 
     )
     assert store.inspect(record.identity.artifact_id).valid
     assert record.sha256 == store.get(record.identity.artifact_id).sha256
+    with db.connect() as connection:
+        rights = connection.execute(
+            "SELECT status FROM rights_decisions WHERE artifact_id = ?",
+            (record.identity.artifact_id,),
+        ).fetchone()
+        approval = connection.execute(
+            "SELECT status FROM approval_decisions WHERE artifact_id = ?",
+            (record.identity.artifact_id,),
+        ).fetchone()
+        assert rights["status"] == "unknown"
+        assert approval["status"] == "pending"
     with pytest.raises(ValueError, match="approval"):
         store.select(record.identity.artifact_id)
     store.record_rights(
@@ -150,6 +162,43 @@ def test_invalid_media_and_failed_registration_recover_as_orphan(
     assert len(list((store.root / "quarantine").iterdir())) == 1
     with db.connect() as connection:
         assert connection.execute("SELECT COUNT(*) FROM artifact_versions").fetchone()[0] == 0
+
+
+def test_generated_sources_require_an_explicit_trusted_root(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    store, db, episode = _setup(tmp_path, catalog)
+    generated_root = tmp_path / "generated"
+    generated_root.mkdir()
+    source = _json_source(generated_root, "provider.json", '{"asset": "red"}')
+    with pytest.raises(ValidationError):
+        Provenance(source_kind="provider", provider="example", acquired_at=datetime.now(UTC))
+    provenance = Provenance(
+        source_kind="provider",
+        provider="example",
+        model="v1",
+        request_id="request-1",
+        acquired_at=datetime.now(UTC),
+    )
+    with pytest.raises(ValueError, match="trusted roots"):
+        store.ingest(
+            source,
+            owner_scope="episode",
+            owner_id=episode.episode_id,
+            kind="image",
+            slot_key="scene_1",
+            provenance=provenance,
+        )
+    trusted_store = AssetStore(tmp_path / "assets", db, generated_source_roots=[generated_root])
+    record = trusted_store.ingest(
+        source,
+        owner_scope="episode",
+        owner_id=episode.episode_id,
+        kind="image",
+        slot_key="scene_1",
+        provenance=provenance,
+    )
+    assert record.provenance.request_id == "request-1"
 
 
 def test_immutable_db_rows_and_blocked_rights(tmp_path: Path, catalog: BrandCatalog) -> None:
