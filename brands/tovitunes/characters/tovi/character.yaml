@@ -1,0 +1,6 @@
+schema_version: 1
+character_id: tovi
+version: 1.0.0
+display_name: Tovi
+pack_file: characters/tovi/packs/v1/pack.yaml
+

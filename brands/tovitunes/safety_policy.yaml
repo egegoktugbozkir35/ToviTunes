@@ -1,0 +1,13 @@
+schema_version: 1
+version: 1.0.0
+prohibited:
+  - sexual content
+  - graphic violence
+  - dangerous imitation challenges
+  - substance use
+  - copyrighted character imitation
+review_required:
+  - frightening scenes
+  - ambiguous educational claims
+  - novel generated Tovi poses
+
