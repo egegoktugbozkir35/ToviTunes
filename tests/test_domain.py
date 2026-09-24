@@ -16,7 +16,7 @@ def test_catalog_and_pack_revision_are_independently_pinned(
 ) -> None:
     assert catalog.definition.brand_id == "tovitunes"
     assert catalog.curriculum.get("red").objective_id == "colors.red.identify"
-    assert catalog.pack_revisions[0].readiness == "draft"
+    assert catalog.pack_revisions[0].readiness == "approved"
     episode = Episode.create(catalog, "red", "colors-red")
     assert episode.brand_revision_id == catalog.version.revision_id
     assert episode.character_packs[0].revision_id == catalog.pack_revisions[0].revision_id
@@ -25,9 +25,11 @@ def test_catalog_and_pack_revision_are_independently_pinned(
     shutil.copytree(brand_root, changed_root)
     pack_path = changed_root / "characters" / "tovi" / "packs" / "v1" / "pack.yaml"
     pack_path.write_text(
-        pack_path.read_text(encoding="utf-8") + "\n# revised pack\n", encoding="utf-8"
+        pack_path.read_text(encoding="utf-8").replace("readiness: approved", "readiness: draft"),
+        encoding="utf-8",
     )
     changed = load_brand(changed_root)
+    assert changed.pack_revisions[0].readiness == "draft"
     assert changed.version.revision_id == catalog.version.revision_id
     assert changed.pack_revisions[0].revision_id != catalog.pack_revisions[0].revision_id
     assert episode.character_packs[0].revision_id != changed.pack_revisions[0].revision_id

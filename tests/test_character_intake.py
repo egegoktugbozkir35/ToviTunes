@@ -142,6 +142,10 @@ def test_ingest_preserves_provenance_and_art_rights_separation(
     brand = tmp_path / "tovitunes"
     shutil.copytree(brand_root, brand)
     manifest = brand / "characters/tovi/packs/v1/pack.yaml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("readiness: approved", "readiness: draft"),
+        encoding="utf-8",
+    )
     catalog = load_brand(brand)
     database = Database(tmp_path / "state.db")
     database.migrate()

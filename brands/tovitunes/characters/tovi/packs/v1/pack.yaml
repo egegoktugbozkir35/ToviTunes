@@ -2,7 +2,7 @@ schema_version: 2
 pack_id: tovi-pack-v1
 character_id: tovi
 version: 1.0.0
-readiness: draft
+readiness: approved
 palette:
   body_sky_blue: '#5FBFFC'
   body_shadow_blue: '#218CF9'
@@ -80,15 +80,15 @@ asset_artifact_ids:
   view/three_quarter: 2a3073eb-27c0-47ad-846b-c84340b27c51
   view/profile: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
   view/back: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
-  mouth/closed: 6df438b8-6f7b-447f-9402-53829d658ffe
-  mouth/small_open: d2c89451-2120-42a0-ba11-4b7a00338e99
-  mouth/wide_a: be90c641-0a85-4e18-9066-f4b17954c2b4
-  mouth/e_smile: a3b7feed-f311-453f-96eb-5a52abe7fabe
-  mouth/o_round: 246ea06c-c532-4ef1-9bac-a98082636b9e
+  mouth/closed: 0c531e68-4abf-4b91-8d62-d1e22137778e
+  mouth/small_open: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+  mouth/wide_a: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+  mouth/e_smile: 10a92c61-c890-46a9-b272-8d9a77e08630
+  mouth/o_round: 45d8f038-5faa-4176-8724-44fc24a1b89b
   sprite/expression_neutral: 580d7ddf-fdbd-455b-b348-4fdab60545ec
   sprite/expression_happy: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
   sprite/expression_surprised: d13b6d80-8fbe-437e-99ad-478bb7367094
-  sprite/expression_thinking: e056c7fb-3980-4187-bdca-b0bd682902a3
+  sprite/expression_thinking: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
   sprite/neutral_full_body: 12eaeecb-b482-428d-89b9-0028dcd63668
   sprite/hello: 3fbb5750-9004-408d-9456-f5d5be68a2a0
   sprite/pointing: 6b5943bb-e0c4-487c-ab70-c75816108f47

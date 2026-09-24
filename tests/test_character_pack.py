@@ -21,7 +21,9 @@ def test_pack_stays_draft_without_art_and_rights(tmp_path: Path, catalog: BrandC
     episode = Episode.create(catalog, "red", "colors-red")
     db.create_episode(catalog, episode)
     store = AssetStore(tmp_path / "assets", db)
-    draft = catalog.packs[0]
+    draft = CharacterAssetPack.model_validate(
+        {**catalog.packs[0].model_dump(), "readiness": "draft"}
+    )
     report = assess_pack_assets(draft, store, catalog.version.revision_id)
     assert not report.ready
     assert "pack manifest remains draft" in report.issues
@@ -110,6 +112,13 @@ def test_pack_requires_selected_approved_rights_cleared_brand_assets(
             "asset_artifact_ids": refs,
         }
     )
+    draft_with_all_decisions = CharacterAssetPack.model_validate(
+        {**approved.model_dump(), "readiness": "draft"}
+    )
+    before_transition = assess_pack_assets(
+        draft_with_all_decisions, store, catalog.version.revision_id
+    )
+    assert before_transition.issues == ("pack manifest remains draft",)
     report = assess_pack_assets(approved, store, catalog.version.revision_id)
     assert report.ready
     assert len(report.checked_artifact_ids) == len(roles)
@@ -159,6 +168,7 @@ def test_pack_assessment_detects_an_opaque_animation_sprite(
     draft = CharacterAssetPack.model_validate(
         {
             **catalog.packs[0].model_dump(),
+            "readiness": "draft",
             "asset_artifact_ids": {"sprite/hello": record.identity.artifact_id},
         }
     )

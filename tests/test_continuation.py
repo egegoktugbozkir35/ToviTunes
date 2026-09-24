@@ -108,8 +108,10 @@ def _through_storyboard(store: AssetStore, tmp_path: Path, episode: Episode) -> 
     return ids
 
 
-def test_planner_preserves_song_and_finished_scenes(tmp_path: Path, catalog: BrandCatalog) -> None:
-    store, _, episode = _setup(tmp_path, catalog)
+def test_planner_preserves_song_and_finished_scenes(
+    tmp_path: Path, draft_catalog: BrandCatalog
+) -> None:
+    store, _, episode = _setup(tmp_path, draft_catalog)
     assert plan_episode(store, episode.episode_id, "render").requirement == "episode_spec"
     ids = _through_storyboard(store, tmp_path, episode)
     for scene in ("scene_1", "scene_2"):
@@ -131,6 +133,18 @@ def test_planner_preserves_song_and_finished_scenes(tmp_path: Path, catalog: Bra
     stale = plan_episode(store, episode.episode_id, "render")
     assert stale.action == "stale"
     assert stale.requirement == "audio_alignment"
+
+
+def test_approved_pack_advances_render_and_release_to_next_requirement(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    assert catalog.pack_revisions[0].readiness == "approved"
+    store, _, episode = _setup(tmp_path, catalog)
+    _through_storyboard(store, tmp_path, episode)
+    for goal in ("render", "release"):
+        result = plan_episode(store, episode.episode_id, goal)
+        assert result.action == "produce"
+        assert result.requirement == "scene_image:scene_1"
 
 
 def test_ambiguous_generation_blocks_repetition(tmp_path: Path, catalog: BrandCatalog) -> None:

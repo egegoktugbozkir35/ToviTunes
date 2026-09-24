@@ -1,4 +1,12 @@
 schema_version: 1
+rights_evidence:
+  uri: https://openai.com/policies/row-terms-of-use/
+  policy_version: openai-terms-of-use-2026-01-01
+mouth_normalization:
+  source_canvas: [1254, 1254]
+  output_canvas: [1536, 1664]
+  anchor: [768, 600]
+  alpha_threshold: 8
 # Files are copied byte-for-byte from the owner's attachments into --source-dir.
 # Hashes identify the exact reviewed inputs; the files themselves stay outside Git.
 sources:
@@ -14,42 +22,80 @@ sources:
     filename: turnaround.png
     sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
     source_uri: generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   mouth_reference:
     filename: mouth-reference.png
     sha256: 511b22ed3e82c0fc40eb6cd529bea97b83cb6284861db4929f2403f22b273c48
     source_uri: generation://57b18cc8-fbfa-43cd-89f2-022749abcda6
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   pose_reference:
     filename: pose-reference.png
     sha256: b12d40d329d29a846c41c42c640b17b48931b14fe00185a98eaf84d02fa73b4a
     source_uri: generation://9d90ce6c-2258-472d-9d17-8f67a9c8fb67
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   neutral_master:
     filename: neutral-master.png
     sha256: faec6c23c7cfa34ea8be3d96577b2a9bd07c9a2a83c537d77f86aa5ae5fcad1a
     source_uri: generation://80850451-fb50-4758-959b-7864a6fdaef0
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   rig_parts:
     filename: rig-parts.png
     sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
     source_uri: generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   mouth_sprites:
     filename: mouth-sprites.png
     sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
     source_uri: generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   expressions:
     filename: expressions.png
     sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
     source_uri: generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+    rights_basis: openai_chatgpt_output
     uses_originals: true
   poses:
     filename: poses.png
     sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
     source_uri: generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+    rights_basis: openai_chatgpt_output
     uses_originals: true
+  mouth_closed_replacement:
+    filename: tovi-mouth-closed.png
+    sha256: 7df0278d2f14e7c491b82354a9d6a2ed7d7a13d1404566933356238d38dd39b6
+    source_uri: generation://32aacd64-a8d2-4349-9420-38fde1b9be95
+    rights_basis: openai_chatgpt_output
+  mouth_small_open_replacement:
+    filename: tovi-mouth-small-open.png
+    sha256: 30d796de578b53fa121607676ef88a53693d3a54f224b2a2d5ef12f1afca6a01
+    source_uri: generation://739bea4c-4f9e-4337-bf99-df24066f4c75
+    rights_basis: openai_chatgpt_output
+  mouth_wide_a_replacement:
+    filename: tovi-mouth-wide-a.png
+    sha256: abc9407e31213647e1b14c1ab7de56968a872d1954d05c26ab60b6567dbd4b7e
+    source_uri: generation://e877fa58-1d34-4ed7-83b6-64d1e8c69030
+    rights_basis: openai_chatgpt_output
+  mouth_e_smile_replacement:
+    filename: tovi-mouth-e-smile.png
+    sha256: fd31241e85e7500ae7ac95ce04af96666ad5f467b86c3da074b55a499e61fc8b
+    source_uri: generation://0317c62d-2b86-4d82-aa86-0c535b7b64e7
+    rights_basis: openai_chatgpt_output
+  mouth_o_round_replacement:
+    filename: tovi-mouth-o-round.png
+    sha256: a8ff9dece716a8486b533f017d4e03561f1d75d0dd26ab5cc420d95b118f6485
+    source_uri: generation://3bfe5c6c-6e5f-4cf6-8297-08aa55bdccce
+    rights_basis: openai_chatgpt_output
+  thinking_replacement:
+    filename: tovi-expression-thinking.png
+    sha256: a7f37f86ca7880f158316e4ab43ea80d37c024cefc3cd1db306bfd0b13e517a9
+    source_uri: generation://2f86fce0-b4ea-4e23-bff9-13ec01e47670
+    rights_basis: openai_chatgpt_output
 
 assets:
   - {role: view/front, source: turnaround, rect: [20, 42, 395, 520], method: crop, art_review: approved}
@@ -57,19 +103,17 @@ assets:
   - {role: view/profile, source: turnaround, rect: [735, 42, 1050, 520], method: crop, art_review: approved}
   - {role: view/back, source: turnaround, rect: [1050, 42, 1430, 520], method: crop, art_review: approved}
 
-  # Fixed source y-window and 320x480 output canvas; no individual rescaling.
-  # The five generated busts touch at their seams and vary slightly in head/eye
-  # geometry. Keep these as traceable candidates pending dedicated separated art.
-  - {role: mouth/closed, source: mouth_sprites, rect: [0, 320, 300, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
-  - {role: mouth/small_open, source: mouth_sprites, rect: [300, 320, 588, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
-  - {role: mouth/wide_a, source: mouth_sprites, rect: [588, 320, 870, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
-  - {role: mouth/e_smile, source: mouth_sprites, rect: [870, 320, 1154, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
-  - {role: mouth/o_round, source: mouth_sprites, rect: [1154, 320, 1448, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
+  # Full isolated components, translated only; no scaling or recoloring.
+  - {role: mouth/closed, source: mouth_closed_replacement, rect: [0, 0, 1254, 1254], method: mouth_component, art_review: approved}
+  - {role: mouth/small_open, source: mouth_small_open_replacement, rect: [0, 0, 1254, 1254], method: mouth_component, art_review: approved}
+  - {role: mouth/wide_a, source: mouth_wide_a_replacement, rect: [0, 0, 1254, 1254], method: mouth_component, art_review: approved}
+  - {role: mouth/e_smile, source: mouth_e_smile_replacement, rect: [0, 0, 1254, 1254], method: mouth_component, art_review: approved}
+  - {role: mouth/o_round, source: mouth_o_round_replacement, rect: [0, 0, 1254, 1254], method: mouth_component, art_review: approved}
 
   - {role: sprite/expression_neutral, source: expressions, rect: [0, 300, 390, 820], method: component, canvas: [440, 520], art_review: approved}
   - {role: sprite/expression_happy, source: expressions, rect: [360, 300, 780, 820], method: component, canvas: [440, 520], art_review: approved}
   - {role: sprite/expression_surprised, source: expressions, rect: [730, 300, 1110, 820], method: component, canvas: [440, 520], art_review: approved}
-  - {role: sprite/expression_thinking, source: expressions, rect: [1090, 300, 1448, 820], method: component, canvas: [440, 520], art_review: needs_review, quality_note: right silhouette touches source boundary}
+  - {role: sprite/expression_thinking, source: thinking_replacement, rect: [0, 0, 1254, 1254], method: pad, padding: 32, art_review: approved}
 
   - {role: sprite/neutral_full_body, source: neutral_master, rect: [0, 0, 1254, 1254], method: component, trim: true, art_review: approved}
   - {role: sprite/hello, source: poses, rect: [260, 320, 610, 820], method: component, canvas: [380, 500], art_review: approved}
@@ -85,3 +129,13 @@ assets:
   - {role: sprite/right_wing_full_open, source: rig_parts, rect: [1160, 375, 1438, 665], method: component, trim: true, art_review: approved}
   - {role: sprite/upper_beak_closed, source: rig_parts, rect: [480, 685, 650, 795], method: component, trim: true, art_review: approved}
   - {role: sprite/lower_beak_closed, source: rig_parts, rect: [685, 720, 840, 800], method: component, trim: true, art_review: approved}
+
+# Historical PR #10 candidates remain in the asset store with their original
+# artifact IDs, hashes, review decisions, and source/crop instructions.
+superseded_assets:
+  - {role: mouth/closed, source: mouth_sprites, rect: [0, 320, 300, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
+  - {role: mouth/small_open, source: mouth_sprites, rect: [300, 320, 588, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/wide_a, source: mouth_sprites, rect: [588, 320, 870, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/e_smile, source: mouth_sprites, rect: [870, 320, 1154, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/o_round, source: mouth_sprites, rect: [1154, 320, 1448, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
+  - {role: sprite/expression_thinking, source: expressions, rect: [1090, 300, 1448, 820], method: component, canvas: [440, 520], art_review: needs_review, quality_note: right silhouette touches source boundary}

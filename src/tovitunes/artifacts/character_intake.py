@@ -5,6 +5,7 @@ import json
 import os
 import re
 from collections import deque
+from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -15,12 +16,19 @@ from PIL import Image, ImageFilter
 from PIL import __version__ as pillow_version
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tovitunes.artifacts.character_png import SpriteFacts, inspect_sprite_png
+from tovitunes.artifacts.character_png import (
+    MouthFacts,
+    SpriteFacts,
+    inspect_mouth_component,
+    inspect_sprite_png,
+    validate_mouth_states,
+    visible_art_bbox,
+)
 from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.catalog import BrandCatalog, load_brand
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.character import CharacterAssetPack
-from tovitunes.domain.review import ApprovalDecision
+from tovitunes.domain.review import ApprovalDecision, RightsDecision
 
 _ROLE = re.compile(r"^(view|mouth|sprite)/[a-z][a-z0-9_]*$")
 _SOURCE_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -34,6 +42,7 @@ class SourceSpec(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_uri: str
     uses_originals: bool = False
+    rights_basis: Literal["openai_chatgpt_output"] | None = None
 
     @model_validator(mode="after")
     def safe_file(self) -> "SourceSpec":
@@ -41,6 +50,41 @@ class SourceSpec(BaseModel):
             raise ValueError("source filename must be a simple lowercase PNG name")
         if not self.source_uri:
             raise ValueError("source URI is required")
+        if self.rights_basis and not self.source_uri.startswith("generation://"):
+            raise ValueError("OpenAI output rights require a generation URI")
+        return self
+
+
+class MouthNormalization(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_canvas: tuple[int, int]
+    output_canvas: tuple[int, int]
+    anchor: tuple[int, int]
+    alpha_threshold: int = Field(default=8, ge=1, le=32)
+
+    @model_validator(mode="after")
+    def valid_canvas(self) -> "MouthNormalization":
+        if min(*self.source_canvas, *self.output_canvas) <= 0:
+            raise ValueError("mouth canvases must be positive")
+        if not (
+            0 < self.anchor[0] < self.output_canvas[0]
+            and 0 < self.anchor[1] < self.output_canvas[1]
+        ):
+            raise ValueError("mouth anchor must be inside the output canvas")
+        return self
+
+
+class RightsEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uri: str
+    policy_version: str
+
+    @model_validator(mode="after")
+    def official_terms(self) -> "RightsEvidence":
+        if not self.uri.startswith("https://openai.com/policies/") or not self.policy_version:
+            raise ValueError("OpenAI output rights require official terms and a policy version")
         return self
 
 
@@ -50,9 +94,10 @@ class AssetSpec(BaseModel):
     role: str
     source: str
     rect: tuple[int, int, int, int]
-    method: Literal["crop", "component"]
+    method: Literal["crop", "component", "mouth_component", "pad"]
     canvas: tuple[int, int] | None = None
     trim: bool = False
+    padding: int = 0
     art_review: Literal["approved", "needs_review"]
     quality_note: str | None = None
 
@@ -67,6 +112,14 @@ class AssetSpec(BaseModel):
             raise ValueError("canvas must contain the unscaled crop")
         if self.trim and self.canvas:
             raise ValueError("trim and fixed canvas are mutually exclusive")
+        if self.method == "mouth_component" and (
+            not self.role.startswith("mouth/") or self.canvas or self.trim or self.padding
+        ):
+            raise ValueError("mouth normalization is reserved for mouth components")
+        if self.method == "pad" and (self.padding < 16 or self.canvas or self.trim):
+            raise ValueError("padded sprite needs transparent padding only")
+        if self.method != "pad" and self.padding:
+            raise ValueError("padding is reserved for padded sprites")
         if self.role.startswith("view/") and self.method != "crop":
             raise ValueError("reference views use lossless rectangular crops")
         if self.art_review == "needs_review" and not self.quality_note:
@@ -80,6 +133,9 @@ class IntakeRecipe(BaseModel):
     schema_version: int = Field(default=1, ge=1, le=1)
     sources: dict[str, SourceSpec]
     assets: tuple[AssetSpec, ...]
+    superseded_assets: tuple[AssetSpec, ...] = ()
+    mouth_normalization: MouthNormalization | None = None
+    rights_evidence: RightsEvidence | None = None
 
     @model_validator(mode="after")
     def valid_mapping(self) -> "IntakeRecipe":
@@ -90,8 +146,19 @@ class IntakeRecipe(BaseModel):
             raise ValueError("character roles must be unique")
         if any(asset.source not in self.sources for asset in self.assets):
             raise ValueError("asset refers to an unknown source")
+        if any(asset.source not in self.sources for asset in self.superseded_assets):
+            raise ValueError("superseded asset refers to an unknown source")
+        if any(asset.role not in roles for asset in self.superseded_assets):
+            raise ValueError("superseded asset has no active replacement")
+        if any(asset.method == "mouth_component" for asset in self.assets):
+            if self.mouth_normalization is None:
+                raise ValueError("mouth components require a normalization contract")
+        if any(spec.rights_basis for spec in self.sources.values()):
+            if self.rights_evidence is None:
+                raise ValueError("OpenAI generated sources require rights evidence")
         if any(spec.uses_originals for spec in self.sources.values()) and not {
-            "original_profile", "original_banner"
+            "original_profile",
+            "original_banner",
         }.issubset(self.sources):
             raise ValueError("original references are missing")
         return self
@@ -171,14 +238,60 @@ def _largest_component(image: Image.Image, threshold: int = 5) -> Image.Image:
     return Image.frombytes("RGBA", (width, height), bytes(pixels))
 
 
-def _extract(image: Image.Image, spec: AssetSpec) -> tuple[Image.Image, tuple[str, ...]]:
+def _extract(
+    image: Image.Image, spec: AssetSpec, mouth_normalization: MouthNormalization | None
+) -> tuple[Image.Image, tuple[str, ...], dict[str, object] | None]:
     x0, y0, x1, y1 = spec.rect
     if x1 > image.width or y1 > image.height:
         raise ValueError(f"crop exceeds source bounds: {spec.role}")
     part = image.crop(spec.rect)
     if spec.role.startswith("view/"):
-        return part.convert("RGB"), ()
+        return part.convert("RGB"), (), None
     part = part.convert("RGBA")
+    alignment: dict[str, object] | None = None
+    if spec.method == "mouth_component":
+        if mouth_normalization is None or image.size != mouth_normalization.source_canvas:
+            raise ValueError("mouth source differs from normalization contract")
+        if spec.rect != (0, 0, *image.size):
+            raise ValueError("mouth component must preserve the complete source frame")
+        mouth = inspect_mouth_component(part, alpha_threshold=mouth_normalization.alpha_threshold)
+        bbox = mouth.visible_bbox
+        source_anchor = ((bbox[0] + bbox[2]) // 2, bbox[1])
+        offset = (
+            mouth_normalization.anchor[0] - source_anchor[0],
+            mouth_normalization.anchor[1] - source_anchor[1],
+        )
+        canvas = Image.new("RGBA", mouth_normalization.output_canvas, (0, 0, 0, 0))
+        if (
+            min(offset) < 0
+            or offset[0] + part.width > canvas.width
+            or offset[1] + part.height > canvas.height
+        ):
+            raise ValueError("mouth source cannot fit without clipping")
+        canvas.alpha_composite(part, offset)
+        alignment = {
+            "source_anchor": source_anchor,
+            "common_anchor": mouth_normalization.anchor,
+            "paste_offset": offset,
+            "visible_bbox": (
+                bbox[0] + offset[0],
+                bbox[1] + offset[1],
+                bbox[2] + offset[0],
+                bbox[3] + offset[1],
+            ),
+            "source_aperture_bbox": mouth.aperture_bbox,
+            "aperture_pixels": mouth.aperture_pixels,
+        }
+        return canvas, (), alignment
+    if spec.method == "pad":
+        visible_art_bbox(part)
+        canvas = Image.new(
+            "RGBA",
+            (part.width + 2 * spec.padding, part.height + 2 * spec.padding),
+            (0, 0, 0, 0),
+        )
+        canvas.alpha_composite(part, (spec.padding, spec.padding))
+        return canvas, (), None
     if spec.method == "component":
         part = _largest_component(part)
     raw_bbox = part.getchannel("A").getbbox()
@@ -203,7 +316,7 @@ def _extract(image: Image.Image, spec: AssetSpec) -> tuple[Image.Image, tuple[st
         canvas = Image.new("RGBA", spec.canvas, (0, 0, 0, 0))
         canvas.alpha_composite(part, ((canvas.width - part.width) // 2, 0))
         part = canvas
-    return part, tuple(warnings)
+    return part, tuple(warnings), alignment
 
 
 def _write_png(path: Path, image: Image.Image) -> None:
@@ -234,16 +347,23 @@ def prepare_assets(recipe_path: Path, source_dir: Path, output_dir: Path) -> dic
         raise ValueError("prepared directory must be separate from sources")
     sources = {key: _source_path(source_root, spec) for key, spec in recipe.sources.items()}
     assets: list[dict[str, object]] = []
+    mouth_facts: dict[str, MouthFacts] = {}
     for spec in recipe.assets:
         with Image.open(sources[spec.source]) as image:
             image.load()
-            output, warnings = _extract(image, spec)
+            output, warnings, alignment = _extract(image, spec, recipe.mouth_normalization)
         name = spec.role.replace("/", "__") + ".png"
         destination = output_root / name
         _write_png(destination, output)
         facts: SpriteFacts | None = None
         if not spec.role.startswith("view/"):
             facts = inspect_sprite_png(destination)
+        if spec.method == "mouth_component":
+            normalization = recipe.mouth_normalization
+            assert normalization is not None
+            mouth_facts[spec.role.split("/", 1)[1]] = inspect_mouth_component(
+                output, alpha_threshold=normalization.alpha_threshold
+            )
         assets.append(
             {
                 "role": spec.role,
@@ -253,14 +373,20 @@ def prepare_assets(recipe_path: Path, source_dir: Path, output_dir: Path) -> dic
                 "size": output.size,
                 "alpha_bbox": facts.alpha_bbox if facts else None,
                 "warnings": warnings,
+                "mouth_alignment": alignment,
                 "art_review": spec.art_review,
                 "quality_note": spec.quality_note,
             }
         )
+    if mouth_facts:
+        validate_mouth_states(mouth_facts)
     report: dict[str, object] = {
         "recipe_sha256": _digest(recipe_path),
         "preparation_tool": f"tovitunes-character-intake/pillow-{pillow_version}",
         "sources": {key: spec.sha256 for key, spec in recipe.sources.items()},
+        "mouth_normalization": (
+            recipe.mouth_normalization.model_dump() if recipe.mouth_normalization else None
+        ),
         "assets": assets,
     }
     (output_root / "prepare-report.json").write_text(
@@ -289,6 +415,68 @@ def _approval(
     )
 
 
+def _record_openai_rights(
+    recipe: IntakeRecipe, store: AssetStore, source_ids: dict[str, str], actor: str
+) -> tuple[str, ...]:
+    """Document only explicitly identified OpenAI outputs and their intake derivatives."""
+    evidence = recipe.rights_evidence
+    if evidence is None:
+        return ()
+    cleared: list[str] = []
+    for key, spec in recipe.sources.items():
+        if spec.rights_basis != "openai_chatgpt_output":
+            continue
+        source_id = source_ids[key]
+        allowed_roles = {
+            item.role for item in (*recipe.assets, *recipe.superseded_assets) if item.source == key
+        }
+        with closing(store.database.connect()) as connection:
+            rows = connection.execute(
+                "SELECT consumer_artifact_id FROM artifact_dependencies "
+                "WHERE input_artifact_id = ?",
+                (source_id,),
+            ).fetchall()
+        candidate_ids = [source_id]
+        for row in rows:
+            record = store.get(row["consumer_artifact_id"])
+            if any(
+                record.provenance.source_uri == f"intake://tovi-v1/{key}/{role}"
+                for role in allowed_roles
+            ):
+                candidate_ids.append(record.identity.artifact_id)
+        for artifact_id in candidate_ids:
+            with closing(store.database.connect()) as connection:
+                latest = connection.execute(
+                    "SELECT status, evidence_uri FROM rights_decisions WHERE artifact_id = ? "
+                    "ORDER BY rowid DESC LIMIT 1",
+                    (artifact_id,),
+                ).fetchone()
+            if latest is not None and latest["status"] in {
+                "blocked",
+                "review_required",
+                "commercial_use_confirmed",
+            }:
+                continue
+            rationale = (
+                f"Owner identifies {spec.source_uri} as ChatGPT image output; "
+                "OpenAI terms assign OpenAI's interest in Output to the user. "
+                "Rights to original input references remain separate."
+            )
+            store.record_rights(
+                RightsDecision(
+                    artifact_id=artifact_id,
+                    status="commercial_use_confirmed",
+                    actor=actor,
+                    evidence_uri=evidence.uri,
+                    rationale=rationale,
+                    policy_version=evidence.policy_version,
+                    decided_at=datetime.now(UTC),
+                )
+            )
+            cleared.append(artifact_id)
+    return tuple(cleared)
+
+
 def ingest_prepared(
     recipe_path: Path,
     source_dir: Path,
@@ -299,7 +487,7 @@ def ingest_prepared(
     *,
     actor: str = "project-owner",
 ) -> dict[str, object]:
-    """Register sources and crops, approve only inspected art, and retain rights unknown."""
+    """Register immutable versions, reviewed art and documented output rights."""
     recipe = load_recipe(recipe_path)
     source_root = source_dir.resolve(strict=True)
     prepared_root = prepared_dir.resolve(strict=True)
@@ -312,15 +500,55 @@ def ingest_prepared(
     prepared = {item["role"]: item for item in report["assets"]}
     if set(prepared) != {asset.role for asset in recipe.assets}:
         raise ValueError("preparation report has missing or extra roles")
+    mouth_facts: dict[str, MouthFacts] = {}
+    for asset_spec in recipe.assets:
+        item = prepared[asset_spec.role]
+        name = asset_spec.role.replace("/", "__") + ".png"
+        if item["filename"] != name or item["source"] != asset_spec.source:
+            raise ValueError(f"preparation mapping differs: {asset_spec.role}")
+        path = prepared_root / name
+        if path.is_symlink() or path.resolve(strict=True).parent != prepared_root:
+            raise ValueError(f"prepared path is not trusted: {name}")
+        if _digest(path) != item["sha256"]:
+            raise ValueError(f"prepared hash changed: {name}")
+        if asset_spec.art_review == "approved" and item["warnings"]:
+            raise ValueError(f"approved crop has unresolved quality warnings: {asset_spec.role}")
+        if asset_spec.role.startswith("view/"):
+            continue
+        inspect_sprite_png(path)
+        if asset_spec.method == "mouth_component":
+            normalization = recipe.mouth_normalization
+            assert normalization is not None
+            with Image.open(path) as mouth_image:
+                mouth_image.load()
+                if mouth_image.size != normalization.output_canvas:
+                    raise ValueError("mouth output canvas differs from normalization contract")
+                facts = inspect_mouth_component(
+                    mouth_image, alpha_threshold=normalization.alpha_threshold
+                )
+            bbox = facts.visible_bbox
+            if ((bbox[0] + bbox[2]) // 2, bbox[1]) != normalization.anchor:
+                raise ValueError(f"mouth anchor differs from contract: {asset_spec.role}")
+            mouth_facts[asset_spec.role.split("/", 1)[1]] = facts
+        elif asset_spec.method == "pad":
+            with Image.open(path) as padded_image:
+                padded_image.load()
+                visible_art_bbox(padded_image)
+    if mouth_facts:
+        validate_mouth_states(mouth_facts)
     store.database.register_catalog(catalog)
     owner_id = catalog.version.revision_id
     source_ids: dict[str, str] = {}
     for key, source_spec in recipe.sources.items():
         path = _source_path(source_root, source_spec)
-        dependencies = [
-            InputDependency(source_ids[original], "original Tovi visual reference")
-            for original in ("original_profile", "original_banner")
-        ] if source_spec.uses_originals else []
+        dependencies = (
+            [
+                InputDependency(source_ids[original], "original Tovi visual reference")
+                for original in ("original_profile", "original_banner")
+            ]
+            if source_spec.uses_originals
+            else []
+        )
         provenance = Provenance(
             source_kind="manual",
             acquired_at=datetime.now(UTC),
@@ -349,24 +577,15 @@ def ingest_prepared(
         store.select(artifact_id)
     role_ids: dict[str, str] = {}
     selected: list[str] = []
+    replaced_roles = {item.role for item in recipe.superseded_assets}
     for asset_spec in recipe.assets:
         item = prepared[asset_spec.role]
         name = asset_spec.role.replace("/", "__") + ".png"
-        if item["filename"] != name or item["source"] != asset_spec.source:
-            raise ValueError(f"preparation mapping differs: {asset_spec.role}")
         path = prepared_root / name
-        if path.is_symlink() or path.resolve(strict=True).parent != prepared_root:
-            raise ValueError(f"prepared path is not trusted: {name}")
         digest = _digest(path)
         if digest != item["sha256"]:
-            raise ValueError(f"prepared hash changed: {name}")
-        if asset_spec.art_review == "approved" and item["warnings"]:
-            raise ValueError(f"approved crop has unresolved quality warnings: {asset_spec.role}")
-        if not asset_spec.role.startswith("view/"):
-            inspect_sprite_png(path)
-        kind = (
-            "character_reference" if asset_spec.role.startswith("view/") else "character_sprite"
-        )
+            raise ValueError(f"prepared hash changed during intake: {name}")
+        kind = "character_reference" if asset_spec.role.startswith("view/") else "character_sprite"
         slot = "tovi_v1_" + asset_spec.role.replace("/", "_")
         existing = store.find_version("brand", owner_id, kind, slot, digest)
         source_id = source_ids[asset_spec.source]
@@ -396,11 +615,16 @@ def ingest_prepared(
                 asset_spec.art_review,
                 actor,
                 asset_spec.quality_note
-                or "approved Tovi v1 visual direction; technical crop passed",
+                or (
+                    "Replaces held PR #10 candidate; isolated sprite and visual inspection passed"
+                    if asset_spec.role in replaced_roles
+                    else "approved Tovi v1 visual direction; technical crop passed"
+                ),
             )
         if asset_spec.art_review == "approved":
             store.select(artifact_id)
             selected.append(asset_spec.role)
+    rights_decision_ids = _record_openai_rights(recipe, store, source_ids, actor)
     expected_tail = ("tovitunes", "characters", "tovi", "packs", "v1", "pack.yaml")
     if catalog.definition.brand_id != "tovitunes" or manifest_path.parts[-6:] != expected_tail:
         raise ValueError("manifest path does not match the Tovi brand")
@@ -423,7 +647,9 @@ def ingest_prepared(
         "source_artifact_ids": source_ids,
         "role_artifact_ids": role_ids,
         "selected_roles": selected,
-        "rights_state": "unknown",
+        "rights_state": ("documented_openai_outputs" if recipe.rights_evidence else "unknown"),
+        "rights_evidence_uri": recipe.rights_evidence.uri if recipe.rights_evidence else None,
+        "rights_decision_artifact_ids": rights_decision_ids,
         "pack_ready": assessment.ready,
         "blocking_issues": assessment.issues,
     }

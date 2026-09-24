@@ -205,7 +205,9 @@ class AssetStore:
                         ),
                     )
                     connection.execute(
-                        "INSERT INTO rights_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO rights_decisions "
+                        "(decision_id, artifact_id, status, actor, evidence_uri, "
+                        "policy_version, decided_at, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             str(uuid4()),
                             identity.artifact_id,
@@ -214,6 +216,7 @@ class AssetStore:
                             None,
                             "ingest-v1",
                             _now(),
+                            None,
                         ),
                     )
                     connection.execute(
@@ -329,7 +332,9 @@ class AssetStore:
     def record_rights(self, decision: RightsDecision) -> None:
         with closing(self.database.connect()) as connection:
             connection.execute(
-                "INSERT INTO rights_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO rights_decisions "
+                "(decision_id, artifact_id, status, actor, evidence_uri, "
+                "policy_version, decided_at, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     decision.artifact_id,
@@ -338,6 +343,7 @@ class AssetStore:
                     decision.evidence_uri,
                     decision.policy_version,
                     decision.decided_at.isoformat(),
+                    decision.rationale,
                 ),
             )
             connection.commit()
