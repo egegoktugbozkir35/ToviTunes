@@ -11,10 +11,10 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from tovitunes.artifacts.media import InvalidMedia, validate_media
-from tovitunes.domain.artifact import ArtifactIdentity, Provenance
+from tovitunes.domain.artifact import ArtifactDependency, ArtifactIdentity, Provenance
 from tovitunes.domain.review import ApprovalDecision, RightsDecision
 from tovitunes.persistence.db import Database
 
@@ -205,7 +205,9 @@ class AssetStore:
                         ),
                     )
                     connection.execute(
-                        "INSERT INTO rights_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO rights_decisions "
+                        "(decision_id, artifact_id, status, actor, evidence_uri, "
+                        "policy_version, decided_at, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             str(uuid4()),
                             identity.artifact_id,
@@ -214,6 +216,7 @@ class AssetStore:
                             None,
                             "ingest-v1",
                             _now(),
+                            None,
                         ),
                     )
                     connection.execute(
@@ -241,6 +244,207 @@ class AssetStore:
                 mime_type=mime_type,
                 provenance=provenance,
             )
+        finally:
+            if not finalized and staging.exists():
+                staging.unlink()
+
+    def rehydrate_artifact(
+        self,
+        source: Path,
+        *,
+        identity: ArtifactIdentity,
+        expected_sha256: str,
+        expected_byte_count: int,
+        expected_mime_type: str,
+        expected_relative_path: str,
+        provenance: Provenance,
+        created_at: str,
+        dependencies: Sequence[ArtifactDependency] = (),
+    ) -> ArtifactRecord:
+        """Restore one locked identity without minting decisions or changing existing versions."""
+        if str(UUID(identity.artifact_id)) != identity.artifact_id:
+            raise ValueError("canonical artifact ID is not a normalized UUID")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256) or expected_byte_count <= 0:
+            raise ValueError("invalid canonical hash or byte count")
+        _safe_segment(identity.owner_id)
+        _safe_segment(identity.kind)
+        _safe_segment(identity.slot_key)
+        source_path = source.resolve(strict=True)
+        if source.is_symlink() or not source_path.is_file():
+            raise ValueError("source is not a trusted regular file")
+        if provenance.source_kind != "manual" and not any(
+            source_path.is_relative_to(root) for root in self.generated_source_roots
+        ):
+            raise ValueError("generated source is outside configured trusted roots")
+        if tuple(dependency.input_artifact_id for dependency in dependencies) != (
+            provenance.input_artifact_ids
+        ):
+            raise ValueError("provenance input IDs differ from dependencies")
+        if any(
+            dependency.consumer_artifact_id != identity.artifact_id for dependency in dependencies
+        ):
+            raise ValueError("dependency consumer differs from canonical identity")
+        if len({(item.input_artifact_id, item.purpose) for item in dependencies}) != len(
+            dependencies
+        ):
+            raise ValueError("duplicate canonical dependency")
+        staging = self.root / ".staging" / f"{identity.artifact_id}{source_path.suffix.lower()}"
+        finalized = False
+        try:
+            digest = sha256()
+            byte_count = 0
+            with source_path.open("rb") as src, staging.open("xb") as dst:
+                while chunk := src.read(1024 * 1024):
+                    dst.write(chunk)
+                    digest.update(chunk)
+                    byte_count += len(chunk)
+                dst.flush()
+                os.fsync(dst.fileno())
+            if digest.hexdigest() != expected_sha256 or byte_count != expected_byte_count:
+                raise ValueError("source bytes differ from canonical lock")
+            mime_type, extension, facts = validate_media(staging)
+            if mime_type != expected_mime_type:
+                raise ValueError("source media type differs from canonical lock")
+            owner_folder = "episodes" if identity.owner_scope == "episode" else "brand-assets"
+            relative = (
+                f"{owner_folder}/{identity.owner_id}/{identity.kind}/{identity.slot_key}/"
+                f"{identity.artifact_id}{extension}"
+            )
+            if relative != expected_relative_path:
+                raise ValueError("canonical artifact path differs from identity")
+            final_path = self._trusted_path(relative, must_exist=False)
+            expected_dependencies = [
+                (item.input_artifact_id, item.input_sha256, item.purpose) for item in dependencies
+            ]
+            with closing(self.database.connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    owner_column = (
+                        "episode_id" if identity.owner_scope == "episode" else "brand_revision_id"
+                    )
+                    conflict = connection.execute(
+                        f"SELECT artifact_id FROM artifact_versions WHERE owner_scope = ? "
+                        f"AND {owner_column} = ? AND kind = ? AND slot_key = ? AND sha256 = ? "
+                        "AND artifact_id <> ?",
+                        (
+                            identity.owner_scope,
+                            identity.owner_id,
+                            identity.kind,
+                            identity.slot_key,
+                            expected_sha256,
+                            identity.artifact_id,
+                        ),
+                    ).fetchone()
+                    if conflict is not None:
+                        raise ValueError("canonical slot and content already have another identity")
+                    for dependency in dependencies:
+                        input_row = connection.execute(
+                            "SELECT sha256 FROM artifact_versions WHERE artifact_id = ?",
+                            (dependency.input_artifact_id,),
+                        ).fetchone()
+                        if input_row is None or input_row["sha256"] != dependency.input_sha256:
+                            raise ValueError("canonical dependency is missing or has another hash")
+                    existing = connection.execute(
+                        "SELECT * FROM artifact_versions WHERE artifact_id = ?",
+                        (identity.artifact_id,),
+                    ).fetchone()
+                    if existing is not None:
+                        expected_fields = {
+                            "owner_scope": identity.owner_scope,
+                            "episode_id": identity.owner_id
+                            if identity.owner_scope == "episode"
+                            else None,
+                            "brand_revision_id": (
+                                identity.owner_id if identity.owner_scope == "brand" else None
+                            ),
+                            "kind": identity.kind,
+                            "slot_key": identity.slot_key,
+                            "schema_version": 1,
+                            "relative_path": relative,
+                            "sha256": expected_sha256,
+                            "byte_count": expected_byte_count,
+                            "mime_type": expected_mime_type,
+                            "created_at": created_at,
+                        }
+                        if any(existing[key] != value for key, value in expected_fields.items()):
+                            raise ValueError(
+                                "canonical artifact ID has different immutable metadata"
+                            )
+                        if (
+                            Provenance.model_validate_json(existing["provenance_json"])
+                            != provenance
+                        ):
+                            raise ValueError("canonical artifact provenance differs")
+                        actual_dependencies = [
+                            (row["input_artifact_id"], row["input_sha256"], row["purpose"])
+                            for row in connection.execute(
+                                "SELECT input_artifact_id, input_sha256, purpose "
+                                "FROM artifact_dependencies WHERE consumer_artifact_id = ? "
+                                "ORDER BY rowid",
+                                (identity.artifact_id,),
+                            )
+                        ]
+                        if actual_dependencies != expected_dependencies:
+                            raise ValueError("canonical artifact dependencies differ")
+                        if not self.inspect(identity.artifact_id).valid:
+                            raise ValueError("existing canonical artifact file is invalid")
+                    else:
+                        if final_path.exists() or final_path.is_symlink():
+                            raise ValueError("canonical path already contains unregistered bytes")
+                        final_path.parent.mkdir(parents=True, exist_ok=True)
+                        final_path = self._trusted_path(relative, must_exist=False)
+                        os.replace(staging, final_path)
+                        finalized = True
+                        connection.execute(
+                            "INSERT INTO artifact_versions "
+                            "(artifact_id, owner_scope, episode_id, brand_revision_id, "
+                            "kind, slot_key, "
+                            "schema_version, relative_path, sha256, byte_count, mime_type, "
+                            "provenance_json, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                identity.artifact_id,
+                                identity.owner_scope,
+                                identity.owner_id if identity.owner_scope == "episode" else None,
+                                identity.owner_id if identity.owner_scope == "brand" else None,
+                                identity.kind,
+                                identity.slot_key,
+                                1,
+                                relative,
+                                expected_sha256,
+                                expected_byte_count,
+                                expected_mime_type,
+                                provenance.model_dump_json(),
+                                created_at,
+                            ),
+                        )
+                        for dependency in dependencies:
+                            connection.execute(
+                                "INSERT INTO artifact_dependencies VALUES (?, ?, ?, ?)",
+                                (
+                                    identity.artifact_id,
+                                    dependency.input_artifact_id,
+                                    dependency.input_sha256,
+                                    dependency.purpose,
+                                ),
+                            )
+                        connection.execute(
+                            "INSERT INTO artifact_validation VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                str(uuid4()),
+                                identity.artifact_id,
+                                "file-signature-v1",
+                                "passed",
+                                expected_sha256,
+                                json.dumps(facts, sort_keys=True),
+                                _now(),
+                            ),
+                        )
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+            return self.get(identity.artifact_id)
         finally:
             if not finalized and staging.exists():
                 staging.unlink()
@@ -274,6 +478,25 @@ class AssetStore:
                 provenance=Provenance.model_validate_json(row["provenance_json"]),
             )
 
+    def find_version(
+        self,
+        owner_scope: Literal["episode", "brand"],
+        owner_id: str,
+        kind: str,
+        slot_key: str,
+        sha256_digest: str,
+    ) -> ArtifactRecord | None:
+        """Return an already ingested immutable version for repeatable intake."""
+        owner_column = "episode_id" if owner_scope == "episode" else "brand_revision_id"
+        with closing(self.database.connect()) as connection:
+            row = connection.execute(
+                f"SELECT artifact_id FROM artifact_versions WHERE owner_scope = ? "
+                f"AND {owner_column} = ? AND kind = ? AND slot_key = ? AND sha256 = ? "
+                "ORDER BY created_at LIMIT 1",
+                (owner_scope, owner_id, kind, slot_key, sha256_digest),
+            ).fetchone()
+        return self.get(row["artifact_id"]) if row is not None else None
+
     def inspect(self, artifact_id: str) -> ValidationResult:
         record = self.get(artifact_id)
         try:
@@ -296,6 +519,10 @@ class AssetStore:
         except (FileNotFoundError, ValueError, OSError) as exc:
             return ValidationResult(False, (type(exc).__name__,))
 
+    def path_for(self, artifact_id: str) -> Path:
+        """Resolve a registered file beneath the trusted asset root."""
+        return self._trusted_path(self.get(artifact_id).relative_path, must_exist=True)
+
     def read_json(self, artifact_id: str) -> object:
         record = self.get(artifact_id)
         if record.mime_type != "application/json" or not self.inspect(artifact_id).valid:
@@ -306,7 +533,9 @@ class AssetStore:
     def record_rights(self, decision: RightsDecision) -> None:
         with closing(self.database.connect()) as connection:
             connection.execute(
-                "INSERT INTO rights_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO rights_decisions "
+                "(decision_id, artifact_id, status, actor, evidence_uri, "
+                "policy_version, decided_at, rationale) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     str(uuid4()),
                     decision.artifact_id,
@@ -315,6 +544,7 @@ class AssetStore:
                     decision.evidence_uri,
                     decision.policy_version,
                     decision.decided_at.isoformat(),
+                    decision.rationale,
                 ),
             )
             connection.commit()
@@ -473,4 +703,3 @@ class AssetStore:
                 connection.rollback()
                 raise
         return tuple(quarantined)
-

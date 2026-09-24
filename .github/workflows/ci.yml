@@ -16,6 +16,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --python 3.11 --locked --extra dev
+      - run: uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
       - run: uv run ruff check .
       - run: uv run mypy src
       - run: uv run pytest -q

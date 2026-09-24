@@ -1,0 +1,9 @@
+# Catalog and canonical lock hashes use exact committed bytes on every platform.
+brands/tovitunes/brand.yaml -text
+brands/tovitunes/creative_bible.yaml -text
+brands/tovitunes/safety_policy.yaml -text
+brands/tovitunes/curriculum/colors.v1.yaml -text
+brands/tovitunes/characters/tovi/character.yaml -text
+brands/tovitunes/characters/tovi/packs/v1/pack.yaml -text
+brands/tovitunes/characters/tovi/packs/v1/intake.yaml -text
+brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml -text

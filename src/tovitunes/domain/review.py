@@ -13,6 +13,7 @@ class RightsDecision(BaseModel):
     status: Literal["unknown", "review_required", "commercial_use_confirmed", "blocked"]
     actor: str
     evidence_uri: str | None = None
+    rationale: str | None = None
     policy_version: str
     decided_at: datetime
 

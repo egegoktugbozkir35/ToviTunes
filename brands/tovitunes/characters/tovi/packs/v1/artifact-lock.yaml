@@ -1,0 +1,3323 @@
+schema_version: 1
+pack_id: tovi-pack-v1
+character_id: tovi
+version: 1.0.0
+brand_revision_id: tovitunes-1e34c1c7f5ed0fd7
+pack_revision_id: tovi-pack-v1-8f7e487b5ac5279b
+manifest_sha256: 8f7e487b5ac5279b9f95cf1df216de56d9242b0c2ad95bc4444ed76d3cbd1ad5
+recipe_sha256: baee1213b7c055c39fea211a90f0d7f418708988731e59b0b389b25e63eb23f0
+source_artifact_ids:
+  original_profile: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+  original_banner: de41c057-abc7-45f4-a06f-e7359ff1f350
+  turnaround: 0efc98c4-584e-4017-b96f-e4e74e963a48
+  mouth_reference: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+  pose_reference: 20167c04-267d-48e6-ad42-951dae172c29
+  neutral_master: d9edff42-8841-4530-9176-894023d89608
+  rig_parts: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  mouth_sprites: 3b89c324-d245-4071-adca-9aa1077562f1
+  expressions: 21827c25-d593-4e39-b0d8-a782d29be196
+  poses: 06e31d66-d6da-4e47-8068-570fa93f0a17
+  mouth_closed_replacement: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+  mouth_small_open_replacement: 802538fd-8585-4bcb-8aa1-31fc698d6329
+  mouth_wide_a_replacement: eede5b87-2088-4c19-818d-35bc47333128
+  mouth_e_smile_replacement: df88090a-1b92-4937-ba1a-10abe80e7de7
+  mouth_o_round_replacement: 850f8c55-143c-43dd-a0c0-3909cdca0766
+  thinking_replacement: b669b8fe-d228-4db5-a29b-6c1e92d19595
+active_role_artifact_ids:
+  view/front: 75191e77-70fb-435a-a858-c3763d331058
+  view/three_quarter: 2a3073eb-27c0-47ad-846b-c84340b27c51
+  view/profile: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+  view/back: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+  mouth/closed: 0c531e68-4abf-4b91-8d62-d1e22137778e
+  mouth/small_open: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+  mouth/wide_a: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+  mouth/e_smile: 10a92c61-c890-46a9-b272-8d9a77e08630
+  mouth/o_round: 45d8f038-5faa-4176-8724-44fc24a1b89b
+  sprite/expression_neutral: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+  sprite/expression_happy: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+  sprite/expression_surprised: d13b6d80-8fbe-437e-99ad-478bb7367094
+  sprite/expression_thinking: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+  sprite/neutral_full_body: 12eaeecb-b482-428d-89b9-0028dcd63668
+  sprite/hello: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+  sprite/pointing: 6b5943bb-e0c4-487c-ab70-c75816108f47
+  sprite/hopping: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+  sprite/singing: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+  sprite/left_wing_folded: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+  sprite/left_wing_half_open: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+  sprite/left_wing_full_open: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+  sprite/right_wing_folded: fafe1c9b-b229-43d3-a826-bb62f2bed161
+  sprite/right_wing_half_open: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+  sprite/right_wing_full_open: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+  sprite/upper_beak_closed: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+  sprite/lower_beak_closed: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+superseded_role_artifact_ids:
+  mouth/closed: 6df438b8-6f7b-447f-9402-53829d658ffe
+  mouth/small_open: d2c89451-2120-42a0-ba11-4b7a00338e99
+  mouth/wide_a: be90c641-0a85-4e18-9066-f4b17954c2b4
+  mouth/e_smile: a3b7feed-f311-453f-96eb-5a52abe7fabe
+  mouth/o_round: 246ea06c-c532-4ef1-9bac-a98082636b9e
+  sprite/expression_thinking: e056c7fb-3980-4187-bdca-b0bd682902a3
+artifacts:
+- artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_poses
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_poses/06e31d66-d6da-4e47-8068-570fa93f0a17.png
+  sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+  byte_count: 680950
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.692607Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.700147Z'
+  dependencies:
+  - consumer_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.700147Z'
+    decision_id: e32be2de-c271-468a-9ff5-7c297ccc2b4a
+  - artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.063702Z'
+    decision_id: 5653b227-2f4e-4277-b23f-5172fb170b3f
+  approval_decisions:
+  - target_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.701146Z'
+    decision_id: c5493b5e-58de-4e19-8226-8809256a2db8
+  - target_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.708669Z'
+    decision_id: 3d421641-6438-487b-b6db-27d85cd057a1
+- artifact_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_profile
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/tovi_v1_view_profile/0ae4c139-b1ed-49dc-8758-e95a2d429a15.png
+  sha256: ef75adf4c91afe41038d19db2ea54c6fc866cae896447acfe2f2ccf0c14fd645
+  byte_count: 168090
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.823852Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/turnaround/view/profile
+    prompt_version: null
+    input_artifact_ids:
+    - 0efc98c4-584e-4017-b96f-e4e74e963a48
+  created_at: '2026-09-24T10:02:57.828893Z'
+  dependencies:
+  - consumer_artifact_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+    input_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.828893Z'
+    decision_id: 77eda514-bc52-4731-b491-318aac0fd9ff
+  - artifact_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.004174Z'
+    decision_id: 4f24649d-ff64-4396-957d-175869b30aa8
+  approval_decisions:
+  - target_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.828893Z'
+    decision_id: 5a5101cd-c809-40d2-8ba3-15d0dcbb76af
+  - target_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.835654Z'
+    decision_id: 9e0fae7f-e2c9-4534-9468-694cc480efbb
+- artifact_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_closed
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_closed/0c531e68-4abf-4b91-8d62-d1e22137778e.png
+  sha256: 7bfa780cfe6d621be5c8d3b3871e113d5ef91982df7415761cb899f1d1623921
+  byte_count: 219229
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.493575Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_closed_replacement/mouth/closed
+    prompt_version: null
+    input_artifact_ids:
+    - 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+  created_at: '2026-09-24T13:11:34.497095Z'
+  dependencies:
+  - consumer_artifact_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+    input_artifact_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+    input_sha256: 7df0278d2f14e7c491b82354a9d6a2ed7d7a13d1404566933356238d38dd39b6
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.497095Z'
+    decision_id: f874bae3-8ed3-4469-b152-6f1a8155150d
+  - artifact_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://32aacd64-a8d2-4349-9420-38fde1b9be95
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.073388Z'
+    decision_id: a8b9195c-2c09-433e-81d5-6c2050f70b6a
+  approval_decisions:
+  - target_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.497095Z'
+    decision_id: 874a786e-bb87-4dc3-a6c8-9b1850701a02
+  - target_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.501624Z'
+    decision_id: c30de3f7-50c1-41fb-99b0-0e97a2b74258
+- artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_turnaround
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_turnaround/0efc98c4-584e-4017-b96f-e4e74e963a48.png
+  sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+  byte_count: 1690274
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.262721Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.273465Z'
+  dependencies:
+  - consumer_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.273465Z'
+    decision_id: b7693f36-ce4c-4e6b-af67-01ed59c2b315
+  - artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:34.998170Z'
+    decision_id: 43b3cef9-c88e-48d3-aa2f-34087f535f40
+  approval_decisions:
+  - target_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.273465Z'
+    decision_id: d78e8aa3-a3d0-4733-b10b-5e257a45d355
+  - target_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.283044Z'
+    decision_id: b2c1e22f-a5f6-454c-a44b-cc43d323311d
+- artifact_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_e_smile
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_e_smile/10a92c61-c890-46a9-b272-8d9a77e08630.png
+  sha256: bc59f08cdcdc2ed696ed8e785c674dedbe2cae9d7343cddeae002c6a111cfc7c
+  byte_count: 298511
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.591454Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_e_smile_replacement/mouth/e_smile
+    prompt_version: null
+    input_artifact_ids:
+    - df88090a-1b92-4937-ba1a-10abe80e7de7
+  created_at: '2026-09-24T13:11:34.595182Z'
+  dependencies:
+  - consumer_artifact_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+    input_artifact_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+    input_sha256: fd31241e85e7500ae7ac95ce04af96666ad5f467b86c3da074b55a499e61fc8b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.595182Z'
+    decision_id: 0a427b62-4d13-458c-9ad8-789c1f7ee7d2
+  - artifact_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://0317c62d-2b86-4d82-aa86-0c535b7b64e7
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.086771Z'
+    decision_id: 4bdc5ec5-bf55-4ef2-b1f9-62fd59c09310
+  approval_decisions:
+  - target_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.595182Z'
+    decision_id: c71d6d11-b32e-44db-b502-923bfc504a16
+  - target_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.598196Z'
+    decision_id: 43e548fa-d0d6-43a2-9b46-59037769b080
+- artifact_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_neutral_full_body
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_neutral_full_body/12eaeecb-b482-428d-89b9-0028dcd63668.png
+  sha256: 98e83725d07201da86d7abe904c355d828ad5e63baf4ea0d48489cbbf8856f17
+  byte_count: 955835
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.263052Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/neutral_master/sprite/neutral_full_body
+    prompt_version: null
+    input_artifact_ids:
+    - d9edff42-8841-4530-9176-894023d89608
+  created_at: '2026-09-24T10:02:58.269402Z'
+  dependencies:
+  - consumer_artifact_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+    input_artifact_id: d9edff42-8841-4530-9176-894023d89608
+    input_sha256: faec6c23c7cfa34ea8be3d96577b2a9bd07c9a2a83c537d77f86aa5ae5fcad1a
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.269402Z'
+    decision_id: 57e4163f-dd3f-4b7a-8a87-9b1a23d4c100
+  - artifact_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://80850451-fb50-4758-959b-7864a6fdaef0
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.014225Z'
+    decision_id: 03e15388-0844-48cf-a081-1e6ec456fe31
+  approval_decisions:
+  - target_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.269402Z'
+    decision_id: 22e3f375-9ca8-472c-8c64-a081a7453a26
+  - target_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.279644Z'
+    decision_id: 4286d4fe-ba3b-4672-aee9-7f5180107593
+- artifact_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_full_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_right_wing_full_open/19ccbeee-db1b-471c-a821-6e64316ec5ac.png
+  sha256: 84df94165feba375beef4bd73d704e20bdba35eed210636045e55cd8614105b9
+  byte_count: 66140
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.708593Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/right_wing_full_open
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.714606Z'
+  dependencies:
+  - consumer_artifact_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.714606Z'
+    decision_id: ac586425-2a35-4db8-8397-400d80af6efc
+  - artifact_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.030372Z'
+    decision_id: 9e774a80-8cd2-402e-abaa-4d249463c6dc
+  approval_decisions:
+  - target_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.714606Z'
+    decision_id: 09e2545c-1753-4c55-adb9-6034dc81ddc5
+  - target_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.722143Z'
+    decision_id: 72fcfe28-928e-4e1e-a734-3772fb62928b
+- artifact_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_closed_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_closed_replacement/1a6d1401-ca9d-4c90-b34a-fb7001f25519.png
+  sha256: 7df0278d2f14e7c491b82354a9d6a2ed7d7a13d1404566933356238d38dd39b6
+  byte_count: 240807
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.267907Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://32aacd64-a8d2-4349-9420-38fde1b9be95
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.273430Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.273430Z'
+    decision_id: be616b13-aabc-4572-8433-749a131dd46b
+  - artifact_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://32aacd64-a8d2-4349-9420-38fde1b9be95
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.072376Z'
+    decision_id: 5817457f-2712-4eb6-abb7-725ea463165a
+  approval_decisions:
+  - target_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.273430Z'
+    decision_id: cdf35273-5cbd-4877-9e66-4ade25a7c0de
+  - target_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.278518Z'
+    decision_id: 4b90e8ef-8ef5-411b-95f7-126660ab4857
+- artifact_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_lower_beak_closed
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_lower_beak_closed/1bc7e2b2-ba07-4ab3-98c8-b81867202949.png
+  sha256: 3aebee3d1902be8bc2643a71225395b548edcf5b9763be2dd8505e7f064faf8c
+  byte_count: 9411
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.797466Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/lower_beak_closed
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.802976Z'
+  dependencies:
+  - consumer_artifact_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.802976Z'
+    decision_id: bfb26d2a-ca0c-4e24-8843-0016ffa76840
+  - artifact_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.034352Z'
+    decision_id: 18f6adc2-e22f-4b57-bc18-dc15241bf487
+  approval_decisions:
+  - target_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.802976Z'
+    decision_id: 836f0a5a-5ba6-47f8-911b-a66a7e10c18a
+  - target_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.810493Z'
+    decision_id: 6576a82d-faeb-4246-9ab2-18176007e0bd
+- artifact_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_half_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_left_wing_half_open/1e25c2f0-88d1-493f-8fb9-ad0a38c7849c.png
+  sha256: 9befaa58113ea5d1ff5419ecb9d7780e51bbe3cc80cc46b970ae4bcae5285a44
+  byte_count: 47671
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.532721Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/left_wing_half_open
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.538566Z'
+  dependencies:
+  - consumer_artifact_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.538566Z'
+    decision_id: 19bfef10-a63f-4272-b0e6-9211b036f6c0
+  - artifact_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.023750Z'
+    decision_id: e7f4b27f-7a35-4c17-805a-829abeb73711
+  approval_decisions:
+  - target_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.539449Z'
+    decision_id: fcbef976-c5f0-454e-a5ca-cf87483b7c88
+  - target_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.546657Z'
+    decision_id: c17255d5-9e1b-4b3e-8049-f05fe1c72656
+- artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_pose_reference
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_pose_reference/20167c04-267d-48e6-ad42-951dae172c29.png
+  sha256: b12d40d329d29a846c41c42c640b17b48931b14fe00185a98eaf84d02fa73b4a
+  byte_count: 1632451
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.408433Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://9d90ce6c-2258-472d-9d17-8f67a9c8fb67
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.417388Z'
+  dependencies:
+  - consumer_artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.417388Z'
+    decision_id: 3c0b3a7f-b69b-44ba-a22f-901ec0d64672
+  - artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://9d90ce6c-2258-472d-9d17-8f67a9c8fb67
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.010204Z'
+    decision_id: b9015fa7-39c1-46e8-a2c9-cdd896d296da
+  approval_decisions:
+  - target_id: 20167c04-267d-48e6-ad42-951dae172c29
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.417388Z'
+    decision_id: c359f0c7-5ef7-4b8d-9a9e-9d50da662dba
+  - target_id: 20167c04-267d-48e6-ad42-951dae172c29
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.425551Z'
+    decision_id: cbccc958-7091-4d46-81c8-5c9117df563d
+- artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_expressions
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_expressions/21827c25-d593-4e39-b0d8-a782d29be196.png
+  sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+  byte_count: 857232
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.638061Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.646602Z'
+  dependencies:
+  - consumer_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.646602Z'
+    decision_id: 8d9c045e-0dd2-4934-b0f8-00ced7220140
+  - artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.051720Z'
+    decision_id: e4eb8fc6-4b7f-4431-8946-2ccca801f62e
+  approval_decisions:
+  - target_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.646602Z'
+    decision_id: 4e7df73b-4478-49d4-bbeb-86c8dce2c569
+  - target_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.655112Z'
+    decision_id: df7d8746-cbd1-4930-b040-72b409e64a31
+- artifact_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_o_round
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_o_round/246ea06c-c532-4ef1-9bac-a98082636b9e.png
+  sha256: 60064132550840213ed65aa8f6ed8d425bfbf6483e14162fe745667ab342b131
+  byte_count: 157044
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.039301Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_sprites/mouth/o_round
+    prompt_version: null
+    input_artifact_ids:
+    - 3b89c324-d245-4071-adca-9aa1077562f1
+  created_at: '2026-09-24T10:02:58.045301Z'
+  dependencies:
+  - consumer_artifact_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+    input_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.045820Z'
+    decision_id: d48c4b5e-38ef-4a77-b467-a66ed20c081b
+  - artifact_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.046713Z'
+    decision_id: 0ea1e478-505a-437c-a071-419def3794f5
+  approval_decisions:
+  - target_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.045820Z'
+    decision_id: 894cbbab-4eab-4f23-9826-85415e2bfa0a
+  - target_id: 246ea06c-c532-4ef1-9bac-a98082636b9e
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: touching seam and cross-state alignment vary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.054333Z'
+    decision_id: e89977bb-1076-4c2d-b2f5-4a29242f4061
+- artifact_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_three_quarter
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/tovi_v1_view_three_quarter/2a3073eb-27c0-47ad-846b-c84340b27c51.png
+  sha256: d40aa2d0c48a87de2e6d248626c5ff9e3567ab5741e917b17857439b2c271676
+  byte_count: 181365
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.780538Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/turnaround/view/three_quarter
+    prompt_version: null
+    input_artifact_ids:
+    - 0efc98c4-584e-4017-b96f-e4e74e963a48
+  created_at: '2026-09-24T10:02:57.786045Z'
+  dependencies:
+  - consumer_artifact_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+    input_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.786045Z'
+    decision_id: c0d7ff07-42c6-4da4-b27a-37e6d722738c
+  - artifact_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.002175Z'
+    decision_id: a1833112-26cc-4b0d-8293-36b36fec2f5b
+  approval_decisions:
+  - target_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.786045Z'
+    decision_id: cd0feb1b-f67b-4656-98bc-c8fc5b544df4
+  - target_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.793864Z'
+    decision_id: 95618975-497c-404b-836e-17b4c379a6bb
+- artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_sprites
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_sprites/3b89c324-d245-4071-adca-9aa1077562f1.png
+  sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+  byte_count: 811910
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.584190Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.592377Z'
+  dependencies:
+  - consumer_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.592377Z'
+    decision_id: 062b1240-2f69-4056-9783-9c95b8fe099f
+  - artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.037956Z'
+    decision_id: 7787b9c6-b5f9-4ce6-a101-8b4d7bde6e9c
+  approval_decisions:
+  - target_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.592377Z'
+    decision_id: 65b0cf28-1c09-4588-bcf2-ccf7fd6cd78d
+  - target_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.598903Z'
+    decision_id: f6b918b8-0217-4095-84af-8f6eb17fa5c2
+- artifact_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_small_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_small_open/3d112a87-9745-4064-bcb1-5fb9a6eca69a.png
+  sha256: 7cba5b6ee0a7330c810cdf1423b86e4ca4fca1405b5c5a53e046bff1a1cd2da7
+  byte_count: 204697
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.524188Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_small_open_replacement/mouth/small_open
+    prompt_version: null
+    input_artifact_ids:
+    - 802538fd-8585-4bcb-8aa1-31fc698d6329
+  created_at: '2026-09-24T13:11:34.530232Z'
+  dependencies:
+  - consumer_artifact_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+    input_artifact_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+    input_sha256: 30d796de578b53fa121607676ef88a53693d3a54f224b2a2d5ef12f1afca6a01
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.530232Z'
+    decision_id: ad3a91e4-ad1e-4011-a540-9f785d8d9681
+  - artifact_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://739bea4c-4f9e-4337-bf99-df24066f4c75
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.078063Z'
+    decision_id: d71ec9f5-2376-4b8a-bcb2-8065b6d216b5
+  approval_decisions:
+  - target_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.530232Z'
+    decision_id: 97208706-392e-4794-8847-d6262ceffaa4
+  - target_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.533254Z'
+    decision_id: 51647936-db28-4de6-89a9-f843bbdc8bdf
+- artifact_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_hello
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_hello/3fbb5750-9004-408d-9456-f5d5be68a2a0.png
+  sha256: 5dec145f84c9b0d2a1f1d3ba8db2c8583c15af194c53604824545d4f082478e4
+  byte_count: 136706
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.308869Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/poses/sprite/hello
+    prompt_version: null
+    input_artifact_ids:
+    - 06e31d66-d6da-4e47-8068-570fa93f0a17
+  created_at: '2026-09-24T10:02:58.313397Z'
+  dependencies:
+  - consumer_artifact_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+    input_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.314395Z'
+    decision_id: d736ed0f-58d9-4e99-9fdd-9d8abbc814a2
+  - artifact_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.065701Z'
+    decision_id: 656082e1-d105-41ba-968f-03cf638c2161
+  approval_decisions:
+  - target_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.314395Z'
+    decision_id: 5c5f6c46-cf5f-4895-bcde-057031141eff
+  - target_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.322042Z'
+    decision_id: dbe1eb09-dcaf-4896-a1eb-9af003a61206
+- artifact_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_full_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_left_wing_full_open/42bffedf-3d27-40c2-ae6d-74d2bd8551f9.png
+  sha256: 0a78c8ea0439fa8c865409d5b38d990652e3bbd36eccaafaccdce58653319a06
+  byte_count: 70388
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.575720Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/left_wing_full_open
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.580719Z'
+  dependencies:
+  - consumer_artifact_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.580719Z'
+    decision_id: 2b877c2a-7f5a-4dd7-a356-653c7f591bb5
+  - artifact_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.024749Z'
+    decision_id: e2d00a49-9e34-4bb8-8488-e8a2ab1631bd
+  approval_decisions:
+  - target_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.580719Z'
+    decision_id: f6c008fa-1dd7-4377-b6c7-f43eb5f9fe70
+  - target_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.589752Z'
+    decision_id: f91352ec-7a91-4009-bf17-01232c5b035e
+- artifact_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_o_round
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_o_round/45d8f038-5faa-4176-8724-44fc24a1b89b.png
+  sha256: 576693461b8e914fa31682d8c3b09339466b73a0ba3d63dade6a6f66b798d9e2
+  byte_count: 283682
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.624748Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_o_round_replacement/mouth/o_round
+    prompt_version: null
+    input_artifact_ids:
+    - 850f8c55-143c-43dd-a0c0-3909cdca0766
+  created_at: '2026-09-24T13:11:34.629344Z'
+  dependencies:
+  - consumer_artifact_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+    input_artifact_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+    input_sha256: a8ff9dece716a8486b533f017d4e03561f1d75d0dd26ab5cc420d95b118f6485
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.630346Z'
+    decision_id: caa78ef4-119a-4b00-a514-d99211a4ce3c
+  - artifact_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://3bfe5c6c-6e5f-4cf6-8297-08aa55bdccce
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.091540Z'
+    decision_id: 42da2edd-5c91-4934-bab8-4646528f7812
+  approval_decisions:
+  - target_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.630346Z'
+    decision_id: c1f9858d-0cd0-4ef5-ac9f-a02abaff40d8
+  - target_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.633338Z'
+    decision_id: 0e4318b8-15f0-4079-986c-82ed564e900c
+- artifact_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_thinking
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_expression_thinking/4e4c5ebc-ad32-42a9-9823-bc66b9bddf96.png
+  sha256: 370cb44f287c62208dad44b15e70127a5f445855e957e963a45088e9c793d1bd
+  byte_count: 1064198
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.729223Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/thinking_replacement/sprite/expression_thinking
+    prompt_version: null
+    input_artifact_ids:
+    - b669b8fe-d228-4db5-a29b-6c1e92d19595
+  created_at: '2026-09-24T13:11:34.735744Z'
+  dependencies:
+  - consumer_artifact_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+    input_artifact_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+    input_sha256: a7f37f86ca7880f158316e4ab43ea80d37c024cefc3cd1db306bfd0b13e517a9
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.735744Z'
+    decision_id: 997493b6-07f1-4a26-a547-46bb6f01937b
+  - artifact_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://2f86fce0-b4ea-4e23-bff9-13ec01e47670
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.096504Z'
+    decision_id: f2f73df5-ea0d-4965-acd9-7055c21a6f2c
+  approval_decisions:
+  - target_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.735744Z'
+    decision_id: cf50fccf-9a1c-4256-8c27-e6bf18304bfd
+  - target_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.740260Z'
+    decision_id: c5105917-f0bf-4ae9-bba0-b87f6b90b076
+- artifact_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_back
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/tovi_v1_view_back/553f6261-e5dc-4212-9d45-4de8fb21ebc2.png
+  sha256: ef626f6fa6e086692b9a8ce28642643c2bd9202e590d61ed5930fff4d3dc66ac
+  byte_count: 190311
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.866611Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/turnaround/view/back
+    prompt_version: null
+    input_artifact_ids:
+    - 0efc98c4-584e-4017-b96f-e4e74e963a48
+  created_at: '2026-09-24T10:02:57.872301Z'
+  dependencies:
+  - consumer_artifact_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+    input_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.872301Z'
+    decision_id: 0ef177c9-81ad-4ada-907e-498001cfa277
+  - artifact_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.005680Z'
+    decision_id: 67a23384-4084-4bb9-b20d-6c1625c6f02b
+  approval_decisions:
+  - target_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.872301Z'
+    decision_id: 64116769-86ff-44ae-9e81-555ff5dc0582
+  - target_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.882599Z'
+    decision_id: a5d755bd-a32c-4104-b6aa-6424fe962c24
+- artifact_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_neutral
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_expression_neutral/580d7ddf-fdbd-455b-b348-4fdab60545ec.png
+  sha256: 6a57e70ccba336f19a91c574df5015ead8edcf30d4dc2b9b7952d863c246881b
+  byte_count: 194984
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.068786Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/expressions/sprite/expression_neutral
+    prompt_version: null
+    input_artifact_ids:
+    - 21827c25-d593-4e39-b0d8-a782d29be196
+  created_at: '2026-09-24T10:02:58.075535Z'
+  dependencies:
+  - consumer_artifact_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+    input_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.075535Z'
+    decision_id: daefb94c-f4fb-4052-b1ba-af185873ba79
+  - artifact_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.052631Z'
+    decision_id: 1adc0522-3fea-4102-a8b5-7ac30b6fd619
+  approval_decisions:
+  - target_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.075535Z'
+    decision_id: 4925de68-1ac6-49b8-b953-1fd53f54b70e
+  - target_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.084712Z'
+    decision_id: a3994adf-a2bc-455e-b064-920551f8f7a7
+- artifact_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_half_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_right_wing_half_open/5c3467a2-8ad3-4199-8e87-ddb1667b18e8.png
+  sha256: 190324840b9d6cf9e6f363931c7a08055c0ef43f7685b8c85980206fd1f153ba
+  byte_count: 41210
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.664859Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/right_wing_half_open
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.670249Z'
+  dependencies:
+  - consumer_artifact_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.670249Z'
+    decision_id: b7dd422e-6748-4e37-adb5-237173ac2d05
+  - artifact_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.028447Z'
+    decision_id: 28672ae2-5025-489e-9b7c-9b6eaf52d53f
+  approval_decisions:
+  - target_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.670249Z'
+    decision_id: 88fa4b5f-010b-41cf-97be-ace6c13ab776
+  - target_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.678760Z'
+    decision_id: 79f24719-0c42-48c8-9449-997ef176616a
+- artifact_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_pointing
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_pointing/6b5943bb-e0c4-487c-ab70-c75816108f47.png
+  sha256: 360b9fe936c5f66cba9f1d424df4323d5c111a14fb8c912a7328fbd10bed94fc
+  byte_count: 120765
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.353602Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/poses/sprite/pointing
+    prompt_version: null
+    input_artifact_ids:
+    - 06e31d66-d6da-4e47-8068-570fa93f0a17
+  created_at: '2026-09-24T10:02:58.358105Z'
+  dependencies:
+  - consumer_artifact_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+    input_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.358105Z'
+    decision_id: fb879806-e4ad-47ad-89ce-e90fafc3e8b6
+  - artifact_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.066713Z'
+    decision_id: 5080dd1c-5985-4b1b-8e1c-c150d7d133b5
+  approval_decisions:
+  - target_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.359109Z'
+    decision_id: cdc832c9-136a-45e5-b59d-c553cd5c1399
+  - target_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.366618Z'
+    decision_id: 089279aa-686e-4aa3-b656-92928301931c
+- artifact_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_closed
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_closed/6df438b8-6f7b-447f-9402-53829d658ffe.png
+  sha256: e35cc96a0d0fb156a89dd8400b95ad3b810925c842848c0d4ffad58f7474ad4d
+  byte_count: 156239
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.918372Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_sprites/mouth/closed
+    prompt_version: null
+    input_artifact_ids:
+    - 3b89c324-d245-4071-adca-9aa1077562f1
+  created_at: '2026-09-24T10:02:57.924890Z'
+  dependencies:
+  - consumer_artifact_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+    input_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.924890Z'
+    decision_id: 4b1c8c4c-9867-42c8-8cee-63c10141cb42
+  - artifact_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.041019Z'
+    decision_id: 08f83621-a038-460a-a18c-196f1aed86b2
+  approval_decisions:
+  - target_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.924890Z'
+    decision_id: d97b3764-f899-40c4-a2c5-720bd6d3ed99
+  - target_id: 6df438b8-6f7b-447f-9402-53829d658ffe
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: touching seam and cross-state alignment vary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.935907Z'
+    decision_id: 063dd6f4-b61a-43a9-a2cf-2799b84aeace
+- artifact_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_hopping
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_hopping/6dfa4409-d848-4ffb-a175-14c5bdb8347a.png
+  sha256: 6181d51fa0c4005c238f78ef730e02a74a2f85aa68303de0104a54fb54947bbd
+  byte_count: 122814
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.398128Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/poses/sprite/hopping
+    prompt_version: null
+    input_artifact_ids:
+    - 06e31d66-d6da-4e47-8068-570fa93f0a17
+  created_at: '2026-09-24T10:02:58.403132Z'
+  dependencies:
+  - consumer_artifact_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+    input_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.404131Z'
+    decision_id: 70f85792-623b-474d-bfce-10c6401ad885
+  - artifact_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.067702Z'
+    decision_id: 76908142-997c-4f84-92e1-26d845aaa8ee
+  approval_decisions:
+  - target_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.404131Z'
+    decision_id: e68c1f6a-73fa-4c2f-939d-199c782febb2
+  - target_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.410147Z'
+    decision_id: 26462452-20cb-448d-ae8c-600d04ff552c
+- artifact_id: 75191e77-70fb-435a-a858-c3763d331058
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_front
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/tovi_v1_view_front/75191e77-70fb-435a-a858-c3763d331058.png
+  sha256: 7d5347ca28b59c90dedef906662690e87d40c29c6a8655c90b578c13cc9fdc14
+  byte_count: 203664
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.736447Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/turnaround/view/front
+    prompt_version: null
+    input_artifact_ids:
+    - 0efc98c4-584e-4017-b96f-e4e74e963a48
+  created_at: '2026-09-24T10:02:57.741950Z'
+  dependencies:
+  - consumer_artifact_id: 75191e77-70fb-435a-a858-c3763d331058
+    input_artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+    input_sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 75191e77-70fb-435a-a858-c3763d331058
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.741950Z'
+    decision_id: 6ea9203d-0716-4ee4-9d77-4ce5eec5b839
+  - artifact_id: 75191e77-70fb-435a-a858-c3763d331058
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.001171Z'
+    decision_id: a159cc84-febe-4240-9d78-d3be4a50beb4
+  approval_decisions:
+  - target_id: 75191e77-70fb-435a-a858-c3763d331058
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.741950Z'
+    decision_id: 7a3a08ca-f01a-4bb6-b8ed-b2d038fea820
+  - target_id: 75191e77-70fb-435a-a858-c3763d331058
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.751461Z'
+    decision_id: 19c57a0b-9d97-40bd-87bf-faae2523fee4
+- artifact_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_singing
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_singing/7f58d7db-d97b-47db-a1dd-4f7079249e6e.png
+  sha256: 20286d6ec93af955d566d4985c63b7f7e224b180a61e2e62043a6fe642a8bed0
+  byte_count: 115532
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.441338Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/poses/sprite/singing
+    prompt_version: null
+    input_artifact_ids:
+    - 06e31d66-d6da-4e47-8068-570fa93f0a17
+  created_at: '2026-09-24T10:02:58.446849Z'
+  dependencies:
+  - consumer_artifact_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+    input_artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+    input_sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.446849Z'
+    decision_id: dd8aaae6-cac6-4250-8974-8ff1b42c86b4
+  - artifact_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.069704Z'
+    decision_id: c9413df2-e015-450f-9954-5b98911ae690
+  approval_decisions:
+  - target_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.446849Z'
+    decision_id: a1f80568-8e61-4df0-a87c-257a5f9ec715
+  - target_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.455379Z'
+    decision_id: f4cee9db-8f5f-4eb4-b32c-e3546d423c37
+- artifact_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_small_open_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_small_open_replacement/802538fd-8585-4bcb-8aa1-31fc698d6329.png
+  sha256: 30d796de578b53fa121607676ef88a53693d3a54f224b2a2d5ef12f1afca6a01
+  byte_count: 222489
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.292563Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://739bea4c-4f9e-4337-bf99-df24066f4c75
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.296563Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.296563Z'
+    decision_id: 1c45b44c-7a40-40cf-a074-28ee1780af03
+  - artifact_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://739bea4c-4f9e-4337-bf99-df24066f4c75
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.076030Z'
+    decision_id: 1e6dbec9-5909-496f-b5e4-5f149b727ac1
+  approval_decisions:
+  - target_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.296563Z'
+    decision_id: 404c036f-6ae2-4657-8d49-02d9969d9de4
+  - target_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.300569Z'
+    decision_id: 7289965c-6367-4892-8b21-bfdbce7d73f0
+- artifact_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_o_round_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_o_round_replacement/850f8c55-143c-43dd-a0c0-3909cdca0766.png
+  sha256: a8ff9dece716a8486b533f017d4e03561f1d75d0dd26ab5cc420d95b118f6485
+  byte_count: 306274
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.362973Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://3bfe5c6c-6e5f-4cf6-8297-08aa55bdccce
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.367487Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.367487Z'
+    decision_id: f2df6209-2eb7-4578-9f4b-fd5b2e83a206
+  - artifact_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://3bfe5c6c-6e5f-4cf6-8297-08aa55bdccce
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.088837Z'
+    decision_id: c25a86d0-5d68-4501-9b5b-af913a24c1f4
+  approval_decisions:
+  - target_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.367487Z'
+    decision_id: c23b457b-c4fe-4231-9a44-80492c8535de
+  - target_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.371014Z'
+    decision_id: c3b4ab32-d9a0-4104-bc00-aa72ac068c4a
+- artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_reference
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_reference/a00f5564-295a-4e1c-9539-c4d70d4dbcff.png
+  sha256: 511b22ed3e82c0fc40eb6cd529bea97b83cb6284861db4929f2403f22b273c48
+  byte_count: 1652962
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.334018Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://57b18cc8-fbfa-43cd-89f2-022749abcda6
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.343732Z'
+  dependencies:
+  - consumer_artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.343732Z'
+    decision_id: c7ce0e03-ab32-4345-82fa-cbfa0a4ec688
+  - artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://57b18cc8-fbfa-43cd-89f2-022749abcda6
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.007695Z'
+    decision_id: c7eb3d64-37ec-40da-aefe-fefa548e7806
+  approval_decisions:
+  - target_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.343732Z'
+    decision_id: ea695b62-fec2-4adb-b2f1-070d85a2d9b8
+  - target_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.351445Z'
+    decision_id: 277ad08d-d193-48f7-a89d-04c918e4a0c4
+- artifact_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_e_smile
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_e_smile/a3b7feed-f311-453f-96eb-5a52abe7fabe.png
+  sha256: f65a3011ec29db6d15125abcde4d9132a11bd5737fcc9f5b816752ad88e5428c
+  byte_count: 154341
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.011447Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_sprites/mouth/e_smile
+    prompt_version: null
+    input_artifact_ids:
+    - 3b89c324-d245-4071-adca-9aa1077562f1
+  created_at: '2026-09-24T10:02:58.017478Z'
+  dependencies:
+  - consumer_artifact_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+    input_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.017478Z'
+    decision_id: f1c98896-d71d-4b51-82d2-e181c47a0ebb
+  - artifact_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.045717Z'
+    decision_id: 45308c28-b159-4b5c-a85e-2494c1066f09
+  approval_decisions:
+  - target_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.017478Z'
+    decision_id: 19b815c1-2f40-4191-9b30-cae307290f95
+  - target_id: a3b7feed-f311-453f-96eb-5a52abe7fabe
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: touching seams and cross-state alignment vary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.026253Z'
+    decision_id: f88a27b4-4d00-49cf-9b53-1b473e34a071
+- artifact_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_wide_a
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_wide_a/a9548cdf-e262-4353-8ddf-1deb00dba2c5.png
+  sha256: 0d62b584ba0b7c40324de7f2a6462d79f534cc7b58cd3d63ef29557748c6f3de
+  byte_count: 438344
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T13:11:34.559807Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_wide_a_replacement/mouth/wide_a
+    prompt_version: null
+    input_artifact_ids:
+    - eede5b87-2088-4c19-818d-35bc47333128
+  created_at: '2026-09-24T13:11:34.564071Z'
+  dependencies:
+  - consumer_artifact_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+    input_artifact_id: eede5b87-2088-4c19-818d-35bc47333128
+    input_sha256: abc9407e31213647e1b14c1ab7de56968a872d1954d05c26ab60b6567dbd4b7e
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.564071Z'
+    decision_id: 67eb8314-7c4a-47cf-a781-ff84a0517016
+  - artifact_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://e877fa58-1d34-4ed7-83b6-64d1e8c69030
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.083062Z'
+    decision_id: 0a4193c3-e29d-4e74-a55e-e87f3261132d
+  approval_decisions:
+  - target_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.564071Z'
+    decision_id: f2954eaa-57d6-4ac4-a0fa-5b6b87ea08f5
+  - target_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: 'Replaces held PR #10 candidate; isolated sprite and visual inspection
+      passed'
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.568074Z'
+    decision_id: 49473730-e036-4fbc-b47c-6a0ea81bd281
+- artifact_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_thinking_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_thinking_replacement/b669b8fe-d228-4db5-a29b-6c1e92d19595.png
+  sha256: a7f37f86ca7880f158316e4ab43ea80d37c024cefc3cd1db306bfd0b13e517a9
+  byte_count: 1106188
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.396144Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://2f86fce0-b4ea-4e23-bff9-13ec01e47670
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.403710Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.403710Z'
+    decision_id: 478ec209-6443-45b4-a42e-6921e72140ff
+  - artifact_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://2f86fce0-b4ea-4e23-bff9-13ec01e47670
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.094513Z'
+    decision_id: 2a9542ca-1b46-4f3f-8153-8eb43855f23b
+  approval_decisions:
+  - target_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.403710Z'
+    decision_id: 464b63ee-ed5c-405e-89da-3c9ce0836928
+  - target_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.406718Z'
+    decision_id: 02bb617c-de7b-4d3b-9aea-039500105bfe
+- artifact_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_wide_a
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_wide_a/be90c641-0a85-4e18-9066-f4b17954c2b4.png
+  sha256: 5ee5494152ba1246a5d6eeb200dcc10f6f26369d146e04311710437393bd6b0a
+  byte_count: 155707
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.979936Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_sprites/mouth/wide_a
+    prompt_version: null
+    input_artifact_ids:
+    - 3b89c324-d245-4071-adca-9aa1077562f1
+  created_at: '2026-09-24T10:02:57.986596Z'
+  dependencies:
+  - consumer_artifact_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+    input_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.986596Z'
+    decision_id: 67405e66-1890-469e-8d04-c28c4e60e25a
+  - artifact_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.043737Z'
+    decision_id: 274dda48-ac48-4790-8815-6cfbee8bb9b9
+  approval_decisions:
+  - target_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.986596Z'
+    decision_id: ee6be4a3-e216-4957-be04-8d69685c3823
+  - target_id: be90c641-0a85-4e18-9066-f4b17954c2b4
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: touching seams and cross-state alignment vary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.996376Z'
+    decision_id: 4944810e-2547-4041-9e9c-75c924546ab5
+- artifact_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_surprised
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_expression_surprised/d13b6d80-8fbe-437e-99ad-478bb7367094.png
+  sha256: 9c5447bbe1e204db71b35a484e9eccfabe4d47fafdbbbeb2ec4fc2941515f61f
+  byte_count: 196873
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.164699Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/expressions/sprite/expression_surprised
+    prompt_version: null
+    input_artifact_ids:
+    - 21827c25-d593-4e39-b0d8-a782d29be196
+  created_at: '2026-09-24T10:02:58.171205Z'
+  dependencies:
+  - consumer_artifact_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+    input_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.172206Z'
+    decision_id: e5975bf1-eb98-409b-a432-811332b0bcff
+  - artifact_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.056025Z'
+    decision_id: 495bc8c8-ba5a-4b20-952c-4d8513b62307
+  approval_decisions:
+  - target_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.172206Z'
+    decision_id: d28b0186-e81f-47a3-b26f-f38684574a0f
+  - target_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.180711Z'
+    decision_id: 95a37d36-bfe2-48d9-a3c6-01d90ccce56e
+- artifact_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_small_open
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_mouth_small_open/d2c89451-2120-42a0-ba11-4b7a00338e99.png
+  sha256: c90a1025221143bb734e82a121874d02b3f82ffafef567a9160687c02a071696
+  byte_count: 154141
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:57.950922Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/mouth_sprites/mouth/small_open
+    prompt_version: null
+    input_artifact_ids:
+    - 3b89c324-d245-4071-adca-9aa1077562f1
+  created_at: '2026-09-24T10:02:57.958423Z'
+  dependencies:
+  - consumer_artifact_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+    input_artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+    input_sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.958423Z'
+    decision_id: d262d420-85ed-495a-a608-5800205936f8
+  - artifact_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.042612Z'
+    decision_id: c3ad7ddf-457e-4d78-9232-0a82e16b9337
+  approval_decisions:
+  - target_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.958423Z'
+    decision_id: 27509fc8-770d-4098-b155-6b3a67753810
+  - target_id: d2c89451-2120-42a0-ba11-4b7a00338e99
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: touching seams and cross-state alignment vary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.966427Z'
+    decision_id: a2d0ec12-eed3-422c-a403-a192b84424f8
+- artifact_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_upper_beak_closed
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_upper_beak_closed/d415ba0a-e51c-4d59-a5f2-6e40d35024cc.png
+  sha256: d29c10769819d682515383f8eab02486a4dd597cb083befccb36b396a2b3301e
+  byte_count: 17921
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.752181Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/upper_beak_closed
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.757180Z'
+  dependencies:
+  - consumer_artifact_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.757180Z'
+    decision_id: d5f98cd9-b05f-4c37-8a3e-4dad82a6af47
+  - artifact_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.031361Z'
+    decision_id: c561f600-e029-4891-a418-637a1b6e0187
+  approval_decisions:
+  - target_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.757180Z'
+    decision_id: dfe26c07-4fbb-4270-93d5-fa944eeec893
+  - target_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.765199Z'
+    decision_id: b6f7c315-2b22-4e74-85ab-545a49945b4f
+- artifact_id: d9edff42-8841-4530-9176-894023d89608
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_neutral_master
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_neutral_master/d9edff42-8841-4530-9176-894023d89608.png
+  sha256: faec6c23c7cfa34ea8be3d96577b2a9bd07c9a2a83c537d77f86aa5ae5fcad1a
+  byte_count: 1043002
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.468390Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://80850451-fb50-4758-959b-7864a6fdaef0
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.476872Z'
+  dependencies:
+  - consumer_artifact_id: d9edff42-8841-4530-9176-894023d89608
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: d9edff42-8841-4530-9176-894023d89608
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: d9edff42-8841-4530-9176-894023d89608
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.476872Z'
+    decision_id: 3099c26e-4404-434a-9bbd-d6861c5b8f3f
+  - artifact_id: d9edff42-8841-4530-9176-894023d89608
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://80850451-fb50-4758-959b-7864a6fdaef0
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.013216Z'
+    decision_id: fc6e08ea-3bae-4b59-8307-a659a7da418b
+  approval_decisions:
+  - target_id: d9edff42-8841-4530-9176-894023d89608
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.476872Z'
+    decision_id: b4b3dd14-4795-4d6d-a385-f44a165f3ed3
+  - target_id: d9edff42-8841-4530-9176-894023d89608
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.485923Z'
+    decision_id: 8bbd5720-11e8-4f5a-905a-4e1c8798fecc
+- artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_original_profile
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_original_profile/db50d001-33ea-4f1c-8c0d-36e2760a2c7a.png
+  sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+  byte_count: 1559924
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.131976Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: user-supplied://tovi/original-profile
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T10:02:57.142079Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.142079Z'
+    decision_id: d2e8bf33-b1ef-4896-8a47-bfe844315164
+  approval_decisions:
+  - target_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.142079Z'
+    decision_id: 8b54f16c-d919-4178-820a-acf432c2419a
+  - target_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.149637Z'
+    decision_id: 37bf8382-37b1-4169-9448-12f467d43835
+- artifact_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_folded
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_left_wing_folded/dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe.png
+  sha256: ef9883160b216a62d50e5f965183684b2ae58f4e035ce12108e34d85f019b210
+  byte_count: 30520
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.487775Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/left_wing_folded
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.493397Z'
+  dependencies:
+  - consumer_artifact_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.493397Z'
+    decision_id: 0ce79071-91e3-4b79-b4ad-d83b2672025b
+  - artifact_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.021734Z'
+    decision_id: d22999d1-5aac-48f4-9ea8-cd8ff6192768
+  approval_decisions:
+  - target_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.493397Z'
+    decision_id: 57309972-0146-404d-b71c-9886b7cc0f5a
+  - target_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.502535Z'
+    decision_id: 669bb057-0a40-4f05-aedb-070b50e41317
+- artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_original_banner
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_original_banner/de41c057-abc7-45f4-a06f-e7359ff1f350.png
+  sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+  byte_count: 1573673
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.198116Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: user-supplied://tovi/original-banner
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T10:02:57.208108Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.209137Z'
+    decision_id: b72cf6d4-6607-44b3-8f5c-39e32dcba8a8
+  approval_decisions:
+  - target_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.209137Z'
+    decision_id: a4515e0b-4f0b-4e4a-99b1-6626b2b8f890
+  - target_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.216844Z'
+    decision_id: 840a5373-c0bf-46a5-b26b-fd0ec0d6b4e3
+- artifact_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_e_smile_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_e_smile_replacement/df88090a-1b92-4937-ba1a-10abe80e7de7.png
+  sha256: fd31241e85e7500ae7ac95ce04af96666ad5f467b86c3da074b55a499e61fc8b
+  byte_count: 322348
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.339757Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://0317c62d-2b86-4d82-aa86-0c535b7b64e7
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.344917Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.344917Z'
+    decision_id: c9a36e0b-7eac-4dd8-8c92-135f74515ff3
+  - artifact_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://0317c62d-2b86-4d82-aa86-0c535b7b64e7
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.085665Z'
+    decision_id: f9294fe1-c192-4dc4-b5d5-7d9d6fdad8c5
+  approval_decisions:
+  - target_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.344917Z'
+    decision_id: 1404f39f-466d-4cc8-b05c-378cfd2e1c87
+  - target_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.347925Z'
+    decision_id: f04b48d8-4d8a-4d89-9667-a03550911470
+- artifact_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_thinking
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_expression_thinking/e056c7fb-3980-4187-bdca-b0bd682902a3.png
+  sha256: ea84f969f37af925a93550c0540ab3d7045efbc7973b1eb1a2b5b430f1376e23
+  byte_count: 196507
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.215263Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/expressions/sprite/expression_thinking
+    prompt_version: null
+    input_artifact_ids:
+    - 21827c25-d593-4e39-b0d8-a782d29be196
+  created_at: '2026-09-24T10:02:58.221263Z'
+  dependencies:
+  - consumer_artifact_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+    input_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.221263Z'
+    decision_id: 1db79780-ae30-493e-89e7-480e224429b3
+  - artifact_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.057021Z'
+    decision_id: 4c5009ed-4586-485e-b5f9-713b7db293a7
+  approval_decisions:
+  - target_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.221263Z'
+    decision_id: d68d76c3-21dd-4d16-bf1e-22284f475763
+  - target_id: e056c7fb-3980-4187-bdca-b0bd682902a3
+    target_kind: artifact
+    status: needs_review
+    actor: project-owner
+    reason: right silhouette touches source boundary
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.230302Z'
+    decision_id: 7bb8c790-25af-4213-93b1-e2083aa72ce4
+- artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_rig_parts
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_rig_parts/e94568b5-f2a7-48b5-9fbd-023c24a3732a.png
+  sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+  byte_count: 1110190
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T10:02:57.529804Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+    prompt_version: null
+    input_artifact_ids:
+    - db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    - de41c057-abc7-45f4-a06f-e7359ff1f350
+  created_at: '2026-09-24T10:02:57.538323Z'
+  dependencies:
+  - consumer_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+    input_sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    purpose: original Tovi visual reference
+  - consumer_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+    input_sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    purpose: original Tovi visual reference
+  rights_decisions:
+  - artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.539321Z'
+    decision_id: 963e412d-2cf0-4ede-8466-e5fd8f0a165c
+  - artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.020220Z'
+    decision_id: 832f34de-0eac-427f-a8fa-24c065cf3697
+  approval_decisions:
+  - target_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:57.539321Z'
+    decision_id: 467e67b7-7601-4955-b3e5-40e522eb7c0f
+  - target_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:57.546830Z'
+    decision_id: fca1e58c-6aed-41e8-b9ed-b2567fe64d34
+- artifact_id: eede5b87-2088-4c19-818d-35bc47333128
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_wide_a_replacement
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_reference/source_mouth_wide_a_replacement/eede5b87-2088-4c19-818d-35bc47333128.png
+  sha256: abc9407e31213647e1b14c1ab7de56968a872d1954d05c26ab60b6567dbd4b7e
+  byte_count: 464982
+  mime_type: image/png
+  provenance:
+    source_kind: manual
+    acquired_at: '2026-09-24T13:11:34.316117Z'
+    provider: null
+    model: null
+    request_id: null
+    operator: project-owner
+    source_uri: generation://e877fa58-1d34-4ed7-83b6-64d1e8c69030
+    prompt_version: null
+    input_artifact_ids: []
+  created_at: '2026-09-24T13:11:34.321635Z'
+  dependencies: []
+  rights_decisions:
+  - artifact_id: eede5b87-2088-4c19-818d-35bc47333128
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.321635Z'
+    decision_id: 0a2d5eb5-557e-475c-b1e0-4a2e11176fd7
+  - artifact_id: eede5b87-2088-4c19-818d-35bc47333128
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://e877fa58-1d34-4ed7-83b6-64d1e8c69030
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.081062Z'
+    decision_id: cec46048-4b32-4a22-87af-bb3652bfd858
+  approval_decisions:
+  - target_id: eede5b87-2088-4c19-818d-35bc47333128
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T13:11:34.321635Z'
+    decision_id: c064038c-04b2-44de-82f4-dc59ab73d95b
+  - target_id: eede5b87-2088-4c19-818d-35bc47333128
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: owner supplied visual reference
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T13:11:34.324719Z'
+    decision_id: ebb7ef66-6ece-45c6-b959-c45d8b515d36
+- artifact_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_folded
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_right_wing_folded/fafe1c9b-b229-43d3-a826-bb62f2bed161.png
+  sha256: 12ee9032be474cb8467c022bad63010b237f983b6693a323caf72e062e8bd273
+  byte_count: 35781
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.619279Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/rig_parts/sprite/right_wing_folded
+    prompt_version: null
+    input_artifact_ids:
+    - e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  created_at: '2026-09-24T10:02:58.623803Z'
+  dependencies:
+  - consumer_artifact_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+    input_artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+    input_sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.624809Z'
+    decision_id: 10c483a8-36b0-4b23-800f-ff7c4e0e9e30
+  - artifact_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.027362Z'
+    decision_id: 91d65f39-6dde-4b90-b728-8d8e38a52399
+  approval_decisions:
+  - target_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.624809Z'
+    decision_id: c0eadad8-05f1-440b-bada-ca92b7b52659
+  - target_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.633309Z'
+    decision_id: e9abad6e-452a-435b-94e1-c65f6ca95d10
+- artifact_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+  owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_happy
+  schema_version: 1
+  relative_path: brand-assets/tovitunes-1e34c1c7f5ed0fd7/character_sprite/tovi_v1_sprite_expression_happy/fea4f70a-2a84-4b58-be7b-c4ad95d62e21.png
+  sha256: 3c51c7e6f1d8e52e04cd16352b98ca3fc48f91aff8f2269932cdc3f79dea0360
+  byte_count: 198934
+  mime_type: image/png
+  provenance:
+    source_kind: deterministic
+    acquired_at: '2026-09-24T10:02:58.120311Z'
+    provider: tovitunes-character-intake/pillow-12.3.0
+    model: null
+    request_id: null
+    operator: null
+    source_uri: intake://tovi-v1/expressions/sprite/expression_happy
+    prompt_version: null
+    input_artifact_ids:
+    - 21827c25-d593-4e39-b0d8-a782d29be196
+  created_at: '2026-09-24T10:02:58.125952Z'
+  dependencies:
+  - consumer_artifact_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+    input_artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+    input_sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+    purpose: deterministic character crop
+  rights_decisions:
+  - artifact_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+    status: unknown
+    actor: system:ingestion
+    evidence_uri: null
+    rationale: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.125952Z'
+    decision_id: f2c10efb-0586-44df-bfcb-50987c4cc552
+  - artifact_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+    status: commercial_use_confirmed
+    actor: project-owner
+    evidence_uri: https://openai.com/policies/row-terms-of-use/
+    rationale: Owner identifies generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+      as ChatGPT image output; OpenAI terms assign OpenAI's interest in Output to
+      the user. Rights to original input references remain separate.
+    policy_version: openai-terms-of-use-2026-01-01
+    decided_at: '2026-09-24T13:11:35.055091Z'
+    decision_id: 0776c5ea-0091-4afe-9292-19e601cee72c
+  approval_decisions:
+  - target_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+    target_kind: artifact
+    status: pending
+    actor: system:ingestion
+    reason: null
+    policy_version: ingest-v1
+    decided_at: '2026-09-24T10:02:58.125952Z'
+    decision_id: 1992b453-1560-4a96-8279-b73c11266aa9
+  - target_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+    target_kind: artifact
+    status: approved
+    actor: project-owner
+    reason: approved Tovi v1 visual direction; technical crop passed
+    policy_version: tovi-visual-v1
+    decided_at: '2026-09-24T10:02:58.134540Z'
+    decision_id: ac8413f5-f177-4060-a74e-ceac48ea9d89
+selections:
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_expressions
+  artifact_id: 21827c25-d593-4e39-b0d8-a782d29be196
+  selected_at: '2026-09-24T13:11:34.232294Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_closed_replacement
+  artifact_id: 1a6d1401-ca9d-4c90-b34a-fb7001f25519
+  selected_at: '2026-09-24T13:11:34.283508Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_e_smile_replacement
+  artifact_id: df88090a-1b92-4937-ba1a-10abe80e7de7
+  selected_at: '2026-09-24T13:11:34.352451Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_o_round_replacement
+  artifact_id: 850f8c55-143c-43dd-a0c0-3909cdca0766
+  selected_at: '2026-09-24T13:11:34.376016Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_reference
+  artifact_id: a00f5564-295a-4e1c-9539-c4d70d4dbcff
+  selected_at: '2026-09-24T13:11:34.072463Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_small_open_replacement
+  artifact_id: 802538fd-8585-4bcb-8aa1-31fc698d6329
+  selected_at: '2026-09-24T13:11:34.305089Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_sprites
+  artifact_id: 3b89c324-d245-4071-adca-9aa1077562f1
+  selected_at: '2026-09-24T13:11:34.202867Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_mouth_wide_a_replacement
+  artifact_id: eede5b87-2088-4c19-818d-35bc47333128
+  selected_at: '2026-09-24T13:11:34.329713Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_neutral_master
+  artifact_id: d9edff42-8841-4530-9176-894023d89608
+  selected_at: '2026-09-24T13:11:34.145547Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_original_banner
+  artifact_id: de41c057-abc7-45f4-a06f-e7359ff1f350
+  selected_at: '2026-09-24T13:11:33.988967Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_original_profile
+  artifact_id: db50d001-33ea-4f1c-8c0d-36e2760a2c7a
+  selected_at: '2026-09-24T13:11:33.952666Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_pose_reference
+  artifact_id: 20167c04-267d-48e6-ad42-951dae172c29
+  selected_at: '2026-09-24T13:11:34.114758Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_poses
+  artifact_id: 06e31d66-d6da-4e47-8068-570fa93f0a17
+  selected_at: '2026-09-24T13:11:34.259614Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_rig_parts
+  artifact_id: e94568b5-f2a7-48b5-9fbd-023c24a3732a
+  selected_at: '2026-09-24T13:11:34.178531Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_thinking_replacement
+  artifact_id: b669b8fe-d228-4db5-a29b-6c1e92d19595
+  selected_at: '2026-09-24T13:11:34.412710Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: source_turnaround
+  artifact_id: 0efc98c4-584e-4017-b96f-e4e74e963a48
+  selected_at: '2026-09-24T13:11:34.030701Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_back
+  artifact_id: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+  selected_at: '2026-09-24T13:11:34.476597Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_front
+  artifact_id: 75191e77-70fb-435a-a858-c3763d331058
+  selected_at: '2026-09-24T13:11:34.428252Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_profile
+  artifact_id: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+  selected_at: '2026-09-24T13:11:34.460302Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_reference
+  slot_key: tovi_v1_view_three_quarter
+  artifact_id: 2a3073eb-27c0-47ad-846b-c84340b27c51
+  selected_at: '2026-09-24T13:11:34.444350Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_closed
+  artifact_id: 0c531e68-4abf-4b91-8d62-d1e22137778e
+  selected_at: '2026-09-24T13:11:34.507638Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_e_smile
+  artifact_id: 10a92c61-c890-46a9-b272-8d9a77e08630
+  selected_at: '2026-09-24T13:11:34.605700Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_o_round
+  artifact_id: 45d8f038-5faa-4176-8724-44fc24a1b89b
+  selected_at: '2026-09-24T13:11:34.640456Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_small_open
+  artifact_id: 3d112a87-9745-4064-bcb1-5fb9a6eca69a
+  selected_at: '2026-09-24T13:11:34.540243Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_mouth_wide_a
+  artifact_id: a9548cdf-e262-4353-8ddf-1deb00dba2c5
+  selected_at: '2026-09-24T13:11:34.574603Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_happy
+  artifact_id: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+  selected_at: '2026-09-24T13:11:34.680619Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_neutral
+  artifact_id: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+  selected_at: '2026-09-24T13:11:34.660570Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_surprised
+  artifact_id: d13b6d80-8fbe-437e-99ad-478bb7367094
+  selected_at: '2026-09-24T13:11:34.700593Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_expression_thinking
+  artifact_id: 4e4c5ebc-ad32-42a9-9823-bc66b9bddf96
+  selected_at: '2026-09-24T13:11:34.748260Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_hello
+  artifact_id: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+  selected_at: '2026-09-24T13:11:34.800809Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_hopping
+  artifact_id: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+  selected_at: '2026-09-24T13:11:34.838302Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_folded
+  artifact_id: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+  selected_at: '2026-09-24T13:11:34.871644Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_full_open
+  artifact_id: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+  selected_at: '2026-09-24T13:11:34.906120Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_left_wing_half_open
+  artifact_id: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+  selected_at: '2026-09-24T13:11:34.889002Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_lower_beak_closed
+  artifact_id: 1bc7e2b2-ba07-4ab3-98c8-b81867202949
+  selected_at: '2026-09-24T13:11:34.990681Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_neutral_full_body
+  artifact_id: 12eaeecb-b482-428d-89b9-0028dcd63668
+  selected_at: '2026-09-24T13:11:34.783363Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_pointing
+  artifact_id: 6b5943bb-e0c4-487c-ab70-c75816108f47
+  selected_at: '2026-09-24T13:11:34.819497Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_folded
+  artifact_id: fafe1c9b-b229-43d3-a826-bb62f2bed161
+  selected_at: '2026-09-24T13:11:34.922487Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_full_open
+  artifact_id: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+  selected_at: '2026-09-24T13:11:34.957718Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_right_wing_half_open
+  artifact_id: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+  selected_at: '2026-09-24T13:11:34.937926Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_singing
+  artifact_id: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+  selected_at: '2026-09-24T13:11:34.855811Z'
+- owner_scope: brand
+  owner_id: tovitunes-1e34c1c7f5ed0fd7
+  kind: character_sprite
+  slot_key: tovi_v1_sprite_upper_beak_closed
+  artifact_id: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+  selected_at: '2026-09-24T13:11:34.974596Z'

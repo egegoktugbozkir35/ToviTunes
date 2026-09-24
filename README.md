@@ -1,6 +1,6 @@
 # ToviTunes
 
-Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. The Tovi visual pack is a draft metadata shell; animation and external providers come later.
+Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. Tovi's v1 character pack is approved and has a checked-in canonical lock for clean-machine rehydration. Animation and external providers come later.
 
 ## Create a Colors episode
 
@@ -22,5 +22,4 @@ print(db.get_episode(episode.episode_id).model_dump_json(indent=2))
 ```
 
 See [the architecture proposal](docs/ARCHITECTURE_PROPOSAL.md), [artifact store guide](docs/ARTIFACT_STORE.md), [continuation guide](docs/CONTINUATION.md), [creative draft guide](docs/CREATIVE.md), [offline music benchmark rubric](docs/MUSIC_BENCHMARK.md), [character pack intake](docs/CHARACTER_PACK_INTAKE.md), [offline visual benchmark protocol](docs/VISUAL_BENCHMARK.md), and [development guide](docs/DEVELOPMENT.md) for scope and verification commands.
-
 
