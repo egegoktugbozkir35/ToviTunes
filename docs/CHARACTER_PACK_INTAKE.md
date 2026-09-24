@@ -24,5 +24,5 @@ The semantic role map lives in `asset_artifact_ids`. For example, `view/front` p
 
 This readiness check does **not** decode every pixel, prove transparency, verify visual similarity or establish copyright ownership by itself. The human art and rights review remains required, and later visual QA will add image-level checks. No canonical images are bundled yet.
 
-The current pack is expected to report `pack manifest remains draft`. That is an intentional gate, not a migration failure. Episodes may pin the draft pack for planning and creative work; scene animation and final visual approval wait for the approved asset set.
+The current pack is expected to report `pack manifest remains draft`. That is an intentional gate, not a migration failure. Episodes may pin the draft pack for planning and creative work; after a storyboard is selected, the render planner returns `review character_pack` until its pinned revision is approved. Scene animation and final visual approval wait for the complete approved asset set.
 
