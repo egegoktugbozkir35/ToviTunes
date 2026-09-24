@@ -109,7 +109,9 @@ rights decision. Machine media validation runs again on the new asset root.
 `validate-lock` is the media-free CI check. Brand revision IDs hash the named
 brand definition, creative bible, and safety policy files; pack revision IDs
 hash `pack.yaml`. The sibling lock file is outside both revision hashes, so it
-cannot change the owner or pack revision it pins.
+cannot change the owner or pack revision it pins. `.gitattributes` preserves
+the exact committed bytes of these YAML files on Windows checkouts, including
+their line endings, so the pinned revisions remain portable.
 
 `prepare` uses Pillow only for cropping, connected alpha-component extraction,
 transparent padding, translation, and PNG writing. It never rescales,
