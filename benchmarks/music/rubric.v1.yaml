@@ -1,0 +1,27 @@
+schema_version: 1
+score_min: 0
+score_max: 4
+weights:
+  target_word_pronunciation: 25
+  lyric_adherence: 15
+  educational_preschool_fit: 15
+  musical_appeal: 15
+  audio_quality: 10
+  controllability: 10
+  production_fit: 10
+usable_minimums:
+  target_word_pronunciation: 3
+  lyric_adherence: 3
+  educational_preschool_fit: 3
+duration_range_seconds: [30, 45]
+first_target_word_max_seconds: 10
+hard_gates:
+  - decodes
+  - complete_audio
+  - no_silence_or_severe_clipping
+  - target_words_preserved
+  - educationally_correct
+  - preschool_appropriate
+  - no_named_artist_or_character_imitation
+release_gate: commercial_use_confirmed_with_evidence
+

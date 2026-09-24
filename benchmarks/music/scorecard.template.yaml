@@ -1,0 +1,51 @@
+schema_version: 1
+case_id: red
+provider: null
+model: null
+account_tier: null
+interface: null # web_ui or api
+attempt_number: 1
+output_index: 1
+artifact_id: null
+request_id: null
+generated_at_utc: null
+prompt_version: music-benchmark-v1
+prompt_sha256: null
+lyrics_sha256: null
+provider_input_translation: null
+unsupported_controls: []
+status: pending # succeeded, failed, or ambiguous
+billable_cost_amount: null
+billable_cost_currency: null
+latency_seconds: null
+duration_seconds: null
+first_target_word_seconds: null
+rights_status: unknown # unknown, review_required, commercial_use_confirmed, blocked
+rights_evidence_uri: null
+hard_gates:
+  decodes: null
+  complete_audio: null
+  no_silence_or_severe_clipping: null
+  target_words_preserved: null
+  educationally_correct: null
+  preschool_appropriate: null
+  no_named_artist_or_character_imitation: null
+blind_reviewer_scores:
+  - reviewer_id: null
+    target_word_pronunciation: null
+    lyric_adherence: null
+    educational_preschool_fit: null
+    musical_appeal: null
+    audio_quality: null
+    evidence_notes: null
+operator_workflow_scores:
+  operator_id: null
+  controllability: null
+  production_fit: null
+  evidence_notes: null
+heard_lyrics: null
+objective_audio_notes: null
+usable_for_pilot: null
+weighted_score: null
+decision_notes: null
+
