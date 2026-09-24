@@ -3,15 +3,102 @@ pack_id: tovi-pack-v1
 character_id: tovi
 version: 1.0.0
 readiness: draft
-palette: {}
-canonical_views: []
-expressions: []
-wing_poses: []
-mouth_states: []
-reusable_sprites: []
+palette:
+  body_sky_blue: '#5FBFFC'
+  body_shadow_blue: '#218CF9'
+  face_cream: '#F6D198'
+  belly_cream: '#FCEDB4'
+  beak_orange: '#FDC21D'
+  feet_orange: '#FDB21A'
+  cheek_blush: '#FCB99B'
+  eye_blue_light: '#48DCFC'
+  eye_blue_dark: '#013686'
+canonical_views:
+- front
+- three_quarter
+- profile
+- back
+expressions:
+- neutral
+- happy
+- surprised
+- thinking
+wing_poses:
+- folded
+- half_open
+- full_open
+mouth_states:
+- closed
+- small_open
+- wide_a
+- e_smile
+- o_round
+reusable_sprites:
+- neutral_full_body
+- hello
+- pointing
+- hopping
+- singing
+- expression_neutral
+- expression_happy
+- expression_surprised
+- expression_thinking
+- left_wing_folded
+- left_wing_half_open
+- left_wing_full_open
+- right_wing_folded
+- right_wing_half_open
+- right_wing_full_open
+- upper_beak_closed
+- lower_beak_closed
 rig_data: null
 allowed_accessories: []
-forbidden_changes: []
-visual_rules: {}
-asset_artifact_ids: {}
-
+forbidden_changes:
+- Remove or replace the musical-note tuft.
+- Change Tovi to another species or realistic bird anatomy.
+- Change the core sky-blue body color.
+- Materially change the cream face or belly pattern.
+- Replace the large glossy blue eyes with realistic bird eyes.
+- Add human hands or arms.
+- Add permanent clothing without a pack revision.
+- Change the beak or feet away from the warm orange family.
+- Change the compact child-friendly head-to-body proportions.
+- Add extra wings, eyes, feet, or other major anatomy.
+visual_rules:
+  silhouette: Compact rounded baby bird with an oversized round head, small oval torso,
+    short legs, orange three-toed feet, and compact layered feather wings.
+  proportions: Head is substantially larger than the torso; eyes dominate the upper
+    face; legs and feet stay small, and wings remain feathered rather than arm-like.
+  eyes: Very large, rounded glossy blue eyes with dark navy pupils, blue iris gradient,
+    white sclera, and bright highlights; retain their wide spacing.
+  beak: Small warm-orange rounded beak centered low between the eyes; keep the child-friendly
+    upper beak and curved smiling lower mouth.
+  tuft: One prominent blue feather tuft rises as a recognizable musical note above
+    the head; keep its bent note shape and layered feather base.
+asset_artifact_ids:
+  view/front: 75191e77-70fb-435a-a858-c3763d331058
+  view/three_quarter: 2a3073eb-27c0-47ad-846b-c84340b27c51
+  view/profile: 0ae4c139-b1ed-49dc-8758-e95a2d429a15
+  view/back: 553f6261-e5dc-4212-9d45-4de8fb21ebc2
+  mouth/closed: 6df438b8-6f7b-447f-9402-53829d658ffe
+  mouth/small_open: d2c89451-2120-42a0-ba11-4b7a00338e99
+  mouth/wide_a: be90c641-0a85-4e18-9066-f4b17954c2b4
+  mouth/e_smile: a3b7feed-f311-453f-96eb-5a52abe7fabe
+  mouth/o_round: 246ea06c-c532-4ef1-9bac-a98082636b9e
+  sprite/expression_neutral: 580d7ddf-fdbd-455b-b348-4fdab60545ec
+  sprite/expression_happy: fea4f70a-2a84-4b58-be7b-c4ad95d62e21
+  sprite/expression_surprised: d13b6d80-8fbe-437e-99ad-478bb7367094
+  sprite/expression_thinking: e056c7fb-3980-4187-bdca-b0bd682902a3
+  sprite/neutral_full_body: 12eaeecb-b482-428d-89b9-0028dcd63668
+  sprite/hello: 3fbb5750-9004-408d-9456-f5d5be68a2a0
+  sprite/pointing: 6b5943bb-e0c4-487c-ab70-c75816108f47
+  sprite/hopping: 6dfa4409-d848-4ffb-a175-14c5bdb8347a
+  sprite/singing: 7f58d7db-d97b-47db-a1dd-4f7079249e6e
+  sprite/left_wing_folded: dc1d5a75-a9d3-4ca8-8e38-e0315b34ffbe
+  sprite/left_wing_half_open: 1e25c2f0-88d1-493f-8fb9-ad0a38c7849c
+  sprite/left_wing_full_open: 42bffedf-3d27-40c2-ae6d-74d2bd8551f9
+  sprite/right_wing_folded: fafe1c9b-b229-43d3-a826-bb62f2bed161
+  sprite/right_wing_half_open: 5c3467a2-8ad3-4199-8e87-ddb1667b18e8
+  sprite/right_wing_full_open: 19ccbeee-db1b-471c-a821-6e64316ec5ac
+  sprite/upper_beak_closed: d415ba0a-e51c-4d59-a5f2-6e40d35024cc
+  sprite/lower_beak_closed: 1bc7e2b2-ba07-4ab3-98c8-b81867202949

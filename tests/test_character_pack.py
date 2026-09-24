@@ -1,8 +1,8 @@
-from base64 import b64decode
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
 
 from tovitunes.artifacts.character_pack import assess_pack_assets
@@ -25,8 +25,16 @@ def test_pack_stays_draft_without_art_and_rights(tmp_path: Path, catalog: BrandC
     report = assess_pack_assets(draft, store, catalog.version.revision_id)
     assert not report.ready
     assert "pack manifest remains draft" in report.issues
-    with pytest.raises(ValidationError, match="approved pack needs"):
-        CharacterAssetPack.model_validate({**draft.model_dump(), "readiness": "approved"})
+    structural = CharacterAssetPack.model_validate({**draft.model_dump(), "readiness": "approved"})
+    unregistered = assess_pack_assets(structural, store, catalog.version.revision_id)
+    assert not unregistered.ready
+    assert any("artifact is not registered" in issue for issue in unregistered.issues)
+    duplicate = dict(draft.asset_artifact_ids)
+    duplicate["view/front"] = duplicate["view/profile"]
+    with pytest.raises(ValidationError, match="cannot reuse one image"):
+        CharacterAssetPack.model_validate(
+            {**draft.model_dump(), "readiness": "approved", "asset_artifact_ids": duplicate}
+        )
 
 
 def test_pack_requires_selected_approved_rights_cleared_brand_assets(
@@ -37,11 +45,9 @@ def test_pack_requires_selected_approved_rights_cleared_brand_assets(
     db.create_episode(catalog, Episode.create(catalog, "red", "colors-red"))
     store = AssetStore(tmp_path / "assets", db)
     png = tmp_path / "art.png"
-    png.write_bytes(
-        b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WTcYAAAAABJRU5ErkJggg=="
-        )
-    )
+    image = Image.new("RGBA", (12, 12), (0, 0, 0, 0))
+    image.paste((60, 160, 250, 255), (3, 3, 9, 9))
+    image.save(png)
     views = ("front", "three_quarter", "profile")
     mouths = ("closed", "small_open", "wide_a", "e_smile", "o_round")
     roles = [
@@ -121,3 +127,40 @@ def test_pack_requires_selected_approved_rights_cleared_brand_assets(
     assert not blocked.ready
     assert any("view/front" in issue for issue in blocked.issues)
 
+
+def test_pack_assessment_detects_an_opaque_animation_sprite(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    db = Database(tmp_path / "state.db")
+    db.migrate()
+    db.create_episode(catalog, Episode.create(catalog, "red", "colors-red"))
+    store = AssetStore(tmp_path / "assets", db)
+    source = tmp_path / "opaque.png"
+    Image.new("RGBA", (16, 16), (100, 150, 250, 255)).save(source)
+    record = store.ingest(
+        source,
+        owner_scope="brand",
+        owner_id=catalog.version.revision_id,
+        kind="character_sprite",
+        slot_key="opaque_candidate",
+        provenance=Provenance.manual("owner", "test://opaque"),
+    )
+    store.record_approval(
+        ApprovalDecision(
+            target_id=record.identity.artifact_id,
+            target_kind="artifact",
+            status="approved",
+            actor="owner",
+            policy_version="test",
+            decided_at=datetime.now(UTC),
+        )
+    )
+    store.select(record.identity.artifact_id)
+    draft = CharacterAssetPack.model_validate(
+        {
+            **catalog.packs[0].model_dump(),
+            "asset_artifact_ids": {"sprite/hello": record.identity.artifact_id},
+        }
+    )
+    assessment = assess_pack_assets(draft, store, catalog.version.revision_id)
+    assert any("sprite/hello: invalid transparent sprite" in issue for issue in assessment.issues)

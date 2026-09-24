@@ -274,6 +274,25 @@ class AssetStore:
                 provenance=Provenance.model_validate_json(row["provenance_json"]),
             )
 
+    def find_version(
+        self,
+        owner_scope: Literal["episode", "brand"],
+        owner_id: str,
+        kind: str,
+        slot_key: str,
+        sha256_digest: str,
+    ) -> ArtifactRecord | None:
+        """Return an already ingested immutable version for repeatable intake."""
+        owner_column = "episode_id" if owner_scope == "episode" else "brand_revision_id"
+        with closing(self.database.connect()) as connection:
+            row = connection.execute(
+                f"SELECT artifact_id FROM artifact_versions WHERE owner_scope = ? "
+                f"AND {owner_column} = ? AND kind = ? AND slot_key = ? AND sha256 = ? "
+                "ORDER BY created_at LIMIT 1",
+                (owner_scope, owner_id, kind, slot_key, sha256_digest),
+            ).fetchone()
+        return self.get(row["artifact_id"]) if row is not None else None
+
     def inspect(self, artifact_id: str) -> ValidationResult:
         record = self.get(artifact_id)
         try:
@@ -295,6 +314,10 @@ class AssetStore:
             return ValidationResult(not reasons, tuple(reasons), digest.hexdigest())
         except (FileNotFoundError, ValueError, OSError) as exc:
             return ValidationResult(False, (type(exc).__name__,))
+
+    def path_for(self, artifact_id: str) -> Path:
+        """Resolve a registered file beneath the trusted asset root."""
+        return self._trusted_path(self.get(artifact_id).relative_path, must_exist=True)
 
     def read_json(self, artifact_id: str) -> object:
         record = self.get(artifact_id)
@@ -473,4 +496,3 @@ class AssetStore:
                 connection.rollback()
                 raise
         return tuple(quarantined)
-

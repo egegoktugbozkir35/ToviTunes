@@ -1,0 +1,87 @@
+schema_version: 1
+# Files are copied byte-for-byte from the owner's attachments into --source-dir.
+# Hashes identify the exact reviewed inputs; the files themselves stay outside Git.
+sources:
+  original_profile:
+    filename: original-profile.png
+    sha256: 13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1
+    source_uri: user-supplied://tovi/original-profile
+  original_banner:
+    filename: original-banner.png
+    sha256: c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030
+    source_uri: user-supplied://tovi/original-banner
+  turnaround:
+    filename: turnaround.png
+    sha256: a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8
+    source_uri: generation://24e4fac5-3ed3-4fc2-b11d-729bde9f9f06
+    uses_originals: true
+  mouth_reference:
+    filename: mouth-reference.png
+    sha256: 511b22ed3e82c0fc40eb6cd529bea97b83cb6284861db4929f2403f22b273c48
+    source_uri: generation://57b18cc8-fbfa-43cd-89f2-022749abcda6
+    uses_originals: true
+  pose_reference:
+    filename: pose-reference.png
+    sha256: b12d40d329d29a846c41c42c640b17b48931b14fe00185a98eaf84d02fa73b4a
+    source_uri: generation://9d90ce6c-2258-472d-9d17-8f67a9c8fb67
+    uses_originals: true
+  neutral_master:
+    filename: neutral-master.png
+    sha256: faec6c23c7cfa34ea8be3d96577b2a9bd07c9a2a83c537d77f86aa5ae5fcad1a
+    source_uri: generation://80850451-fb50-4758-959b-7864a6fdaef0
+    uses_originals: true
+  rig_parts:
+    filename: rig-parts.png
+    sha256: 2676ac9f3abb8a9a83c1edba0a44ddb94e9c05e1f6208ae87313ac4594246f0f
+    source_uri: generation://bb54bd28-e3b7-4c93-bbb5-35ed169b6aae
+    uses_originals: true
+  mouth_sprites:
+    filename: mouth-sprites.png
+    sha256: 0a400bc2d6acbfba4b5ec4665bfee3c16423db41a5f1f685a78c3f315fdab80b
+    source_uri: generation://ddd99631-59db-45d9-a59e-103dfa931b5a
+    uses_originals: true
+  expressions:
+    filename: expressions.png
+    sha256: e7865eb1c7f7d2d503c29fdf22a7671fd0f278a5c8b0ffe156bfc139fe1823b4
+    source_uri: generation://8e9cc0ca-668d-4c32-b928-0da54be68207
+    uses_originals: true
+  poses:
+    filename: poses.png
+    sha256: 773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724
+    source_uri: generation://81719b59-e55e-4e97-a0c1-aa94a3db2743
+    uses_originals: true
+
+assets:
+  - {role: view/front, source: turnaround, rect: [20, 42, 395, 520], method: crop, art_review: approved}
+  - {role: view/three_quarter, source: turnaround, rect: [405, 42, 735, 520], method: crop, art_review: approved}
+  - {role: view/profile, source: turnaround, rect: [735, 42, 1050, 520], method: crop, art_review: approved}
+  - {role: view/back, source: turnaround, rect: [1050, 42, 1430, 520], method: crop, art_review: approved}
+
+  # Fixed source y-window and 320x480 output canvas; no individual rescaling.
+  # The five generated busts touch at their seams and vary slightly in head/eye
+  # geometry. Keep these as traceable candidates pending dedicated separated art.
+  - {role: mouth/closed, source: mouth_sprites, rect: [0, 320, 300, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
+  - {role: mouth/small_open, source: mouth_sprites, rect: [300, 320, 588, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/wide_a, source: mouth_sprites, rect: [588, 320, 870, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/e_smile, source: mouth_sprites, rect: [870, 320, 1154, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seams and cross-state alignment vary}
+  - {role: mouth/o_round, source: mouth_sprites, rect: [1154, 320, 1448, 800], method: crop, canvas: [320, 480], art_review: needs_review, quality_note: touching seam and cross-state alignment vary}
+
+  - {role: sprite/expression_neutral, source: expressions, rect: [0, 300, 390, 820], method: component, canvas: [440, 520], art_review: approved}
+  - {role: sprite/expression_happy, source: expressions, rect: [360, 300, 780, 820], method: component, canvas: [440, 520], art_review: approved}
+  - {role: sprite/expression_surprised, source: expressions, rect: [730, 300, 1110, 820], method: component, canvas: [440, 520], art_review: approved}
+  - {role: sprite/expression_thinking, source: expressions, rect: [1090, 300, 1448, 820], method: component, canvas: [440, 520], art_review: needs_review, quality_note: right silhouette touches source boundary}
+
+  - {role: sprite/neutral_full_body, source: neutral_master, rect: [0, 0, 1254, 1254], method: component, trim: true, art_review: approved}
+  - {role: sprite/hello, source: poses, rect: [260, 320, 610, 820], method: component, canvas: [380, 500], art_review: approved}
+  - {role: sprite/pointing, source: poses, rect: [590, 320, 890, 820], method: component, canvas: [380, 500], art_review: approved}
+  - {role: sprite/hopping, source: poses, rect: [840, 320, 1165, 820], method: component, canvas: [380, 500], art_review: approved}
+  - {role: sprite/singing, source: poses, rect: [1120, 320, 1448, 820], method: component, canvas: [380, 500], art_review: approved}
+
+  - {role: sprite/left_wing_folded, source: rig_parts, rect: [770, 185, 940, 380], method: component, trim: true, art_review: approved}
+  - {role: sprite/left_wing_half_open, source: rig_parts, rect: [940, 140, 1165, 370], method: component, trim: true, art_review: approved}
+  - {role: sprite/left_wing_full_open, source: rig_parts, rect: [1160, 70, 1438, 375], method: component, trim: true, art_review: approved}
+  - {role: sprite/right_wing_folded, source: rig_parts, rect: [770, 440, 945, 660], method: component, trim: true, art_review: approved}
+  - {role: sprite/right_wing_half_open, source: rig_parts, rect: [940, 465, 1165, 665], method: component, trim: true, art_review: approved}
+  - {role: sprite/right_wing_full_open, source: rig_parts, rect: [1160, 375, 1438, 665], method: component, trim: true, art_review: approved}
+  - {role: sprite/upper_beak_closed, source: rig_parts, rect: [480, 685, 650, 795], method: component, trim: true, art_review: approved}
+  - {role: sprite/lower_beak_closed, source: rig_parts, rect: [685, 720, 840, 800], method: component, trim: true, art_review: approved}

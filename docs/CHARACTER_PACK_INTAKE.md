@@ -1,28 +1,109 @@
 # Canonical character pack intake
 
-Tovi's current `v1` pack is **draft metadata**. It contains no original character art, approved palette or rights evidence. Do not set its `readiness` to `approved` or use it for visual production until the artist's files and ownership record have been reviewed. The pack revision is separate from the brand revision, so new art can be released without silently changing earlier episodes.
+Tovi's v1 visual direction is approved by the project owner. The pack is still
+`readiness: draft`: commercial-use evidence has not been supplied, five mouth
+sprites need a cleaner separated source, and the thinking expression touches
+the source sheet edge. The render and release planner therefore remains held.
+Visual approval never grants rights clearance.
 
-## Required reference set
+## Reference and role contract
 
-An approved pack manifest (`schema_version: 2`) must name:
+The owner supplied the original profile and channel banner plus eight new
+reference and sprite images. The byte hashes, generation IDs, crop rectangles,
+and role review decisions are in
+`brands/tovitunes/characters/tovi/packs/v1/intake.yaml`. The profile and banner
+remain identifiable as the original Tovi identity references. Generation IDs
+are recorded as `generation://` source URIs; the provider model is unknown and
+is not fabricated.
 
-- Original front, three-quarter and profile views.
-- Exact `#RRGGBB` palette entries and written rules for silhouette, proportions, eyes, beak and tuft.
-- At least one expression, wing pose and reusable sprite layer, plus the five initial mouth states: `closed`, `small_open`, `wide_a`, `e_smile`, `o_round`.
-- Forbidden identity changes and any allowed accessories.
-- A distinct immutable brand artifact ID for every `view/<name>`, `sprite/<name>` and `mouth/<name>` role. `rig_data`, when used, is a separate JSON artifact ID.
+An approved `CharacterAssetPack` must have front, three-quarter, and profile
+views; five mouth states; a palette; written identity rules; expressions; wing
+poses; reusable sprites; and a distinct UUID for each required image role.
+`asset_artifact_ids` contains only registered artifact IDs, never filenames or
+generation IDs. `rig_data` is null because no pivot or skeletal topology has
+been proven.
 
-The semantic role map lives in `asset_artifact_ids`. For example, `view/front` points to the selected front-reference artifact, and `mouth/o_round` points to that mouth sprite. Never put a local filename or a provider URL in place of an artifact ID. The checked-in draft intentionally leaves the map empty.
+## Repeatable offline workflow
 
-## Intake sequence
+Place copies of the ten supplied PNG files under a source directory using the
+stable names in `intake.yaml`. Keep the originals untouched. The recipe checks
+their SHA-256 hashes before doing any work. The preparation and asset roots
+must be separate, trusted directories. A typical local arrangement is
+`data/tovi-pack-v1/sources` and `data/tovi-pack-v1/prepared`; `data/` is ignored
+by Git.
 
-1. Obtain the original layered files and reference sheets from the authorized owner. Record artist/source identity, license or assignment, scope of commercial YouTube use, and any restrictions as evidence. Keep raw files outside Git.
-2. Ingest each reference as a brand artifact of kind `character_reference`; ingest transparent sprite and mouth images as `character_sprite`. Use `owner_scope="brand"` and the catalog's pinned brand revision ID. The store captures a hash and starts approval `pending` and rights `unknown`.
-3. Review the actual images for consistent silhouette, palette, tuft, eye/beak anatomy, layer alignment and usable transparency. Record a human artifact approval and an evidence-backed `commercial_use_confirmed` rights decision, then select each accepted version. Reject or replace weak files without deleting their history.
-4. Add the selected artifact IDs, measured palette and written rules to a new pack manifest revision. Set `readiness: approved` only after reviewing the complete set. `CharacterAssetPack` refuses an approved manifest with missing roles, malformed palette, duplicate required images or missing identity rules.
-5. Run `assess_pack_assets(pack, store, brand_revision_id)`. It checks that every listed artifact is registered under the correct brand, has the expected kind/media type, passes the store's hash/review gate, is the selected version, and has commercial-use evidence. Resolve every issue before visual work starts.
+```powershell
+uv sync --locked --extra dev
+uv run python -m tovitunes.cli --config config.example.yaml character-pack prepare `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --source-dir data/tovi-pack-v1/sources `
+  --prepared-dir data/tovi-pack-v1/prepared
+uv run python -m tovitunes.cli --config config.example.yaml character-pack ingest `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --source-dir data/tovi-pack-v1/sources `
+  --prepared-dir data/tovi-pack-v1/prepared
+uv run python -m tovitunes.cli --config config.example.yaml character-pack assess
+```
 
-This readiness check does **not** decode every pixel, prove transparency, verify visual similarity or establish copyright ownership by itself. The human art and rights review remains required, and later visual QA will add image-level checks. No canonical images are bundled yet.
+`prepare` uses Pillow only for cropping, connected alpha-component extraction,
+transparent padding, and PNG writing. It never rescales, recolors, redraws, or
+generates art. Every mouth bust comes from a fixed source window and goes onto
+the same 320 × 480 canvas. The source row itself has touching seams and small
+eye/head alignment variation, so those five files remain review candidates.
+The source singing sprite has detached music notes; the connected-component
+extraction removes only those separate decorations. The isolated thinking bust
+reaches the right source boundary and also remains under review.
 
-The current pack is expected to report `pack manifest remains draft`. That is an intentional gate, not a migration failure. Episodes may pin the draft pack for planning and creative work; after a storyboard is selected, the render planner returns `review character_pack` until its pinned revision is approved. Scene animation and final visual approval wait for the complete approved asset set.
+For each animation sprite, the intake decodes the PNG, requires real alpha and
+transparent pixels, records the nontransparent bounding box, and rejects an
+effectively opaque or contaminated corner. Antialiased edge alpha is retained.
+The preparation report records output hashes and crop warnings. Running again
+with the same bytes reuses the prepared files; a changed file is refused.
 
+`ingest` registers the ten supplied source files, then the 26 individual role
+files. Derived artifacts pin their source artifact IDs and source hashes as
+immutable dependencies. It records human visual approval only for technically
+accepted roles, selects those versions, and writes the registered role UUIDs
+to `pack.yaml`. Source references and all derived files begin with rights
+`unknown`. There is no automatic `commercial_use_confirmed` decision. A
+repeated intake against the same database reuses existing immutable versions.
+The local database and accepted media stay outside Git; a fresh machine must
+ingest the source files again before a manifest can be assessed there.
+
+## Palette measurement
+
+Palette values in `pack.yaml` are median RGB samples from small, visually
+identified regions of the approved transparent neutral master where alpha is
+above 200. The sample rectangles, in source pixel coordinates, are:
+
+| Name | Rectangle `(left, top, right, bottom)` |
+| --- | --- |
+| `body_sky_blue` | `(620, 430, 680, 480)` |
+| `body_shadow_blue` | `(250, 900, 300, 950)` |
+| `face_cream` | `(340, 730, 390, 780)` |
+| `belly_cream` | `(540, 1000, 600, 1050)` |
+| `beak_orange` | `(610, 600, 650, 640)` |
+| `feet_orange` | `(450, 1180, 490, 1210)` |
+| `cheek_blush` | `(350, 660, 400, 700)` |
+| `eye_blue_light` | `(440, 615, 470, 635)` |
+| `eye_blue_dark` | `(440, 535, 465, 560)` |
+
+These are identity guide colors across gradients, not exact flat fills. The
+hex labels printed on the generated turnaround were not used as measurements.
+
+## Current exclusions and release gate
+
+The rig sheet's combined head/body already has eyes and mouth, so it is not a
+clean replaceable `body_base`. The apparent tuft includes forehead feathers;
+the belly patch carries blue edge remnants. Eye and pupil fragments lack a
+proven coordinate and layer topology. The open beak pieces do not establish
+separate upper and lower layers. Those pieces remain source references only.
+Six isolated wing candidates and two closed-beak components were retained.
+
+`assess_pack_assets` checks the pinned brand, kind, MIME type, file hash,
+transparent sprite pixels, current human approval, selected version, and
+evidence-backed rights. It reports exact blockers while the manifest is draft.
+Only after clean mouth and thinking assets, owner-provided commercial-use
+evidence, and a complete art/rights review may the pack be revised to
+`readiness: approved` and reassessed. No fake rig data or legal evidence should
+be entered to pass the gate.

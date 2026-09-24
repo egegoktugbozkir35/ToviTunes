@@ -74,6 +74,55 @@ class Database:
                     connection.rollback()
                     raise
 
+    def register_catalog(self, catalog: BrandCatalog) -> None:
+        """Register the pinned brand and pack revisions before brand-only intake."""
+        with closing(self.connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._insert_catalog(connection, catalog)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    @staticmethod
+    def _insert_catalog(connection: sqlite3.Connection, catalog: BrandCatalog) -> None:
+        brand = catalog.version
+        connection.execute(
+            "INSERT OR IGNORE INTO brand_revisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                brand.revision_id,
+                brand.brand_id,
+                brand.version,
+                brand.definition_sha256,
+                brand.creative_sha256,
+                brand.safety_sha256,
+                brand.source_revision,
+            ),
+        )
+        curriculum = catalog.curriculum_revision
+        connection.execute(
+            "INSERT OR IGNORE INTO curriculum_revisions VALUES (?, ?, ?, ?)",
+            (
+                curriculum.revision_id,
+                curriculum.curriculum_id,
+                curriculum.version,
+                curriculum.sha256,
+            ),
+        )
+        for pack in catalog.pack_revisions:
+            connection.execute(
+                "INSERT OR IGNORE INTO character_pack_revisions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    pack.revision_id,
+                    pack.pack_id,
+                    pack.character_id,
+                    pack.version,
+                    pack.manifest_sha256,
+                    pack.readiness,
+                ),
+            )
+
     def create_episode(self, catalog: BrandCatalog, episode: Episode) -> None:
         if episode.brand_revision_id != catalog.version.revision_id:
             raise ValueError("episode brand revision differs from catalog")
@@ -93,41 +142,7 @@ class Database:
         with closing(self.connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                brand = catalog.version
-                connection.execute(
-                    "INSERT OR IGNORE INTO brand_revisions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        brand.revision_id,
-                        brand.brand_id,
-                        brand.version,
-                        brand.definition_sha256,
-                        brand.creative_sha256,
-                        brand.safety_sha256,
-                        brand.source_revision,
-                    ),
-                )
-                curriculum = catalog.curriculum_revision
-                connection.execute(
-                    "INSERT OR IGNORE INTO curriculum_revisions VALUES (?, ?, ?, ?)",
-                    (
-                        curriculum.revision_id,
-                        curriculum.curriculum_id,
-                        curriculum.version,
-                        curriculum.sha256,
-                    ),
-                )
-                for pack in catalog.pack_revisions:
-                    connection.execute(
-                        "INSERT OR IGNORE INTO character_pack_revisions VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            pack.revision_id,
-                            pack.pack_id,
-                            pack.character_id,
-                            pack.version,
-                            pack.manifest_sha256,
-                            pack.readiness,
-                        ),
-                    )
+                self._insert_catalog(connection, catalog)
                 connection.execute(
                     "INSERT INTO episodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
@@ -187,4 +202,3 @@ class Database:
                 lifecycle=row["lifecycle"],
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
-

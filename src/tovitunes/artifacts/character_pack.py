@@ -3,6 +3,7 @@
 from contextlib import closing
 from dataclasses import dataclass
 
+from tovitunes.artifacts.character_png import InvalidCharacterSprite, inspect_sprite_png
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.domain.character import CharacterAssetPack
 
@@ -56,6 +57,11 @@ def assess_pack_assets(
         )
         if record.mime_type not in expected_mimes:
             issues.append(f"{role}: unsupported media type")
+        if role.startswith(("sprite/", "mouth/")) and record.mime_type == "image/png":
+            try:
+                inspect_sprite_png(store.path_for(artifact_id))
+            except (InvalidCharacterSprite, FileNotFoundError, ValueError) as exc:
+                issues.append(f"{role}: invalid transparent sprite: {exc}")
         eligible, problem = store.eligibility(artifact_id)
         if not eligible:
             issues.append(f"{role}: {problem}")
@@ -84,4 +90,3 @@ def assess_pack_assets(
     if pack.readiness == "approved" and not references:
         issues.append("approved pack has no registered assets")
     return PackReadiness(not issues, tuple(issues), tuple(checked))
-
