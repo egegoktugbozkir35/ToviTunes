@@ -1,12 +1,43 @@
-# Visual provider benchmark: offline protocol v1
+# Visual provider benchmark: executable protocol v1
 
-This protocol prepares the ten-scene comparison from the development plan. It is **not** a generated image set or a provider ranking. Run it only after the canonical Tovi pack has approved reference images, palette, identity rules and commercial-use evidence. The initial candidates named in the plan are Gemini 3.1 Flash Image and GPT Image 2.5; record the exact available product/model identifiers and terms at run time.
+This protocol executes the ten-scene comparison from the development plan. It does not rank providers. The adapters use the exact durable model identifiers `gemini-3.1-flash-image` and `gpt-image-2.5-sunburst`. The OpenAI model can be overridden with `--openai-model`, including compatible models such as `gpt-image-2.5-flare`.
+
+The implementation follows the first-party [Gemini image generation](https://ai.google.dev/gemini-api/docs/image-generation) and [OpenAI image generation](https://developers.openai.com/api/docs/guides/image-generation) contracts. Gemini requests omit search tools and explicitly keep grounding disabled. OpenAI uses the multiple-image edit endpoint because every request must carry the same three Tovi references. It requests the supported custom size `1008x1792`, an exact 9:16 ratio with dimensions divisible by 16.
+
+## Setup and execution
+
+Live calls read credentials only at call time:
+
+```text
+OPENAI_API_KEY=...
+GEMINI_API_KEY=...
+```
+
+No credential is needed to import the package, inspect state, run tests, or create a dry run. Start with one request and inspect the exact canonical and translated request data:
+
+```text
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark run --provider google --case red_apple --attempts 1 --dry-run
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark run --provider openai --case red_apple --attempts 1 --dry-run
+```
+
+Remove `--dry-run` only after credential and spend approval. Selectors can be repeated. With no provider or case selector, the default two attempts create the full 40-request plan:
+
+```text
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark run --dry-run
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark run --provider google --case profile --case flying --attempts 2
+```
+
+Use `--google-model` or `--openai-model` to record another exact compatible model ID. Model IDs, endpoint contract, size, reference capacity, supplied and omitted reference IDs, and grounding state are persisted with each request.
 
 ## Fixed inputs
 
 Use the same approved `CharacterAssetPack` revision and the same front, three-quarter and profile reference artifacts for both providers. Pin their artifact IDs and hashes in every scorecard. Hold palette, negative identity rules, intended portrait framing and the scene brief constant. If a provider needs different prompt syntax or cannot accept the same reference count, record the translation and limitation; do not claim a controlled comparison where inputs differed materially.
 
-The ten locked briefs are in [`benchmarks/visual/cases.v1.yaml`](../benchmarks/visual/cases.v1.yaml). They cover a red apple, exactly three stars, a triangle surprise, flight, profile view, another original character, bedroom, playground, pointing and holding a prop. Generate at least two independent requests per scene and provider. Keep failed requests and every returned candidate. Label images with blind IDs and retain the provider mapping separately.
+The ten locked briefs are in [`benchmarks/visual/cases.v1.yaml`](../benchmarks/visual/cases.v1.yaml). They cover a red apple, exactly three stars, a triangle surprise, flight, profile view, another original character, bedroom, playground, pointing and holding a prop. Generate at least two independent requests per scene and provider. Failed, ambiguous, and successful requests remain durable. A successful exact rerun is reused. An ambiguous or still-started request stops for manual reconciliation and is never blindly repeated.
+
+The canonical prompt is assembled deterministically from the case, teaching check, pack palette, visual identity rules, forbidden changes, 9:16 requirement, and negative constraints. Its normalized JSON and SHA-256 fingerprint are persisted separately from the provider translation.
+
+Generated media is stored in the configured `data_root` through the immutable `AssetStore`. Temporary returned bytes use `data_root/.benchmark-returned` and are removed after ingestion. The database stores provider identity, exact model, request state, translations, reference IDs and hashes, dimensions, MIME type, latency, usage, safe response metadata, and cost fields. Provenance points from every output to all three input artifacts. Ingestion creates `unknown` rights and `pending` approval decisions; generation never grants commercial rights.
 
 These images test environment/prop production and difficult Tovi poses. A successful generated Tovi image may be used only as an individually reviewed special asset; it does not become the canonical character or replace sprite animation. Ordinary recurring motion remains tied to the approved pack.
 
@@ -27,5 +58,19 @@ Weights are machine-readable in [`rubric.v1.yaml`](../benchmarks/visual/rubric.v
 
 Report per-scene usable counts, usable outputs per distinct request, usable outputs per actual spend, median latency and the most common repair reasons. For teaching color, count and shape, use exact human verification first. Automated thresholds must be calibrated from ToviTunes' accepted/rejected examples before being treated as pass/fail evidence.
 
-Fill one [`scorecard.template.yaml`](../benchmarks/visual/scorecard.template.yaml) per request/output pair. The benchmark ends with a dated human decision describing which image tasks a provider can support, rights evidence, unresolved controls and whether its output is limited to backgrounds/props or reviewed special poses. No provider is selected from this blank protocol.
+Export the reviewer queue without provider information, fill one [`scorecard.template.yaml`](../benchmarks/visual/scorecard.template.yaml) per reviewer and output, then import it:
+
+```text
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark status --blind
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark review --scorecard review.yaml
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark report
+```
+
+The blind queue exposes only blind ID, artifact ID, case, and attempt. It excludes provider, model, cost, and latency. The provider mapping remains in the operator status output and database.
+
+Exactly two initial reviews are required. Any axis difference of 2 or more requires exactly one adjudication review. Other scores use the two-review mean; adjudicated scores use the three-review median. The rubric YAML is the only runtime source for weights and usability minimums. A hard failure, character identity below 3, or teaching accuracy below 3 makes an output unusable.
+
+The report groups facts by provider and model without selecting a winner. It includes request and output counts, hard failures, usable outputs and rate, per-scene usable counts, weighted score summaries, median latency, and repair reasons. `actual_spend` and usable outputs per dollar remain `null` unless every request in the group has a known cost. `known_spend` and `cost_known_requests` show partial information. Real adapters preserve usage but leave cost unknown because API usage alone does not provide a durable billed price; a future dated pricing policy can supply deterministic cost without changing the domain model.
+
+The benchmark ends with a dated human decision describing which image tasks a provider can support, rights evidence, unresolved controls and whether its output is limited to backgrounds/props or reviewed special poses. Software does not select a provider.
 

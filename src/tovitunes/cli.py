@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -15,6 +16,15 @@ from tovitunes.artifacts.character_lock import (
 )
 from tovitunes.artifacts.character_pack import approve_pack_manifest, assess_pack_assets
 from tovitunes.artifacts.store import AssetStore
+from tovitunes.benchmark.models import load_benchmark, load_rubric, load_scorecard
+from tovitunes.benchmark.persistence import BenchmarkStore
+from tovitunes.benchmark.providers import GeminiImageProvider, ImageProvider, OpenAIImageProvider
+from tovitunes.benchmark.runner import (
+    BenchmarkRunner,
+    aggregate,
+    blind_review_queue,
+    plan_requests,
+)
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
 from tovitunes.persistence.db import Database
@@ -46,8 +56,107 @@ def main(argv: Sequence[str] | None = None) -> int:
         sub.add_argument("--lock", type=Path, required=True)
     character_commands.add_parser("approve")
     character_commands.add_parser("assess")
+    visual = subcommands.add_parser("visual-benchmark")
+    visual_commands = visual.add_subparsers(dest="visual_command", required=True)
+    run = visual_commands.add_parser("run")
+    run.add_argument("--provider", action="append", choices=("google", "openai"))
+    run.add_argument("--case", action="append", dest="cases")
+    run.add_argument("--attempts", type=int)
+    run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--google-model", default="gemini-3.1-flash-image")
+    run.add_argument("--openai-model", default="gpt-image-2.5-sunburst")
+    run.add_argument("--cases-file", type=Path)
+    run.add_argument("--pack", type=Path)
+    run.add_argument("--lock", type=Path)
+    status_parser = visual_commands.add_parser("status")
+    status_parser.add_argument("--blind", action="store_true")
+    review_parser = visual_commands.add_parser("review")
+    review_parser.add_argument("--scorecard", type=Path, required=True)
+    report_parser = visual_commands.add_parser("report")
+    report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "visual-benchmark":
+        repository_root = config.brand_root.parent.parent
+        if args.visual_command == "run":
+            cases_file = args.cases_file or repository_root / "benchmarks/visual/cases.v1.yaml"
+            pack_path = args.pack or config.brand_root / "characters/tovi/packs/v1/pack.yaml"
+            lock_path = args.lock or pack_path.with_name("artifact-lock.yaml")
+            provider_names = args.provider or ["google", "openai"]
+            providers: list[ImageProvider] = []
+            if "google" in provider_names:
+                providers.append(GeminiImageProvider(args.google_model))
+            if "openai" in provider_names:
+                providers.append(OpenAIImageProvider(args.openai_model))
+            plans = plan_requests(
+                load_benchmark(cases_file),
+                providers,
+                pack_path=pack_path,
+                lock_path=lock_path,
+                case_ids=set(args.cases) if args.cases else None,
+                attempts=args.attempts,
+            )
+            if args.dry_run:
+                print(
+                    json.dumps(
+                        {
+                            "dry_run": True,
+                            "planned_request_count": len(plans),
+                            "requests": [item.model_dump(mode="json") for item in plans],
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            required_keys = {
+                "google": "GEMINI_API_KEY",
+                "openai": "OPENAI_API_KEY",
+            }
+            missing_keys = [
+                required_keys[name]
+                for name in provider_names
+                if not os.environ.get(required_keys[name])
+            ]
+            if missing_keys:
+                parser.error(
+                    "live visual benchmark requires environment variables: "
+                    + ", ".join(missing_keys)
+                )
+            database = Database(config.database_path)
+            database.migrate()
+            database.register_catalog(load_brand(config.brand_root))
+            returned_root = config.data_root / ".benchmark-returned"
+            returned_root.mkdir(parents=True, exist_ok=True)
+            assets = AssetStore(
+                config.data_root, database, generated_source_roots=[returned_root]
+            )
+            runner = BenchmarkRunner(BenchmarkStore(database), assets, returned_root)
+            adapters = {(item.provider, item.model): item for item in providers}
+            results = [runner.run(item, adapters[(item.provider, item.model)]) for item in plans]
+            print(json.dumps({"results": results}, sort_keys=True))
+            return 0 if all(item["status"] == "succeeded" for item in results) else 1
+        if not config.database_path.is_file():
+            parser.error("an existing benchmark database is required")
+        benchmark_database = Database(config.database_path)
+        benchmark_database.migrate()
+        state = BenchmarkStore(benchmark_database)
+        if args.visual_command == "status":
+            rows = state.requests()
+            output = blind_review_queue(rows) if args.blind else rows
+            print(json.dumps(output, sort_keys=True))
+            return 0
+        if args.visual_command == "review":
+            scorecard = load_scorecard(args.scorecard)
+            review_id = state.record_review(scorecard)
+            print(
+                json.dumps(
+                    {"blind_id": scorecard.blind_id, "review_id": review_id}, sort_keys=True
+                )
+            )
+            return 0
+        rubric_path = args.rubric or repository_root / "benchmarks/visual/rubric.v1.yaml"
+        print(json.dumps(aggregate(state, load_rubric(rubric_path)), sort_keys=True))
+        return 0
     if args.command == "character-pack":
         if args.character_command == "validate-lock":
             catalog = load_brand(config.brand_root)
