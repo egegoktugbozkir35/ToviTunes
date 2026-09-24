@@ -1,6 +1,6 @@
 # ToviTunes
 
-Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. Tovi's approved visual direction now has a deterministic offline intake workflow, but the pack remains draft while asset quality and commercial rights are held. Animation and external providers come later.
+Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. Tovi's v1 character pack is approved and has a checked-in canonical lock for clean-machine rehydration. Animation and external providers come later.
 
 ## Create a Colors episode
 

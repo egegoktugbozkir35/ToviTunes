@@ -488,6 +488,13 @@ def ingest_prepared(
     actor: str = "project-owner",
 ) -> dict[str, object]:
     """Register immutable versions, reviewed art and documented output rights."""
+    if catalog.packs[0].readiness != "draft":
+        raise ValueError("intake requires a draft character pack")
+    current_manifest = CharacterAssetPack.model_validate(
+        yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    )
+    if current_manifest != catalog.packs[0] or current_manifest.readiness != "draft":
+        raise ValueError("intake requires the current draft manifest")
     recipe = load_recipe(recipe_path)
     source_root = source_dir.resolve(strict=True)
     prepared_root = prepared_dir.resolve(strict=True)

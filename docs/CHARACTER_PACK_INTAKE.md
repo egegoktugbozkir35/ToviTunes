@@ -23,28 +23,93 @@ poses; reusable sprites; and a distinct UUID for each required image role.
 generation IDs. `rig_data` is null because no pivot or skeletal topology has
 been proven.
 
-## Repeatable offline workflow
+## Pack lifecycle and portable snapshot
 
 Place copies of all sixteen supplied PNG files under a source directory using the
 stable names in `intake.yaml`. Keep the originals untouched. The recipe checks
 their SHA-256 hashes before doing any work. The preparation and asset roots
 must be separate, trusted directories. A typical local arrangement is
-`data/tovi-pack-v1/sources` and `data/tovi-pack-v1/prepared-replacements`;
-`data/` is ignored by Git. Keep the original preparation directory and asset
-store intact so earlier artifact versions remain retrievable.
+`data/tovi-pack-v1/sources` and `data/tovi-pack-v1/prepared`;
+`data/` is ignored by Git. Raw media and the operational SQLite store remain
+outside Git.
+
+### A. First-time intake and approval
+
+First-time intake starts with a **draft** `pack.yaml`. `prepare` verifies the
+source hashes and creates the deterministic crops. `ingest` registers candidates
+with new UUIDs, records review and rights decisions from the reviewed recipe,
+selects eligible candidates, and writes those draft IDs to the manifest. It
+cannot approve the pack. Review the visual results and durable decisions before
+running `approve`. That explicit transition validates the approved manifest
+structure and calls `assess_pack_assets` on the proposed approved pack. It
+changes `readiness` only if the full assessment passes. Export the lock from
+the approved SQLite state:
 
 ```powershell
 uv sync --locked --extra dev
 uv run python -m tovitunes.cli --config config.example.yaml character-pack prepare `
   --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
   --source-dir data/tovi-pack-v1/sources `
-  --prepared-dir data/tovi-pack-v1/prepared-replacements
+  --prepared-dir data/tovi-pack-v1/prepared
 uv run python -m tovitunes.cli --config config.example.yaml character-pack ingest `
   --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
   --source-dir data/tovi-pack-v1/sources `
-  --prepared-dir data/tovi-pack-v1/prepared-replacements
+  --prepared-dir data/tovi-pack-v1/prepared
+uv run python -m tovitunes.cli --config config.example.yaml character-pack approve
+uv run python -m tovitunes.cli --config config.example.yaml character-pack export-lock `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
 uv run python -m tovitunes.cli --config config.example.yaml character-pack assess
 ```
+
+The committed Tovi v1 manifest is already approved. Ordinary `ingest` refuses
+it, including when run against a fresh database. Do not reset its readiness to
+draft to rebuild local state: that would mint replacement UUIDs.
+
+### B. Normal use
+
+The approved pack uses the durable local SQLite artifact records, dependency
+graph, append-only approval and rights histories, and explicit selections.
+`pack.yaml` identifies the 26 selected production roles. The checked-in
+`artifact-lock.yaml` is a portability and bootstrap snapshot of that approved
+state, not the operational database.
+
+### C. Clean-machine reconstruction
+
+On a clean machine, place the **same sixteen hash-pinned source PNGs** under
+`data/tovi-pack-v1/sources`. Use a fresh SQLite database and empty asset root.
+The approved `pack.yaml` stays untouched:
+
+```powershell
+uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
+uv run python -m tovitunes.cli --config config.example.yaml character-pack prepare `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --source-dir data/tovi-pack-v1/sources `
+  --prepared-dir data/tovi-pack-v1/prepared
+uv run python -m tovitunes.cli --config config.example.yaml character-pack rehydrate `
+  --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml `
+  --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml `
+  --source-dir data/tovi-pack-v1/sources `
+  --prepared-dir data/tovi-pack-v1/prepared
+uv run python -m tovitunes.cli --config config.example.yaml character-pack assess
+```
+
+The lock pins all 48 canonical artifacts: sixteen sources, 26 active roles,
+and six unselected superseded candidates. It also pins provenance, dependency
+IDs and hashes, original artifact timestamps, decision IDs and histories,
+and selected IDs and timestamps. Rehydration reconstructs the held candidates
+from the immutable sources, checks every byte against the lock, restores the
+recorded decisions and selections, and independently reassesses readiness. It
+is idempotent for an exact matching store and fails on any conflicting identity
+or state. It does not mint new artifact IDs or make a new human approval or
+rights decision. Machine media validation runs again on the new asset root.
+
+`validate-lock` is the media-free CI check. Brand revision IDs hash the named
+brand definition, creative bible, and safety policy files; pack revision IDs
+hash `pack.yaml`. The sibling lock file is outside both revision hashes, so it
+cannot change the owner or pack revision it pins.
 
 `prepare` uses Pillow only for cropping, connected alpha-component extraction,
 transparent padding, translation, and PNG writing. It never rescales,
@@ -74,14 +139,13 @@ effectively opaque or contaminated corner. Antialiased edge alpha is retained.
 The preparation report records output hashes and crop warnings. Running again
 with the same bytes reuses the prepared files; a changed file is refused.
 
-`ingest` registers all sixteen source files, then the 26 current role files.
+During first-time draft intake, `ingest` registers all sixteen source files, then the 26 current role files.
 Derived artifacts pin their source artifact IDs and hashes as immutable
 dependencies. It records artifact-level visual approval only after technical
 checks, selects the accepted versions, and writes their UUIDs to `pack.yaml`.
 The other 20 role UUIDs are unchanged. Repeating intake against the same
-database reuses existing immutable versions. The local database and accepted
-media stay outside Git; a fresh machine must ingest the supplied files before
-the manifest can be assessed there.
+draft database reuses existing immutable versions. The approved committed
+UUIDs are restored only through `rehydrate` and the canonical lock.
 
 Sources explicitly marked `rights_basis: openai_chatgpt_output` carry known
 `generation://` IDs and are identified by the owner as ChatGPT image outputs.

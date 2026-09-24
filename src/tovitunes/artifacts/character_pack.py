@@ -1,10 +1,15 @@
 """Read-only readiness check for a character pack's pinned brand artifacts."""
 
+import os
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 from tovitunes.artifacts.character_png import InvalidCharacterSprite, inspect_sprite_png
 from tovitunes.artifacts.store import AssetStore
+from tovitunes.catalog import BrandCatalog, load_brand
 from tovitunes.domain.character import CharacterAssetPack
 
 
@@ -90,3 +95,34 @@ def assess_pack_assets(
     if pack.readiness == "approved" and not references:
         issues.append("approved pack has no registered assets")
     return PackReadiness(not issues, tuple(issues), tuple(checked))
+
+
+def approve_pack_manifest(
+    manifest_path: Path, catalog: BrandCatalog, store: AssetStore
+) -> PackReadiness:
+    """Explicitly transition a reviewed draft after the full approved assessment passes."""
+    if catalog.packs[0].readiness != "draft":
+        raise ValueError("approval transition requires a draft pack")
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    draft = CharacterAssetPack.model_validate(raw)
+    if draft != catalog.packs[0] or draft.readiness != "draft":
+        raise ValueError("approval transition requires the current draft manifest")
+    raw["readiness"] = "approved"
+    approved = CharacterAssetPack.model_validate(raw)
+    assessment = assess_pack_assets(approved, store, catalog.version.revision_id)
+    if not assessment.ready:
+        raise ValueError(f"approval transition failed readiness checks: {assessment.issues}")
+    staging = manifest_path.with_suffix(".yaml.approving")
+    with staging.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(yaml.safe_dump(raw, sort_keys=False))
+    try:
+        os.replace(staging, manifest_path)
+    finally:
+        if staging.exists():
+            staging.unlink()
+    updated = load_brand(manifest_path.parents[4])
+    store.database.register_catalog(updated)
+    verified = assess_pack_assets(updated.packs[0], store, updated.version.revision_id)
+    if not verified.ready:
+        raise ValueError(f"approved pack failed post-transition assessment: {verified.issues}")
+    return verified
