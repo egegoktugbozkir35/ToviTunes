@@ -62,6 +62,7 @@ class PlanSnapshot:
     storyboard_problem: str | None = None
     uncleared_rights: tuple[str, ...] = ()
     objective_approval: str | None = None
+    character_pack_readiness: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,17 @@ def plan(snapshot: PlanSnapshot, goal: Goal) -> PlanResult:
                     "repair", node.key, snapshot.storyboard_problem, selected.artifact_id
                 )
             selected_by_key[node.key] = selected.artifact_id
+            if (
+                node.key == "timed_storyboard"
+                and goal in {"render", "release"}
+                and (
+                    not snapshot.character_pack_readiness
+                    or any(state != "approved" for state in snapshot.character_pack_readiness)
+                )
+            ):
+                return PlanResult(
+                    "review", "character_pack", "pinned character pack is not approved"
+                )
             continue
         reusable = next(
             (c for c in fact.candidates if c.eligible and required_ids.issubset(c.input_ids)), None
@@ -232,6 +244,12 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
             "ORDER BY rowid DESC LIMIT 1",
             (episode_id,),
         ).fetchone()
+        pack_rows = connection.execute(
+            "SELECT p.readiness FROM episode_character_packs AS e "
+            "JOIN character_pack_revisions AS p ON p.revision_id = e.revision_id "
+            "WHERE e.episode_id = ? ORDER BY e.character_id",
+            (episode_id,),
+        ).fetchall()
         rows = connection.execute(
             "SELECT artifact_id, kind, slot_key, created_at FROM artifact_versions "
             "WHERE episode_id = ? ORDER BY created_at DESC, rowid DESC",
@@ -319,6 +337,7 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
         storyboard_problem=storyboard_problem,
         uncleared_rights=tuple(sorted(uncleared)),
         objective_approval=objective_decision["status"] if objective_decision else None,
+        character_pack_readiness=tuple(row["readiness"] for row in pack_rows),
     )
 
 

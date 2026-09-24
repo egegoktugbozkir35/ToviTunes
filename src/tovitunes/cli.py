@@ -49,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "episode_id": snapshot.episode_id,
                     "objective_approval": snapshot.objective_approval,
+                    "character_pack_readiness": snapshot.character_pack_readiness,
                     "goal": goal,
                     "scene_ids": snapshot.scene_ids,
                     "next_action": asdict(result),

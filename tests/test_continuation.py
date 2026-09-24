@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from tovitunes.pipeline.planner import (
     CandidateFact,
     PlanSnapshot,
     SlotFact,
+    load_snapshot,
     plan,
     plan_episode,
     requirements,
@@ -113,7 +115,13 @@ def test_planner_preserves_song_and_finished_scenes(tmp_path: Path, catalog: Bra
     for scene in ("scene_1", "scene_2"):
         _put(store, tmp_path, episode, "scene_image", scene, (ids["timed_storyboard"],))
         _put(store, tmp_path, episode, "character_animation", scene, (ids["timed_storyboard"],))
-    result = plan_episode(store, episode.episode_id, "render")
+    hold = plan_episode(store, episode.episode_id, "render")
+    assert hold.action == "review"
+    assert hold.requirement == "character_pack"
+    result = plan(
+        replace(load_snapshot(store, episode.episode_id), character_pack_readiness=("approved",)),
+        "render",
+    )
     assert result.action == "produce"
     assert result.requirement == "scene_image:scene_3"
     assert plan_episode(store, episode.episode_id, "audio").action == "complete"
@@ -183,7 +191,14 @@ def test_pure_plan_requires_transitive_rights() -> None:
         )
         selected[requirement.key] = artifact_id
     snapshot = PlanSnapshot(
-        "episode-1", slots, {}, scene_ids, None, ("brand-reference-uncleared",), "approved"
+        "episode-1",
+        slots,
+        {},
+        scene_ids,
+        None,
+        ("brand-reference-uncleared",),
+        "approved",
+        ("approved",),
     )
     result = plan(snapshot, "release")
     assert result.action == "rights"
