@@ -1,0 +1,22 @@
+schema_version: 1
+score_min: 0
+score_max: 4
+weights:
+  character_identity: 30
+  teaching_accuracy: 25
+  composition: 15
+  reference_fidelity: 10
+  image_quality: 10
+  production_fit: 10
+usable_minimums:
+  character_identity: 3
+  teaching_accuracy: 3
+hard_gates:
+  - image_decodes
+  - target_color_count_shape_correct
+  - no_serious_identity_drift
+  - preschool_appropriate
+  - no_named_artist_or_character_imitation
+  - reference_rights_confirmed
+release_gate: output_commercial_use_confirmed_with_evidence
+
