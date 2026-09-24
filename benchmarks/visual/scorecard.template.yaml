@@ -1,0 +1,47 @@
+schema_version: 1
+case_id: red_apple
+provider: null
+model: null
+account_tier: null
+interface: null # web_ui or api
+attempt_number: 1
+output_index: 1
+request_id: null
+artifact_id: null
+generated_at_utc: null
+prompt_version: visual-benchmark-v1
+prompt_sha256: null
+reference_artifact_ids: []
+reference_sha256s: []
+pack_revision_id: null
+provider_input_translation: null
+unsupported_controls: []
+status: pending # succeeded, failed, or ambiguous
+billable_cost_amount: null
+billable_cost_currency: null
+latency_seconds: null
+rights_status: unknown
+rights_evidence_uri: null
+hard_gates:
+  image_decodes: null
+  target_color_count_shape_correct: null
+  no_serious_identity_drift: null
+  preschool_appropriate: null
+  no_named_artist_or_character_imitation: null
+  reference_rights_confirmed: null
+blind_reviewer_scores:
+  - reviewer_id: null
+    character_identity: null
+    teaching_accuracy: null
+    composition: null
+    reference_fidelity: null
+    image_quality: null
+    evidence_notes: null
+operator_workflow_scores:
+  operator_id: null
+  production_fit: null
+  evidence_notes: null
+usable_for_pilot: null
+weighted_score: null
+decision_notes: null
+

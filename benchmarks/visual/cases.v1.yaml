@@ -1,0 +1,41 @@
+schema_version: 1
+prompt_version: visual-benchmark-v1
+common_brief: >-
+  Create one original portrait illustration for a preschool educational Short.
+  Use the supplied approved Tovi reference views and palette. Preserve Tovi's
+  silhouette, proportions, tuft, eyes, beak and wing anatomy exactly. Keep the
+  teaching subject clear and countable. No named artist, franchise or
+  copyrighted-character imitation. Leave room for later lyric overlays.
+minimum_requests_per_provider_case: 2
+cases:
+  - id: red_apple
+    brief: Tovi finds one clearly red apple and points to it.
+    teaching_check: The apple is red, recognizably an apple, and not orange.
+  - id: three_stars
+    brief: Tovi looks at exactly three separate stars.
+    teaching_check: Exactly three stars are visible and individually countable.
+  - id: triangle_surprise
+    brief: Tovi is pleasantly surprised by a large triangle.
+    teaching_check: The shape has exactly three straight sides and three corners.
+  - id: flying
+    brief: Tovi flies gently above a simple landscape.
+    teaching_check: The approved wing and body anatomy remain consistent.
+  - id: profile
+    brief: Show Tovi in a clear side profile beside a simple prop.
+    teaching_check: The profile matches the approved profile reference.
+  - id: second_character
+    brief: Tovi stands beside one original, nonrecurring friendly star character.
+    teaching_check: Tovi remains distinct and neither character copies a franchise.
+  - id: bedroom
+    brief: Tovi explores a calm preschool bedroom with uncluttered props.
+    teaching_check: Tovi remains legible against the bedroom environment.
+  - id: playground
+    brief: Tovi explores a simple, safe playground.
+    teaching_check: The setting is age appropriate and Tovi remains on-model.
+  - id: pointing
+    brief: Tovi points clearly at one nearby teaching object.
+    teaching_check: The pointing wing and object relationship are unambiguous.
+  - id: holding_prop
+    brief: Tovi holds one red ball with a believable wing pose.
+    teaching_check: The ball is red and the wing anatomy remains on-model.
+
