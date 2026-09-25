@@ -27,6 +27,11 @@ class MusicCapabilities(StrictModel):
     provider_request_id: bool
     rights_information: bool
     api_contract: str
+    user_provided_lyrics: bool = False
+    generated_lyrics: bool = False
+    intensity_direction: bool = False
+    word_timestamps: bool = False
+    maximum_duration_seconds: int | None = None
 
 
 class MusicResult(StrictModel):
