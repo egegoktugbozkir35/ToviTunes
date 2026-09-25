@@ -18,8 +18,8 @@ from tovitunes.music.providers import MusicCapabilities, MusicFailure, MusicResu
 
 PROJECT_PATTERN = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]\Z")
 INTERACTION_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,256}\Z")
-PENDING_STATUSES = {"in_progress", "requires_action"}
-TERMINAL_STATUSES = {"failed", "cancelled", "incomplete"}
+PENDING_STATUSES = {"queued", "in_progress", "requires_action"}
+TERMINAL_STATUSES = {"failed", "cancelled", "incomplete", "budget_exceeded"}
 
 
 def _default_credentials() -> Credentials:

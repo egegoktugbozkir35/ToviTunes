@@ -318,17 +318,113 @@ def test_missing_interaction_id_cannot_trigger_resume_get(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
-    "status", ["in_progress", "requires_action", "failed", "cancelled", "incomplete"]
+    "status",
+    [
+        "queued",
+        "in_progress",
+        "requires_action",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "budget_exceeded",
+    ],
 )
 def test_interaction_lifecycle_statuses(tmp_path: Path, status: str) -> None:
     store, provider, item = setup(
         tmp_path, lambda request: httpx.Response(200, json=interaction(status=status))
     )
     result = store.run(item, provider)
-    assert result["status"] == (
-        "ambiguous" if status in {"in_progress", "requires_action"} else "terminal_failure"
-    )
+    pending = {"queued", "in_progress", "requires_action"}
+    assert result["status"] == ("ambiguous" if status in pending else "terminal_failure")
     assert store.request(result["request_id"])["provider_request_id"] == "vertex-interaction-123"
+
+
+def test_queued_post_resumes_with_gets_until_completed(tmp_path: Path) -> None:
+    methods: list[str] = []
+    get_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal get_count
+        methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(200, json=interaction(status="queued"))
+        assert request.method == "GET"
+        assert request.url.path.endswith("/interactions/vertex-interaction-123")
+        get_count += 1
+        return httpx.Response(
+            200, json=interaction(status="queued" if get_count < 3 else "completed")
+        )
+
+    store, provider, item = setup(tmp_path, handler)
+    initial = store.run(item, provider)
+    request_id = initial["request_id"]
+    assert initial["status"] == "ambiguous"
+    assert store.request(request_id)["provider_request_id"] == "vertex-interaction-123"
+    assert store.run(item, provider)["action"] == "manual_reconciliation_required"
+    assert methods == ["POST"]
+
+    for expected_methods in (["POST", "GET"], ["POST", "GET", "GET"]):
+        pending = store.provider_resume(request_id, provider)
+        assert pending["status"] == "ambiguous"
+        assert store.request(request_id)["provider_request_id"] == "vertex-interaction-123"
+        assert methods == expected_methods
+        assert store.run(item, provider)["action"] == "manual_reconciliation_required"
+        assert methods == expected_methods
+
+    completed = store.provider_resume(request_id, provider)
+    assert completed["status"] == "succeeded"
+    assert methods == ["POST", "GET", "GET", "GET"]
+    assert methods.count("POST") == 1
+    assert (store.audio_root / f"{request_id}.mp3").read_bytes() == TONE.read_bytes()
+    assert store.run(item, provider)["action"] == "reused"
+    assert methods.count("POST") == 1
+
+
+def test_budget_exceeded_post_is_terminal_without_retry(tmp_path: Path) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(200, json=interaction(status="budget_exceeded"))
+
+    store, provider, item = setup(tmp_path, handler)
+    first = store.run(item, provider)
+    request_id = first["request_id"]
+    assert first["status"] == "terminal_failure"
+    row = store.request(request_id)
+    assert row["provider_request_id"] == "vertex-interaction-123"
+    assert row["failure_category"] == "provider"
+    assert row["failure_reason"] == "Vertex interaction budget_exceeded"
+    assert store.run(item, provider)["action"] == "new_attempt_required"
+    assert store.provider_resume(request_id, provider)["action"] == "new_attempt_required"
+    assert methods == ["POST"]
+
+
+def test_budget_exceeded_get_transitions_pending_request_to_terminal(tmp_path: Path) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        assert request.method in {"POST", "GET"}
+        if request.method == "GET":
+            assert request.url.path.endswith("/interactions/vertex-interaction-123")
+        status = "queued" if request.method == "POST" else "budget_exceeded"
+        return httpx.Response(200, json=interaction(status=status))
+
+    store, provider, item = setup(tmp_path, handler)
+    pending = store.run(item, provider)
+    request_id = pending["request_id"]
+    assert pending["status"] == "ambiguous"
+    terminal = store.provider_resume(request_id, provider)
+    assert terminal["status"] == "terminal_failure"
+    row = store.request(request_id)
+    assert row["status"] == "terminal_failure"
+    assert row["provider_request_id"] == "vertex-interaction-123"
+    assert row["failure_category"] == "provider_retrieval"
+    assert row["failure_reason"] == "Vertex interaction budget_exceeded"
+    assert store.run(item, provider)["action"] == "new_attempt_required"
+    assert store.provider_resume(request_id, provider)["action"] == "new_attempt_required"
+    assert methods == ["POST", "GET"]
 
 
 def test_in_progress_get_resume_never_posts_again(tmp_path: Path) -> None:
