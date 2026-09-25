@@ -6,6 +6,7 @@ import os
 import secrets
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -71,15 +72,29 @@ class HttpResponse:
 
 class Transport(Protocol):
     def send(
-        self, url: str, headers: dict[str, str], body: bytes, timeout_seconds: float
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+        timeout_seconds: float,
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> HttpResponse: ...
 
 
 class UrllibTransport:
     def send(
-        self, url: str, headers: dict[str, str], body: bytes, timeout_seconds: float
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+        timeout_seconds: float,
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> HttpResponse:
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        if on_remote_start is not None:
+            on_remote_start()
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return HttpResponse(
@@ -113,7 +128,11 @@ class ImageProvider(Protocol):
     def translate(self, spec: CanonicalImageSpec) -> TranslatedRequest: ...
 
     def generate(
-        self, spec: CanonicalImageSpec, reference_paths: tuple[Path, ...]
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult: ...
 
 
@@ -200,7 +219,11 @@ class OpenAIImageProvider:
         )
 
     def generate(
-        self, spec: CanonicalImageSpec, reference_paths: tuple[Path, ...]
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult:
         key = self._api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
@@ -242,6 +265,7 @@ class OpenAIImageProvider:
             },
             b"".join(chunks),
             self._timeout_seconds,
+            on_remote_start=on_remote_start,
         )
         if response.status >= 400:
             raise _api_failure(response)
@@ -332,7 +356,11 @@ class GeminiImageProvider:
         )
 
     def generate(
-        self, spec: CanonicalImageSpec, reference_paths: tuple[Path, ...]
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult:
         key = self._api_key or os.environ.get("GEMINI_API_KEY")
         if not key:
@@ -354,6 +382,7 @@ class GeminiImageProvider:
             {"x-goog-api-key": key, "Content-Type": "application/json"},
             json.dumps(body, separators=(",", ":")).encode(),
             self._timeout_seconds,
+            on_remote_start=on_remote_start,
         )
         if response.status >= 400:
             raise _api_failure(response)
