@@ -20,6 +20,12 @@ PROJECT_PATTERN = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]\Z")
 INTERACTION_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,256}\Z")
 PENDING_STATUSES = {"queued", "in_progress", "requires_action"}
 TERMINAL_STATUSES = {"failed", "cancelled", "incomplete", "budget_exceeded"}
+SAFE_ERROR_STATUS = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+SENSITIVE_ERROR_TEXT = re.compile(
+    r"authorization|bearer|access[_ -]?token|refresh[_ -]?token|api[_ -]?key|"
+    r"cookie|credential|secret|private[_ -]?key|ya29\.|AIza|-----BEGIN|[{}]",
+    re.IGNORECASE,
+)
 
 
 def _default_credentials() -> Credentials:
@@ -44,7 +50,7 @@ class VertexLyriaProvider:
         stems=False,
         output_formats=("audio/mpeg",),
         usage_metadata=True,
-        provider_request_id=True,
+        provider_request_id=False,
         rights_information=False,
         api_contract="Vertex AI Interactions v1beta1; Lyria 3 Pro Preview",
         user_provided_lyrics=True,
@@ -123,7 +129,6 @@ class VertexLyriaProvider:
             "body": {
                 "model": self.model,
                 "input": [{"type": "text", "text": self._prompt(spec)}],
-                "store": True,
             },
         }
 
@@ -182,7 +187,7 @@ class VertexLyriaProvider:
 
     @staticmethod
     def _read_result(
-        interaction: dict[str, Any], interaction_id: str, access_token: str
+        interaction: dict[str, Any], interaction_id: str | None, access_token: str
     ) -> MusicResult:
         outputs: list[dict[str, Any]] = []
         raw_outputs = interaction.get("outputs", [])
@@ -227,6 +232,7 @@ class VertexLyriaProvider:
         metadata = {
             "backend": VertexLyriaProvider.backend,
             "interaction_status": "completed",
+            "provider_interaction_id_supplied": interaction_id is not None,
             "provider_lyrics_text": provider_lyrics,
             "provider_description_text": provider_description,
             "other_text_outputs": texts[2:],
@@ -254,13 +260,15 @@ class VertexLyriaProvider:
         on_identity: Callable[[str], None] | None = None,
     ) -> MusicResult:
         interaction_id = interaction.get("id")
-        if not isinstance(interaction_id, str) or not INTERACTION_PATTERN.fullmatch(interaction_id):
+        if interaction_id is not None and (
+            not isinstance(interaction_id, str) or not INTERACTION_PATTERN.fullmatch(interaction_id)
+        ):
             raise MusicFailure("Vertex interaction ID missing or invalid", "ambiguous", expected_id)
         if expected_id is not None and interaction_id != expected_id:
             raise MusicFailure("Vertex interaction identity changed", "ambiguous", expected_id)
-        if access_token in interaction_id:
+        if interaction_id is not None and access_token in interaction_id:
             raise MusicFailure("unsafe Vertex interaction identity", "ambiguous", expected_id)
-        if on_identity is not None:
+        if on_identity is not None and interaction_id is not None:
             on_identity(interaction_id)
         if interaction.get("model") not in (None, self.model):
             raise MusicFailure("Vertex interaction model differs", "ambiguous", interaction_id)
@@ -274,15 +282,52 @@ class VertexLyriaProvider:
         return self._read_result(interaction, interaction_id, access_token)
 
     @staticmethod
-    def _http_failure(response: httpx.Response, interaction_id: str | None) -> None:
+    def _safe_error_detail(response: httpx.Response, access_token: str) -> str | None:
+        if len(response.content) > 4096:
+            return None
+        try:
+            payload = response.json()
+        except (ValueError, UnicodeError):
+            return None
+        if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+            return None
+        error = payload["error"]
+        parts: list[str] = []
+        code = error.get("code")
+        if type(code) is int and 100 <= code <= 599:
+            parts.append(f"Google code {code}")
+        status = error.get("status")
+        if isinstance(status, str) and SAFE_ERROR_STATUS.fullmatch(status):
+            parts.append(f"Google status {status}")
+        message = error.get("message")
+        if isinstance(message, str):
+            clean = " ".join(message.split())
+            if (
+                clean
+                and len(clean) <= 300
+                and access_token not in clean
+                and not SENSITIVE_ERROR_TEXT.search(clean)
+                and all(char.isprintable() for char in clean)
+            ):
+                parts.append(f"Google message {clean}")
+        return "; ".join(parts) or None
+
+    @staticmethod
+    def _http_failure(
+        response: httpx.Response, interaction_id: str | None, access_token: str
+    ) -> None:
         code = response.status_code
         if code in (408, 429) or code >= 500:
             raise MusicFailure("Vertex interaction outcome uncertain", "ambiguous", interaction_id)
         if code >= 400:
+            detail = VertexLyriaProvider._safe_error_detail(response, access_token)
+            reason = f"Vertex rejected request (HTTP {code})"
+            if detail is not None:
+                reason += f": {detail}"
             raise MusicFailure(
-                f"Vertex rejected request (HTTP {code})", "terminal_failure", interaction_id
+                reason, "terminal_failure", interaction_id
             )
-        if code != 200:
+        if not 200 <= code < 300:
             raise MusicFailure(
                 "unexpected Vertex interaction HTTP status", "ambiguous", interaction_id
             )
@@ -328,7 +373,7 @@ class VertexLyriaProvider:
                 response = client.send(request, follow_redirects=False)
             except httpx.RequestError as exc:
                 raise MusicFailure("Vertex generation POST outcome unknown", "ambiguous") from exc
-            self._http_failure(response, None)
+            self._http_failure(response, None, token)
             interaction = self._response_json(response)
             return self._interpret(
                 interaction, access_token=token, on_identity=on_provider_identity
@@ -338,6 +383,7 @@ class VertexLyriaProvider:
                 client.close()
 
     def retrieve(self, interaction_id: str, translated: dict[str, Any]) -> MusicResult:
+        """Conditionally retrieve a known historical ID; new Lyria POSTs may have none."""
         if not INTERACTION_PATTERN.fullmatch(interaction_id):
             raise MusicFailure("stored Vertex interaction ID invalid", "retryable_failure")
         endpoint, token, quota_project = self._preflight(translated)
@@ -362,7 +408,7 @@ class VertexLyriaProvider:
                 raise MusicFailure(
                     "Vertex interaction GET outcome unknown", "ambiguous", interaction_id
                 ) from exc
-            self._http_failure(response, interaction_id)
+            self._http_failure(response, interaction_id, token)
             interaction = self._response_json(response, interaction_id)
             return self._interpret(interaction, access_token=token, expected_id=interaction_id)
         finally:
