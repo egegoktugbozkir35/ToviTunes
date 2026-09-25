@@ -85,3 +85,4 @@ Exactly two initial reviews are required. Any axis difference of 2 or more requi
 The report groups facts by provider and model without selecting a winner. It includes request and output counts, hard failures, usable outputs and rate, per-scene usable counts, weighted score summaries, median latency, and repair reasons. `actual_spend` and usable outputs per dollar remain `null` unless every request in the group has a known cost. `known_spend` and `cost_known_requests` show partial information. Real adapters preserve usage but leave cost unknown because API usage alone does not provide a durable billed price; a future dated pricing policy can supply deterministic cost without changing the domain model.
 
 The benchmark ends with a dated human decision describing which image tasks a provider can support, rights evidence, unresolved controls and whether its output is limited to backgrounds/props or reviewed special poses. Software does not select a provider.
+
