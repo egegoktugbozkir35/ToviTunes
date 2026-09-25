@@ -71,7 +71,7 @@ def plan(
     return tuple(plans)
 
 
-def inspect_wav(data: bytes) -> float:
+def inspect_wav_metadata(data: bytes) -> tuple[float, str]:
     import io
 
     try:
@@ -85,9 +85,18 @@ def inspect_wav(data: bytes) -> float:
                 stream.getnframes() * stream.getnchannels() * stream.getsampwidth()
             ):
                 raise ValueError("truncated WAV")
-            return duration
+            codec = {1: "pcm_u8", 2: "pcm_s16le", 3: "pcm_s24le", 4: "pcm_s32le"}.get(
+                stream.getsampwidth()
+            )
+            if codec is None:
+                raise ValueError("unsupported PCM sample width")
+            return duration, codec
     except (wave.Error, EOFError) as exc:
         raise ValueError("invalid WAV") from exc
+
+
+def inspect_wav(data: bytes) -> float:
+    return inspect_wav_metadata(data)[0]
 
 
 class MusicBenchmark:
@@ -187,31 +196,85 @@ class MusicBenchmark:
     def _audio_path(self, request_id: str) -> Path:
         return self.audio_root / f"{request_id}.wav"
 
+    def _staged_path(self, request_id: str) -> Path:
+        return self.audio_root / ".music-returned" / f"{request_id}.wav"
+
+    @staticmethod
+    def _sync_directory(path: Path) -> None:
+        if os.name != "nt":
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
     def _write_audio(self, request_id: str, data: bytes) -> Path:
-        path = self._audio_path(request_id)
-        with path.open("xb") as stream:
+        path = self._staged_path(request_id)
+        path.parent.mkdir(exist_ok=True)
+        self._sync_directory(self.audio_root)
+        if (
+            path.parent.is_symlink()
+            or path.exists()
+            or path.is_symlink()
+            or self._audio_path(request_id).exists()
+            or self._audio_path(request_id).is_symlink()
+        ):
+            raise FileExistsError("returned audio is already staged")
+        temporary = path.with_name(f"{request_id}.{uuid4().hex}.tmp")
+        with temporary.open("xb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        self._sync_directory(path.parent)
         return path
+
+    def _verify_audio(self, path: Path, receipt: Any) -> None:
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("received audio bytes missing")
+        data = path.read_bytes()
+        if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
+            raise ValueError("received audio bytes changed")
+        duration, codec = inspect_wav_metadata(data)
+        if (
+            receipt["mime_type"] != "audio/wav"
+            or receipt["container"] != "wav"
+            or receipt["codec"] != codec
+            or receipt["duration_seconds"] != duration
+        ):
+            raise ValueError("received audio metadata changed")
 
     def _finalize(self, request_id: str) -> dict[str, Any]:
         path = self._audio_path(request_id)
+        staged = self._staged_path(request_id)
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
+            request = db.execute(
+                "SELECT * FROM music_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
             receipt = db.execute(
                 "SELECT * FROM music_receipts WHERE request_id = ?", (request_id,)
             ).fetchone()
-            if receipt is None:
+            if request is None or receipt is None or request["remote_started_at"] is None:
                 raise ValueError("no durable receipt")
-            if not path.is_file() or path.is_symlink():
+            if request["provider_request_id"] != receipt["provider_request_id"]:
+                raise ValueError("receipt provider request identity differs")
+            if staged.exists() or staged.is_symlink():
+                self._verify_audio(staged, receipt)
+            if path.exists() or path.is_symlink():
+                self._verify_audio(path, receipt)
+            elif staged.is_file():
+                os.link(staged, path)
+                self._sync_directory(path.parent)
+            else:
                 raise ValueError("received audio bytes missing")
-            data = path.read_bytes()
-            if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
-                raise ValueError("received audio bytes changed")
             existing = db.execute(
                 "SELECT * FROM music_outputs WHERE request_id = ?", (request_id,)
             ).fetchone()
+            if existing is not None and (
+                existing["sha256"] != receipt["sha256"] or existing["relative_path"] != path.name
+            ):
+                raise ValueError("output mapping differs from receipt")
             if existing is None:
                 db.execute(
                     "INSERT INTO music_outputs (request_id, blind_id, relative_path, sha256, "
@@ -227,6 +290,12 @@ class MusicBenchmark:
                 "SELECT * FROM music_outputs WHERE request_id = ?", (request_id,)
             ).fetchone()
             db.commit()
+        if staged.is_file() and not staged.is_symlink():
+            try:
+                staged.unlink()
+                self._sync_directory(staged.parent)
+            except OSError:
+                pass  # A later provider-free reconcile can remove this verified copy.
         assert output is not None
         return dict(output)
 
@@ -236,8 +305,19 @@ class MusicBenchmark:
                 "SELECT 1 FROM music_receipts WHERE request_id = ?", (request_id,)
             ).fetchone()
         if receipt is None:
-            return {"request_id": request_id, "action": "provider_side_reconciliation_required"}
-        output = self._finalize(request_id)
+            return {
+                "request_id": request_id,
+                "action": "provider_side_reconciliation_required",
+                "reason": "no immutable receipt for returned audio",
+            }
+        try:
+            output = self._finalize(request_id)
+        except (OSError, ValueError) as exc:
+            return {
+                "request_id": request_id,
+                "action": "provider_side_reconciliation_required",
+                "reason": str(exc),
+            }
         return {
             "request_id": request_id,
             "status": "succeeded",
@@ -310,16 +390,9 @@ class MusicBenchmark:
         try:
             if result.mime_type != "audio/wav":
                 raise ValueError("only validated PCM WAV ingest is implemented")
-            duration = inspect_wav(result.audio_bytes)
-            self._write_audio(request_id, result.audio_bytes)
-            self._record_receipt(request_id, result, duration)
-            output = self._finalize(request_id)
-            return {
-                "request_id": request_id,
-                "status": "succeeded",
-                "blind_id": output["blind_id"],
-                "action": "generated",
-            }
+            duration, codec = inspect_wav_metadata(result.audio_bytes)
+            if result.container not in (None, "wav") or result.codec not in (None, codec):
+                raise ValueError("declared audio format differs from decoded WAV")
         except ValueError as exc:
             self._transition(
                 request_id,
@@ -329,6 +402,16 @@ class MusicBenchmark:
                 provider_request_id=result.provider_request_id,
             )
             return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
+        try:
+            self._write_audio(request_id, result.audio_bytes)
+            self._record_receipt(request_id, result, duration, codec)
+            output = self._finalize(request_id)
+            return {
+                "request_id": request_id,
+                "status": "succeeded",
+                "blind_id": output["blind_id"],
+                "action": "generated",
+            }
         except Exception as exc:
             return {
                 "request_id": request_id,
@@ -337,7 +420,19 @@ class MusicBenchmark:
                 "action": "local_reconciliation_required",
             }
 
-    def _record_receipt(self, request_id: str, result: MusicResult, duration: float) -> None:
+    def _record_receipt(
+        self, request_id: str, result: MusicResult, duration: float, codec: str
+    ) -> None:
+        staged = self._staged_path(request_id)
+        if not staged.is_file() or staged.is_symlink():
+            raise ValueError("durable staged audio missing")
+        staged_bytes = staged.read_bytes()
+        if (
+            len(staged_bytes) != len(result.audio_bytes)
+            or sha256(staged_bytes).digest() != sha256(result.audio_bytes).digest()
+            or inspect_wav_metadata(staged_bytes) != (duration, codec)
+        ):
+            raise ValueError("staged audio differs from returned bytes")
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
@@ -349,8 +444,8 @@ class MusicBenchmark:
                     len(result.audio_bytes),
                     duration,
                     result.mime_type,
-                    result.container,
-                    result.codec,
+                    "wav",
+                    codec,
                     json.dumps(result.usage) if result.usage is not None else None,
                     result.actual_cost_amount,
                     result.cost_currency,
@@ -497,11 +592,40 @@ class MusicBenchmark:
         if status not in {"approved", "rejected"} or not actor or not evidence:
             raise ValueError("invalid lyric decision")
         decision_id = str(uuid4())
+        exact_hash = lyric_hash(lyrics)
         with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "INSERT INTO music_lyric_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (decision_id, lyrics.id, lyric_hash(lyrics), status, actor, evidence, now()),
+                (decision_id, lyrics.id, exact_hash, status, actor, evidence, now()),
             )
+            if status == "rejected":
+                outputs = db.execute(
+                    "SELECT o.blind_id, r.canonical_spec_json FROM music_outputs o "
+                    "JOIN music_requests r USING (request_id) "
+                    "WHERE r.lyric_id = ? AND o.approval_status = 'approved'",
+                    (lyrics.id,),
+                ).fetchall()
+                for output in outputs:
+                    candidate = CanonicalMusicSpec.model_validate_json(
+                        output["canonical_spec_json"]
+                    ).lyrics
+                    if lyric_hash(candidate) != exact_hash:
+                        continue
+                    db.execute(
+                        "UPDATE music_outputs SET approval_status = 'pending' WHERE blind_id = ?",
+                        (output["blind_id"],),
+                    )
+                    db.execute(
+                        "INSERT INTO music_decisions VALUES (?, ?, 'approval', 'pending', "
+                        "'system', ?, ?)",
+                        (
+                            str(uuid4()),
+                            output["blind_id"],
+                            f"exact lyrics rejected: {lyrics.id} {exact_hash}",
+                            now(),
+                        ),
+                    )
             db.commit()
         return decision_id
 
