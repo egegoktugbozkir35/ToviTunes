@@ -1,0 +1,15 @@
+schema_version: 1
+id: colors_red_lyrics_v1
+brief_id: colors_red_v1
+approval: pending
+educational_claims: [Red is a color., An apple can be red., A ball can be red.]
+rhyme_notes: Simple red/head echo; meaning takes priority over rhyme.
+syllable_notes: Short lines with breathing space and repeated teaching phrase.
+lines:
+  - {section: hook, text: 'Red, red, look ahead!'}
+  - {section: hook, text: 'Red is a color, yes, red!'}
+  - {section: teaching_line, text: 'A red apple, round and bright.'}
+  - {section: teaching_line, text: 'A red ball rolls into sight.'}
+  - {section: reinforcement, text: 'Red, red, what do you see?'}
+  - {section: reinforcement, text: 'Red is a color, sing with me!'}
+  - {section: short_ending, text: 'Red!'}

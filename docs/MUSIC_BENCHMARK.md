@@ -1,40 +1,63 @@
-# Music benchmark: offline rubric v1
+# Colors — Red music benchmark foundation
 
-This is a frozen evaluation design, not a provider result. The candidates named in the development plan are Suno, Eleven Music and Lyria 3. No account access, purchase, generation, rights clearance or provider selection is implied by this document. Record the exact product/model/tier and current terms when the benchmark is actually run.
+This is the first-song production track for **ToviTunes Colors — Red**. The accepted audio must exist before the final `TimedStoryboard` is locked. The provider supplies a candidate; ToviTunes owns the approved lyrics, educational truth, audio bytes, timing, provenance, rights, decisions and animation cues. This workflow does not render or publish an episode.
 
-## Controlled test
+## Canonical inputs
 
-Use the five original test cards in [`benchmarks/music/cases.v1.yaml`](../benchmarks/music/cases.v1.yaml). They stress `red`, `blue`, `three`, `circle` and `happy` in a 35-second English preschool song. Keep the lyrics, requested duration, creative brief and no-imitation instruction identical for each provider. Use each provider's closest supported input mode, and record any translation or unsupported control. Do not claim exact-lyrics, BPM, seed, section-length or timestamp support unless the tested interface actually exposes it.
+[`colors_red_v1.yaml`](../benchmarks/music/colors_red_v1.yaml) is the versioned brief. It teaches **red is a color**, using only a red apple and red ball as obvious examples. The preferred duration is 30–40 seconds and the initial benchmark ceiling is 45 seconds. The sections are a tiny intro, hook, teaching line, reinforcement and short ending. Style direction calls for a warm, bouncy, simple song with clear downbeats, intelligible English, no frightening or aggressive sounds, and no named-artist imitation. Tovi has no assigned singing voice.
 
-Generate at least two independent requests per card and provider. Keep every response and output, including unusable or failed attempts; otherwise usable-output rates will be inflated. Store raw files through the artifact store with request IDs, provider/model, prompt version, generation time, costs, rights state and selected input hashes. Label clips with random IDs for blind listening. Preserve the provider mapping separately. Count distinct requests and individual output clips separately when a request returns several clips.
+The target is **112 BPM**, with an acceptable requested range of **100–124 BPM**. At 112 BPM a beat is about 0.54 seconds: slow enough for a visible clap or body bob, yet lively enough for a short hook. BPM is a requested control, never trusted as measured audio timing. Actual beat positions are analyzed from retained audio and corrected by a person.
 
-Two reviewers independently score the first five output axes without seeing provider or model. A third reviewer resolves any 2-point or larger disagreement on an axis. For those five axes, use the mean of two scores when they differ by less than 2, or the median of three after adjudication. An operator separately scores controllability and production fit from the tested interface and output files, with evidence. Do not average away a wrong teaching word, unsafe lyric or unusable file. A reviewer records the heard words and evidence time span for pronunciation or lyric mistakes; speech recognition may assist but does not replace listening. Use the blank [`scorecard.template.yaml`](../benchmarks/music/scorecard.template.yaml) for every request/output pair.
+[`colors_red_lyrics_v1.yaml`](../benchmarks/music/colors_red_lyrics_v1.yaml) is an original **pending** baseline. It stores lines, educational claims, rhyme notes and syllable notes separately. Provider translation lives in each persisted request; provider output and human approval have separate records. The baseline is suitable for dry runs, and a person must approve lyrics before using them as production text. A real provider may change the sung words, which reviewers must check by listening.
 
-## Hard gates
+## Provider boundary and benchmark plan
 
-A clip is **unusable** for the pilot if it fails to decode, is materially truncated or silent, changes or omits a target teaching word, teaches a false fact, contains preschool-inappropriate material, imitates a named artist or copyrighted character, or has severe clipping/distortion. A clip with unknown commercial-use rights may be measured, but it cannot be selected as a production master. Record source URLs or account-specific evidence for rights; a marketing statement alone does not establish clearance for the actual tier and use.
+`MusicProvider` exposes capability metadata, canonical translation and generation with a remote-start callback. Capabilities include text-to-music, lyrics, instrumental mode, vocals, requested duration, BPM, style, seed, stems, output formats, usage, provider request ID and rights information. The canonical brief does not assume a vendor can honor every control. Each future adapter must document its actual API and mark unsupported controls before live use.
 
-Duration target is 30–45 seconds with the first intelligible target word by 10 seconds. Report deviations even if the clip is otherwise worth reviewing. This initial threshold is a pilot hypothesis and should be revisited using accepted ToviTunes episodes.
+There is **no configured real music provider** in this repository. `FakeMusicProvider` is a local deterministic PCM WAV synthesizer used for tests and optional offline runs. It does not sing the lyric. It can simulate success, preflight failure, safe retryable failure, ambiguous outcome, terminal failure and malformed output. No consumer UI automation or undocumented API is included.
 
-## Scoring
+Provider references in the earlier architecture note were checked against official documentation on 2026-09-25. [ElevenLabs Music API](https://elevenlabs.io/docs/api-reference/music/compose) documents prompt or composition-plan input and a requested duration, with paid API access described in its [quickstart](https://elevenlabs.io/docs/eleven-api/guides/cookbooks/music). [Google's Lyria 3.5 guide](https://ai.google.dev/gemini-api/docs/music-generation) describes a fixed 30-second Clip model and a longer model with prompt-influenced duration; its current outputs are MP3 by default. [Suno's official platform](https://platform.suno.com/auth/login?returnTo=%2F) advertises an API but leaves integration details behind sign-in. These are research inputs, not configured adapters or evidence of rights for this project. A real adapter also needs verified byte retention, format decoding, account-specific license evidence, credentials and separate live-call authorization.
 
-Each axis receives an integer 0–4: **0** broken or absent; **1** major defects; **2** mixed, requires repair; **3** production-usable; **4** exceptionally clear and polished. The weights in [`rubric.v1.yaml`](../benchmarks/music/rubric.v1.yaml) sum to 100. Compute `weighted_score = Σ(weight × rating / 4)`. Evidence is mandatory for scores 0–2 and 4.
+The first real benchmark is three independent requests per configured provider from the same frozen brief and lyric candidate. Preserve all requests and outputs, including failures, and record the exact model, account tier, pricing and license evidence. Plan first, then separately authorize live generation after a documented adapter and credentials are present. Blind export omits provider and model; maintain the mapping in the request store. The operator should randomize presentation order before listening.
 
-| Axis | Weight | What reviewers assess |
-| --- | ---: | --- |
-| Target-word pronunciation and intelligibility | 25 | Every target word is clearly pronounced, especially at the first occurrence and chorus. |
-| Lyric adherence | 15 | Requested words, order, repetitions and sections survive without unapproved replacements. |
-| Educational and preschool fit | 15 | Meaning is correct, easy to follow, age appropriate and free of confusing distractors. |
-| Musical appeal | 15 | Memorable melody, warmth, rhythm, energy and comfortable repetition. |
-| Audio quality | 10 | Clean vocal, balanced mix, no severe artifacts, silence or clipping. |
-| Controllability | 10 | Tested input controls and revisions work predictably; record unsupported controls. |
-| Production fit | 10 | Useful duration/structure, editability, timing data or stems where available. |
+## Commands
 
-The seven weighted axes judge the output and the tested workflow. Rights remains an independent release gate. Cost and latency are reported as measurements rather than hidden in a subjective score: total billable cost, seconds to usable result, usable outputs/request, and usable outputs/actual spend. Record whether each attempt used a web UI or API. A manual UI result does not prove API automation.
+From the repository root, with the example config:
 
-For initial comparison, mark a clip **usable** only if all content and file hard gates pass and the first three axes each score at least 3. Report each provider's per-card results, median weighted score of usable clips, total usable count, usable/request, usable/cost, median latency, control gaps and rights evidence. Publish the raw denominators and any failed requests. Do not pick a provider from this small sample alone: first inspect the mistakes, subscription terms and ability to rerun or edit the accepted song.
+```powershell
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark plan
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark run --offline-fake
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark status
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark reconcile --request-id ID
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark review-export
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark review --scorecard review.json
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark review-report
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark lyric-decision --lyrics-file benchmarks/music/colors_red_lyrics_v1.yaml --status approved --actor NAME --evidence "educational review"
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark decision --blind-id ID --type rights --status commercial_use_confirmed --actor NAME --evidence "license/tier evidence"
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark timing-import --blind-id ID --file timing.json
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark timing-decision --blind-id ID --version 1 --status approved --actor NAME --evidence "manual alignment check"
+```
 
-## Review decision
+`plan` is credential-free and writes nothing. `run` currently permits only the explicitly named offline fake. Repeated runs reuse successful requests by deterministic fingerprint. A fresh data root is appropriate for each isolated dry-run. `status` includes provider identity for operators; `review-export` supplies blind IDs, brief IDs, duration and hash without provider identity. Scorecards contain `blind_id`, `reviewer`, eight integer `scores` (0–4), `evidence` and optional `hard_failures`.
 
-The benchmark ends with a dated human decision that names the tested model/tier, accepts or rejects commercial terms with evidence, records the measurements and lists unresolved risks. A selected song still needs objective audio QA and a separate human song approval before it becomes the episode's audio master. Providers remain replaceable behind the `MusicProvider` boundary.
+## Durable state and recovery
 
+Migration `0007_music_benchmark.sql` stores request ID, brief and lyric IDs, provider/model, attempt, canonical and translated specs, capabilities, fingerprint, status, provider request ID, failure category, timestamps, immutable receipt, output mapping, reviews, rights/approval decisions and timing versions. Migration `0009_music_audit_and_recovery_invariants.sql` enforces append-only reviews, decisions and timing history, valid decision type/status pairs, and matching receipt/output evidence before database success. A receipt records byte count, SHA-256, decoded duration, MIME, container, codec, usage, actual cost only when evidenced, pricing policy and provider rights evidence. Unknown cost stays SQL `NULL`, never zero by assumption. Validated returned WAV bytes are written to a request-scoped temporary sibling, flushed and `fsync`ed, then atomically renamed under `.music-returned`. The immutable receipt authenticates those staged bytes. Finalization verifies request identity, receipt, SHA-256, size and decoded WAV metadata, creates the final request-owned file and output mapping, and commits success with the mapping in one transaction. Staging is removed only after success commits. Each reuse verifies the retained bytes. A remote URL is never the only copy.
+
+States are `prepared`, `remote_started`, `retryable_failure`, `ambiguous`, `terminal_failure` and `succeeded`. The adapter calls the remote-start callback immediately before a request could be sent. That callback commits the boundary before generation. Only a preflight failure with no recorded remote start may be run again. Even a provider-labelled retryable failure after remote start requires reconciliation or a new explicit attempt; it cannot be replayed blindly. `reconcile` is provider-free: a receipt plus matching staged or final bytes can complete a missing mapping or interrupted success transition, and repeats are idempotent. Staged or orphaned bytes without a receipt remain unresolved because their full returned-result metadata cannot be authenticated; the operator must investigate rather than regenerate. If a provider has asynchronous jobs, its eventual adapter must persist job IDs and use the documented status API before retrying. The fake exercises the same boundary offline.
+
+The current ingest validates PCM WAV using the Python standard library. Other formats require a documented decoder and verification path before an adapter can use them. Decoded duration is recorded even when it misses the preferred range; a human then evaluates fitness. A corrupt result is terminal. Audio files and receipt rows are immutable; later decisions are append-only records.
+
+## Listening, rights and selection
+
+The [rubric](../benchmarks/music/rubric.v1.yaml) totals 100 points: educational correctness 20; lyric intelligibility 15; hook/memorability 15; preschool appropriateness 15; beat/timing usefulness 15; music/vocal quality 10; production fit 5; rights/provenance completeness 5. Give each axis 0–4, then calculate `sum(weight × score / 4)` for comparison. Record time-stamped listening evidence for low or exceptional scores. The software stores reviews; it does not choose a winner.
+
+Hard failures include a false educational statement, unsafe lyrics, unintelligible teaching phrase, wrong concept, corrupt or unusable audio, incompatible license, or inability to retain the bytes. Compare duration fit, rhythmic regularity, clear downbeats, useful ending, production cleanliness and vocal quality. A reviewer must transcribe/check the actual sung teaching phrase; automatic speech recognition is only an aid. Resolve disagreements with a third human review. Report denominators, failures and unknown cost, not just scores.
+
+Every output starts with rights `unknown` and approval `pending`, even if provider metadata contains a license claim. `rights` decisions require a named actor and evidence. Lyric decisions are append-only and tied to a hash of the exact candidate. Audio approval is a separate named human decision and requires `commercial_use_confirmed` rights, approved lyrics and two clean listening reviews. A later restrictive rights decision or rejection of the exact lyric ID and hash returns an approved candidate to pending and appends a system approval decision. Re-approving those lyrics never restores audio approval automatically; a new human audio decision is required. No review or score automatically approves or selects a candidate. The accepted song also requires an approved timing version before final storyboard work.
+
+## Timing and animation handoff
+
+Migration `0008_music_timing_decisions.sql` adds append-only human timing decisions.
+
+`TimingAnalysis` is versioned and SHA-256 bound to one audio candidate. It has duration, estimated BPM, beats, downbeats, sections, lyric lines, optional word/phoneme intervals, accents, intro/outro ranges and correction attribution. Each import starts pending; a separate named timing decision with evidence records approval or rejection. Automatic alignment is an estimate; the editor can import a corrected new version without overwriting prior versions. Beat/downbeat and accent markers can drive bobs and claps; lyric word or phoneme spans can switch mouth sprites; gaps can admit blinks; section boundaries can trigger pointing, celebration and scene transitions. The first animation proof should use these same markers against the accepted audio. The final `TimedStoryboard` remains open until accepted audio and its reviewed timing are available.
