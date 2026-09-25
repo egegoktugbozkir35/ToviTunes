@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import (
     CanonicalMusicSpec,
     LyricCandidate,
@@ -180,6 +181,7 @@ class MusicBenchmark:
             "prepared": {"remote_started", "retryable_failure", "terminal_failure"},
             "retryable_failure": {"remote_started", "retryable_failure"},
             "remote_started": {"retryable_failure", "ambiguous", "terminal_failure"},
+            "ambiguous": {"ambiguous", "terminal_failure"},
         }
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
@@ -208,11 +210,40 @@ class MusicBenchmark:
             )
             db.commit()
 
-    def _audio_path(self, request_id: str) -> Path:
-        return self.audio_root / f"{request_id}.wav"
+    def _record_provider_identity(self, request_id: str, provider_request_id: str) -> None:
+        """Commit a returned remote identity before any later parsing or retrieval."""
+        if not provider_request_id:
+            raise ValueError("provider request identity is empty")
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT status, remote_started_at, provider_request_id FROM music_requests "
+                "WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["remote_started_at"] is None
+                or row["status"] not in {"remote_started", "ambiguous"}
+                or row["provider_request_id"] not in (None, provider_request_id)
+            ):
+                raise ValueError("provider request identity cannot be changed")
+            db.execute(
+                "UPDATE music_requests SET provider_request_id = ?, updated_at = ? "
+                "WHERE request_id = ?",
+                (provider_request_id, now(), request_id),
+            )
+            db.commit()
 
-    def _staged_path(self, request_id: str) -> Path:
-        return self.audio_root / ".music-returned" / f"{request_id}.wav"
+    def _audio_path(self, request_id: str, container: str = "wav") -> Path:
+        if container not in {"wav", "mp3"}:
+            raise ValueError("unsupported music container")
+        return self.audio_root / f"{request_id}.{container}"
+
+    def _staged_path(self, request_id: str, container: str = "wav") -> Path:
+        if container not in {"wav", "mp3"}:
+            raise ValueError("unsupported music container")
+        return self.audio_root / ".music-returned" / f"{request_id}.{container}"
 
     @staticmethod
     def _sync_directory(path: Path) -> None:
@@ -223,16 +254,16 @@ class MusicBenchmark:
             finally:
                 os.close(descriptor)
 
-    def _write_audio(self, request_id: str, data: bytes) -> Path:
-        path = self._staged_path(request_id)
+    def _write_audio(self, request_id: str, data: bytes, container: str = "wav") -> Path:
+        path = self._staged_path(request_id, container)
         path.parent.mkdir(exist_ok=True)
         self._sync_directory(self.audio_root)
         if (
             path.parent.is_symlink()
             or path.exists()
             or path.is_symlink()
-            or self._audio_path(request_id).exists()
-            or self._audio_path(request_id).is_symlink()
+            or self._audio_path(request_id, container).exists()
+            or self._audio_path(request_id, container).is_symlink()
         ):
             raise FileExistsError("returned audio is already staged")
         temporary = path.with_name(f"{request_id}.{uuid4().hex}.tmp")
@@ -250,18 +281,24 @@ class MusicBenchmark:
         data = path.read_bytes()
         if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
             raise ValueError("received audio bytes changed")
-        duration, codec = inspect_wav_metadata(data)
+        info = inspect_audio(data, receipt["mime_type"])
         if (
-            receipt["mime_type"] != "audio/wav"
-            or receipt["container"] != "wav"
-            or receipt["codec"] != codec
-            or receipt["duration_seconds"] != duration
+            receipt["container"] != info.container
+            or receipt["codec"] != info.codec
+            or receipt["duration_seconds"] != info.duration_seconds
+            or path.suffix != info.extension
         ):
             raise ValueError("received audio metadata changed")
+        metadata = json.loads(receipt["response_metadata_json"])
+        if (
+            "audio_sample_rate_hz" in metadata
+            and metadata["audio_sample_rate_hz"] != info.sample_rate_hz
+        ):
+            raise ValueError("received audio sample rate changed")
+        if "audio_bitrate_bps" in metadata and metadata["audio_bitrate_bps"] != info.bitrate_bps:
+            raise ValueError("received audio bitrate changed")
 
     def _finalize(self, request_id: str) -> dict[str, Any]:
-        path = self._audio_path(request_id)
-        staged = self._staged_path(request_id)
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             request = db.execute(
@@ -272,6 +309,8 @@ class MusicBenchmark:
             ).fetchone()
             if request is None or receipt is None or request["remote_started_at"] is None:
                 raise ValueError("no durable receipt")
+            path = self._audio_path(request_id, receipt["container"])
+            staged = self._staged_path(request_id, receipt["container"])
             if request["provider_request_id"] != receipt["provider_request_id"]:
                 raise ValueError("receipt provider request identity differs")
             if staged.exists() or staged.is_symlink():
@@ -357,19 +396,20 @@ class MusicBenchmark:
                 "blind_id": output["blind_id"],
                 "action": "reused",
             }
-        if row["remote_started_at"] is not None:
-            return {
-                "request_id": request_id,
-                "status": row["status"],
-                "action": "manual_reconciliation_required",
-            }
         if row["status"] == "terminal_failure":
             return {
                 "request_id": request_id,
                 "status": row["status"],
                 "action": "new_attempt_required",
             }
+        if row["remote_started_at"] is not None:
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "manual_reconciliation_required",
+            }
         started = False
+        identity_recorded = False
 
         def remote_start() -> None:
             nonlocal started
@@ -378,8 +418,23 @@ class MusicBenchmark:
             self._transition(request_id, "remote_started")
             started = True
 
+        def record_identity(provider_request_id: str) -> None:
+            nonlocal identity_recorded
+            if identity_recorded:
+                raise ValueError("provider identity callback invoked twice")
+            self._record_provider_identity(request_id, provider_request_id)
+            identity_recorded = True
+
         try:
-            result = provider.generate(item.canonical_spec, item.translated_request, remote_start)
+            generate_with_identity = getattr(provider, "generate_with_identity", None)
+            if generate_with_identity is None:
+                result = provider.generate(
+                    item.canonical_spec, item.translated_request, remote_start
+                )
+            else:
+                result = generate_with_identity(
+                    item.canonical_spec, item.translated_request, remote_start, record_identity
+                )
         except MusicFailure as exc:
             status = exc.outcome if started else "retryable_failure"
             self._transition(
@@ -392,7 +447,8 @@ class MusicBenchmark:
             return {"request_id": request_id, "status": status, "action": "recorded"}
         except Exception as exc:
             status = "ambiguous" if started else "retryable_failure"
-            self._transition(request_id, status, category="unexpected", reason=str(exc))
+            reason = "unexpected Vertex music error" if provider.provider == "google" else str(exc)
+            self._transition(request_id, status, category="unexpected", reason=reason)
             return {"request_id": request_id, "status": status, "action": "recorded"}
         if not started:
             self._transition(
@@ -402,24 +458,114 @@ class MusicBenchmark:
                 reason="provider returned without remote-start callback",
             )
             return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
+        return self._finish_result(request_id, result, provider.provider)
+
+    def provider_resume(self, request_id: str, provider: MusicProvider) -> dict[str, Any]:
+        """Retrieve only an existing remote interaction; never create another one."""
+        row = self.request(request_id)
+        if (row["provider"], row["model"]) != (provider.provider, provider.model):
+            raise ValueError("provider identity differs from stored request")
+        with closing(self.database.connect()) as db:
+            receipt = db.execute(
+                "SELECT 1 FROM music_receipts WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        if receipt is not None:
+            return self.reconcile(request_id)
+        if row["status"] == "terminal_failure":
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "new_attempt_required",
+            }
+        if (
+            row["remote_started_at"] is None
+            or row["status"] not in {"remote_started", "ambiguous"}
+            or not row["provider_request_id"]
+        ):
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "known_provider_identity_required",
+            }
+        retrieve = getattr(provider, "retrieve", None)
+        if retrieve is None:
+            raise ValueError("provider does not support existing-interaction retrieval")
         try:
-            if result.mime_type != "audio/wav":
-                raise ValueError("only validated PCM WAV ingest is implemented")
-            duration, codec = inspect_wav_metadata(result.audio_bytes)
-            if result.container not in (None, "wav") or result.codec not in (None, codec):
-                raise ValueError("declared audio format differs from decoded WAV")
+            result = retrieve(
+                row["provider_request_id"], json.loads(row["translated_request_json"])
+            )
+        except MusicFailure as exc:
+            if exc.outcome == "retryable_failure":
+                return {
+                    "request_id": request_id,
+                    "status": row["status"],
+                    "action": "local_preflight_failure",
+                }
+            if row["status"] == "remote_started":
+                self._transition(
+                    request_id,
+                    exc.outcome,
+                    category="provider_retrieval",
+                    reason=str(exc),
+                    provider_request_id=row["provider_request_id"],
+                )
+            elif exc.outcome == "terminal_failure":
+                self._transition(
+                    request_id,
+                    "terminal_failure",
+                    category="provider_retrieval",
+                    reason=str(exc),
+                    provider_request_id=row["provider_request_id"],
+                )
+            return {
+                "request_id": request_id,
+                "status": exc.outcome,
+                "action": "existing_interaction_not_complete",
+            }
+        except Exception:
+            if row["status"] == "remote_started":
+                self._transition(
+                    request_id,
+                    "ambiguous",
+                    category="provider_retrieval",
+                    reason="unexpected provider retrieval error",
+                )
+            return {"request_id": request_id, "status": "ambiguous", "action": "retrieval_failed"}
+        return self._finish_result(request_id, result, provider.provider)
+
+    def _finish_result(
+        self, request_id: str, result: MusicResult, provider_name: str
+    ) -> dict[str, Any]:
+        try:
+            stored = self.request(request_id)
+            if stored["provider_request_id"] not in (None, result.provider_request_id):
+                raise ValueError("returned provider identity differs from stored interaction")
+            info = inspect_audio(result.audio_bytes, result.mime_type)
+            if result.container not in (None, info.container) or result.codec not in (
+                None,
+                info.codec,
+            ):
+                raise ValueError("declared audio format differs from decoded audio")
         except ValueError as exc:
+            status = "ambiguous" if provider_name == "google" else "terminal_failure"
             self._transition(
                 request_id,
-                "terminal_failure",
+                status,
                 category="invalid_output",
                 reason=str(exc),
-                provider_request_id=result.provider_request_id,
+                provider_request_id=(
+                    result.provider_request_id if stored["provider_request_id"] is None else None
+                ),
             )
-            return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
+            return {"request_id": request_id, "status": status, "action": "recorded"}
         try:
-            self._write_audio(request_id, result.audio_bytes)
-            self._record_receipt(request_id, result, duration, codec)
+            staged = self._staged_path(request_id, info.container)
+            if staged.exists() or staged.is_symlink():
+                if staged.is_symlink() or staged.read_bytes() != result.audio_bytes:
+                    raise ValueError("staged bytes differ from retrieved provider audio")
+            else:
+                self._write_audio(request_id, result.audio_bytes, info.container)
+            self._record_receipt(request_id, result, info.duration_seconds, info.codec)
             output = self._finalize(request_id)
             return {
                 "request_id": request_id,
@@ -431,21 +577,28 @@ class MusicBenchmark:
             return {
                 "request_id": request_id,
                 "status": "remote_started",
-                "error": str(exc),
+                "error": (
+                    "local Vertex music finalization error"
+                    if provider_name == "google"
+                    else str(exc)
+                ),
                 "action": "local_reconciliation_required",
             }
 
     def _record_receipt(
         self, request_id: str, result: MusicResult, duration: float, codec: str
     ) -> None:
-        staged = self._staged_path(request_id)
+        info = inspect_audio(result.audio_bytes, result.mime_type)
+        if (duration, codec) != (info.duration_seconds, info.codec):
+            raise ValueError("receipt metadata differs from original audio")
+        staged = self._staged_path(request_id, info.container)
         if not staged.is_file() or staged.is_symlink():
             raise ValueError("durable staged audio missing")
         staged_bytes = staged.read_bytes()
         if (
             len(staged_bytes) != len(result.audio_bytes)
             or sha256(staged_bytes).digest() != sha256(result.audio_bytes).digest()
-            or inspect_wav_metadata(staged_bytes) != (duration, codec)
+            or inspect_audio(staged_bytes, result.mime_type) != info
         ):
             raise ValueError("staged audio differs from returned bytes")
         with closing(self.database.connect()) as db:
@@ -459,7 +612,7 @@ class MusicBenchmark:
                     len(result.audio_bytes),
                     duration,
                     result.mime_type,
-                    "wav",
+                    info.container,
                     codec,
                     json.dumps(result.usage) if result.usage is not None else None,
                     result.actual_cost_amount,
@@ -468,7 +621,14 @@ class MusicBenchmark:
                     json.dumps(result.rights_evidence)
                     if result.rights_evidence is not None
                     else None,
-                    json.dumps(result.response_metadata),
+                    json.dumps(
+                        {
+                            **result.response_metadata,
+                            "audio_sample_rate_hz": info.sample_rate_hz,
+                            "audio_bitrate_bps": info.bitrate_bps,
+                        },
+                        sort_keys=True,
+                    ),
                     now(),
                 ),
             )
@@ -702,7 +862,7 @@ class MusicBenchmark:
         row: sqlite3.Row | None = db.execute(
             "SELECT o.*, r.canonical_spec_json, r.provider, r.model, "
             "p.duration_seconds, p.sha256 AS receipt_sha256, p.byte_count, "
-            "p.mime_type, p.container, p.codec FROM music_outputs o "
+            "p.mime_type, p.container, p.codec, p.response_metadata_json FROM music_outputs o "
             "JOIN music_requests r USING (request_id) "
             "JOIN music_receipts p USING (request_id) WHERE o.blind_id = ?",
             (blind_id,),
@@ -803,7 +963,9 @@ class MusicBenchmark:
             spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
             objective: dict[str, Any] = {}
             try:
-                self._verify_audio(self._audio_path(output["request_id"]), output)
+                self._verify_audio(
+                    self._audio_path(output["request_id"], output["container"]), output
+                )
                 objective["decodes_and_matches_receipt"] = True
             except (OSError, ValueError):
                 objective["decodes_and_matches_receipt"] = False
@@ -909,7 +1071,7 @@ class MusicBenchmark:
         if output["approval_status"] == "rejected":
             blockers.append("manual rejection veto")
         try:
-            self._verify_audio(self._audio_path(output["request_id"]), output)
+            self._verify_audio(self._audio_path(output["request_id"], output["container"]), output)
         except (OSError, ValueError):
             blockers.append("audio integrity failure")
         return blockers
