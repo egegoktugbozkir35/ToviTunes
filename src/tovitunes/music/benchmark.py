@@ -2,10 +2,12 @@
 
 import json
 import os
+import re
+import sqlite3
 import wave
 from collections.abc import Sequence
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,19 @@ def lyric_hash(lyrics: LyricCandidate) -> str:
     return sha256(
         json.dumps(lyrics.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def json_hash(value: object) -> str:
+    return sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+POLICIES = {
+    "lyrics": ("colors_red_lyrics", 1, "automated_lyrics_policy_v1"),
+    "rights": ("commercial_music_rights", 1, "automated_rights_policy_v1"),
+    "qa": ("music_qa", 1, "automated_music_qa_v1"),
+    "approval": ("music_approval", 1, "automated_release_policy_v1"),
+    "timing": ("music_timing", 1, "automated_timing_policy_v1"),
+}
 
 
 class PlannedMusicRequest(StrictModel):
@@ -492,6 +507,7 @@ class MusicBenchmark:
     def review(self, review: MusicReview) -> str:
         review_id = str(uuid4())
         with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "INSERT INTO music_reviews VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -504,6 +520,8 @@ class MusicBenchmark:
                     now(),
                 ),
             )
+            if review.hard_failures:
+                self._invalidate(db, review.blind_id, "human review hard failure")
             db.commit()
         return review_id
 
@@ -531,6 +549,500 @@ class MusicBenchmark:
             )
         return report
 
+    @staticmethod
+    def _record_evaluation(
+        db: sqlite3.Connection,
+        kind: str,
+        subject_type: str,
+        subject_id: str,
+        subject_sha256: str,
+        status: str,
+        evidence: dict[str, Any],
+        thresholds: dict[str, Any],
+    ) -> dict[str, Any]:
+        policy_id, version, evaluator = POLICIES[kind]
+        record = {
+            "evaluation_id": str(uuid4()),
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "subject_sha256": subject_sha256,
+            "policy_id": policy_id,
+            "policy_version": version,
+            "evaluator": evaluator,
+            "evaluator_type": "machine",
+            "status": status,
+            "evidence_json": json.dumps(evidence, sort_keys=True),
+            "thresholds_json": json.dumps(thresholds, sort_keys=True),
+            "created_at": now(),
+        }
+        db.execute(
+            "INSERT INTO music_policy_evaluations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            tuple(record.values()),
+        )
+        return record
+
+    @staticmethod
+    def _latest_evaluation(
+        db: sqlite3.Connection, kind: str, subject_id: str, subject_sha256: str
+    ) -> sqlite3.Row | None:
+        policy_id, version, _ = POLICIES[kind]
+        row: sqlite3.Row | None = db.execute(
+            "SELECT * FROM music_policy_evaluations WHERE subject_id = ? "
+            "AND subject_sha256 = ? AND policy_id = ? AND policy_version = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (subject_id, subject_sha256, policy_id, version),
+        ).fetchone()
+        return row
+
+    @staticmethod
+    def _invalidate(db: sqlite3.Connection, blind_id: str, reason: str) -> None:
+        row = db.execute(
+            "SELECT approval_status FROM music_outputs WHERE blind_id = ?", (blind_id,)
+        ).fetchone()
+        if row is not None and row["approval_status"] == "approved":
+            db.execute(
+                "UPDATE music_outputs SET approval_status = 'pending' WHERE blind_id = ?",
+                (blind_id,),
+            )
+            db.execute(
+                "INSERT INTO music_decisions "
+                "(decision_id, blind_id, decision_type, status, actor, evidence, created_at, "
+                "actor_type) VALUES (?, ?, 'approval', 'pending', ?, ?, ?, 'machine')",
+                (str(uuid4()), blind_id, "automated_release_policy_v1", reason, now()),
+            )
+
+    def policy_status(self, blind_id: str | None = None) -> list[dict[str, Any]]:
+        with closing(self.database.connect()) as db:
+            if blind_id is None:
+                rows = db.execute(
+                    "SELECT * FROM music_policy_evaluations ORDER BY rowid"
+                ).fetchall()
+            else:
+                output = self._output(db, blind_id)
+                lyrics = CanonicalMusicSpec.model_validate_json(
+                    output["canonical_spec_json"]
+                ).lyrics
+                rows = db.execute(
+                    "SELECT * FROM music_policy_evaluations WHERE subject_id = ? "
+                    "OR (subject_type = 'timing' AND "
+                    "substr(subject_id, 1, length(?) + 1) = ? || ':') "
+                    "OR (subject_type = 'lyrics' AND subject_id = ? AND subject_sha256 = ?) "
+                    "ORDER BY rowid",
+                    (blind_id, blind_id, blind_id, lyrics.id, lyric_hash(lyrics)),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def evaluate_lyrics(self, brief: MusicBrief, lyrics: LyricCandidate) -> dict[str, Any]:
+        exact_hash = lyric_hash(lyrics)
+        text = lyrics.text().lower()
+        all_lyric_fields = json.dumps(lyrics.model_dump(mode="json")).lower()
+        thresholds: dict[str, Any] = {
+            "brief_id": "colors_red_v1",
+            "max_words": 80,
+            "max_lines": 8,
+            "required_examples": ["apple", "ball"],
+            "forbidden_names": ["disney", "taylor swift", "cocomelon"],
+            "forbidden_safety_words": ["kill", "gun", "knife", "hate"],
+        }
+        checks = {
+            "configured_brief": brief.id == thresholds["brief_id"],
+            "brief_association": lyrics.brief_id == brief.id,
+            "objective": brief.objective.strip().lower() == "red is a color.",
+            "teaching_phrase": bool(re.search(r"\bred is a colo[u]?r\b", text)),
+            "red_apple": bool(re.search(r"\bred apple\b|\bapple[^\n]*\bred\b", text)),
+            "red_ball": bool(re.search(r"\bred ball\b|\bball[^\n]*\bred\b", text)),
+            "no_detected_contradiction": not bool(
+                re.search(r"\bred is not a colo[u]?r\b|\bred is (?:blue|green|yellow)\b", text)
+            ),
+            "scope": len(lyrics.lines) <= 8
+            and len(re.findall(r"\b[\w']+\b", text)) <= 80
+            and all(line.section in brief.sections for line in lyrics.lines),
+            "no_configured_imitation": not any(
+                name in all_lyric_fields for name in thresholds["forbidden_names"]
+            ),
+            "no_forbidden_safety_words": not any(
+                re.search(r"\b" + word + r"\b", text)
+                for word in thresholds["forbidden_safety_words"]
+            ),
+        }
+        evidence = {
+            "checks": checks,
+            "brief_sha256": json_hash(brief.model_dump(mode="json")),
+            "lyric_id": lyrics.id,
+            "lyric_sha256": exact_hash,
+            "word_count": len(re.findall(r"\b[\w']+\b", text)),
+            "line_count": len(lyrics.lines),
+            "scope_note": "Deterministic text checks; no semantic or sung-word claim",
+        }
+        status = "pass" if all(checks.values()) else "fail"
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = self._record_evaluation(
+                db, "lyrics", "lyrics", lyrics.id, exact_hash, status, evidence, thresholds
+            )
+            if status != "pass":
+                outputs = db.execute(
+                    "SELECT o.blind_id, r.canonical_spec_json FROM music_outputs o "
+                    "JOIN music_requests r USING (request_id) WHERE r.lyric_id = ? "
+                    "AND o.approval_status = 'approved'",
+                    (lyrics.id,),
+                ).fetchall()
+                for output in outputs:
+                    candidate = CanonicalMusicSpec.model_validate_json(
+                        output["canonical_spec_json"]
+                    ).lyrics
+                    if lyric_hash(candidate) == exact_hash:
+                        self._invalidate(
+                            db, output["blind_id"], f"exact lyrics policy failed: {exact_hash}"
+                        )
+            db.commit()
+        return record
+
+    def _output(self, db: sqlite3.Connection, blind_id: str) -> sqlite3.Row:
+        row: sqlite3.Row | None = db.execute(
+            "SELECT o.*, r.canonical_spec_json, r.provider, r.model, "
+            "p.duration_seconds, p.sha256 AS receipt_sha256, p.byte_count, "
+            "p.mime_type, p.container, p.codec FROM music_outputs o "
+            "JOIN music_requests r USING (request_id) "
+            "JOIN music_receipts p USING (request_id) WHERE o.blind_id = ?",
+            (blind_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(blind_id)
+        return row
+
+    def evaluate_rights(self, blind_id: str, configured_evidence: dict[str, Any]) -> dict[str, Any]:
+        required = (
+            "provider",
+            "model",
+            "tier",
+            "account_id",
+            "terms_version",
+            "terms_date",
+            "terms_source",
+            "terms_snapshot",
+            "terms_sha256",
+            "usage_mode",
+        )
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            checks = {
+                "complete": all(
+                    isinstance(configured_evidence.get(key), str) and bool(configured_evidence[key])
+                    for key in required
+                ),
+                "provider_matches": configured_evidence.get("provider") == output["provider"],
+                "model_matches": configured_evidence.get("model") == output["model"],
+                "commercial_mode": configured_evidence.get("usage_mode") == "commercial",
+                "commercial_grant": configured_evidence.get("commercial_use_allowed") is True,
+                "retained_source": isinstance(configured_evidence.get("terms_source"), str)
+                and bool(configured_evidence.get("terms_source")),
+                "snapshot_hash_matches": isinstance(configured_evidence.get("terms_snapshot"), str)
+                and configured_evidence.get("terms_sha256")
+                == sha256(str(configured_evidence.get("terms_snapshot", "")).encode()).hexdigest(),
+            }
+            try:
+                checks["valid_terms_date"] = (
+                    date.fromisoformat(str(configured_evidence.get("terms_date", "")))
+                    <= date.today()
+                )
+            except ValueError:
+                checks["valid_terms_date"] = False
+            status = "pass" if all(checks.values()) else "blocked"
+            record = self._record_evaluation(
+                db,
+                "rights",
+                "rights",
+                blind_id,
+                output["sha256"],
+                status,
+                {
+                    "checks": checks,
+                    "configuration": configured_evidence,
+                    "request_id": output["request_id"],
+                },
+                {"required_fields": [*required, "commercial_use_allowed"]},
+            )
+            rights_status = "commercial_use_confirmed" if status == "pass" else "unknown"
+            db.execute(
+                "UPDATE music_outputs SET rights_status = ? WHERE blind_id = ?",
+                (rights_status, blind_id),
+            )
+            db.execute(
+                "INSERT INTO music_decisions (decision_id, blind_id, decision_type, status, "
+                "actor, evidence, created_at, actor_type) "
+                "VALUES (?, ?, 'rights', ?, ?, ?, ?, 'machine')",
+                (
+                    str(uuid4()),
+                    blind_id,
+                    rights_status,
+                    POLICIES["rights"][2],
+                    f"policy evaluation {record['evaluation_id']}",
+                    now(),
+                ),
+            )
+            if status != "pass":
+                self._invalidate(db, blind_id, "rights policy blocked: missing or adverse evidence")
+            db.commit()
+        return record
+
+    def evaluate_qa(self, blind_id: str, checks: dict[str, Any]) -> dict[str, Any]:
+        required = (
+            "lyric_adherence",
+            "educational_correctness",
+            "teaching_intelligibility",
+            "preschool_safety",
+            "beat_usable",
+            "production_fit",
+            "artifact_free",
+        )
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
+            objective: dict[str, Any] = {}
+            try:
+                self._verify_audio(self._audio_path(output["request_id"]), output)
+                objective["decodes_and_matches_receipt"] = True
+            except (OSError, ValueError):
+                objective["decodes_and_matches_receipt"] = False
+            objective["duration_in_scope"] = (
+                0 < output["duration_seconds"] <= spec.brief.maximum_duration_seconds
+            )
+            supplied_valid = all(
+                isinstance(checks.get(key), dict)
+                and type(checks[key].get("passed")) is bool
+                and isinstance(checks[key].get("source"), str)
+                and bool(checks[key]["source"])
+                for key in required
+            )
+            no_hard_failure = not bool(checks.get("hard_failures"))
+            status = (
+                "pass"
+                if (
+                    all(objective.values())
+                    and supplied_valid
+                    and no_hard_failure
+                    and all(checks[key]["passed"] for key in required)
+                )
+                else "fail"
+            )
+            record = self._record_evaluation(
+                db,
+                "qa",
+                "audio",
+                blind_id,
+                output["sha256"],
+                status,
+                {
+                    "objective_checks": objective,
+                    "supplied_checks": checks,
+                    "required_checks_valid": supplied_valid,
+                    "request_id": output["request_id"],
+                },
+                {
+                    "required_checks": required,
+                    "maximum_duration_seconds": spec.brief.maximum_duration_seconds,
+                    "hard_failures_allowed": 0,
+                },
+            )
+            if status != "pass":
+                self._invalidate(db, blind_id, "music QA policy failed")
+            db.commit()
+        return record
+
+    def _approval_blockers(
+        self, db: sqlite3.Connection, blind_id: str, *, automatic: bool = False
+    ) -> list[str]:
+        output = self._output(db, blind_id)
+        spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
+        blockers = []
+        if output["rights_status"] != "commercial_use_confirmed":
+            blockers.append("rights not confirmed")
+        rights = self._latest_evaluation(db, "rights", blind_id, output["sha256"])
+        if rights is not None and rights["status"] != "pass":
+            blockers.append("rights policy not passing")
+        if automatic and (rights is None or rights["status"] != "pass"):
+            blockers.append("automated rights policy not passing")
+        latest_rights_decision = db.execute(
+            "SELECT actor_type, status FROM music_decisions WHERE blind_id = ? "
+            "AND decision_type = 'rights' ORDER BY rowid DESC LIMIT 1",
+            (blind_id,),
+        ).fetchone()
+        if automatic and (
+            latest_rights_decision is None
+            or latest_rights_decision["actor_type"] != "machine"
+            or latest_rights_decision["status"] != "commercial_use_confirmed"
+        ):
+            blockers.append("latest rights decision is not policy confirmation")
+        lyrics = self._latest_evaluation(db, "lyrics", spec.lyrics.id, lyric_hash(spec.lyrics))
+        brief_hash = json_hash(spec.brief.model_dump(mode="json"))
+        manual_lyrics = db.execute(
+            "SELECT status FROM music_lyric_decisions WHERE lyric_id = ? AND lyric_sha256 = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (spec.lyrics.id, lyric_hash(spec.lyrics)),
+        ).fetchone()
+        if (lyrics is None or lyrics["status"] != "pass") and (
+            manual_lyrics is None or manual_lyrics["status"] != "approved"
+        ):
+            blockers.append("exact lyrics not approved by policy or manual intervention")
+        if lyrics is not None and lyrics["status"] != "pass":
+            blockers.append("latest exact lyrics policy failed")
+        if (
+            lyrics is not None
+            and json.loads(lyrics["evidence_json"]).get("brief_sha256") != brief_hash
+        ):
+            blockers.append("lyrics policy brief identity differs")
+        if automatic and (lyrics is None or lyrics["status"] != "pass"):
+            blockers.append("automated lyrics policy not passing")
+        if manual_lyrics is not None and manual_lyrics["status"] == "rejected":
+            blockers.append("manual exact lyrics rejection")
+        qa = self._latest_evaluation(db, "qa", blind_id, output["sha256"])
+        if qa is None or qa["status"] != "pass":
+            blockers.append("music QA policy not passing")
+        reviews = db.execute(
+            "SELECT hard_failures_json FROM music_reviews WHERE blind_id = ?", (blind_id,)
+        ).fetchall()
+        if any(json.loads(row["hard_failures_json"]) for row in reviews):
+            blockers.append("human review hard failure")
+        if output["approval_status"] == "rejected":
+            blockers.append("manual rejection veto")
+        try:
+            self._verify_audio(self._audio_path(output["request_id"]), output)
+        except (OSError, ValueError):
+            blockers.append("audio integrity failure")
+        return blockers
+
+    def evaluate_approval(self, blind_id: str) -> dict[str, Any]:
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            blockers = self._approval_blockers(db, blind_id, automatic=True)
+            status = "pass" if not blockers else "blocked"
+            exact_lyrics = CanonicalMusicSpec.model_validate_json(
+                output["canonical_spec_json"]
+            ).lyrics
+            prerequisites = {
+                "lyrics": self._latest_evaluation(
+                    db, "lyrics", exact_lyrics.id, lyric_hash(exact_lyrics)
+                ),
+                "rights": self._latest_evaluation(db, "rights", blind_id, output["sha256"]),
+                "qa": self._latest_evaluation(db, "qa", blind_id, output["sha256"]),
+            }
+            evidence = {
+                "blockers": blockers,
+                "request_id": output["request_id"],
+                "audio_sha256": output["sha256"],
+                "lyric_sha256": lyric_hash(exact_lyrics),
+                "rights_status": output["rights_status"],
+                "prerequisite_evaluations": {
+                    kind: {"evaluation_id": row["evaluation_id"], "status": row["status"]}
+                    if row is not None
+                    else None
+                    for kind, row in prerequisites.items()
+                },
+            }
+            record = self._record_evaluation(
+                db,
+                "approval",
+                "audio",
+                blind_id,
+                output["sha256"],
+                status,
+                evidence,
+                {
+                    "lyrics_pass": True,
+                    "rights_confirmed": True,
+                    "qa_pass": True,
+                    "hard_failures_allowed": 0,
+                    "human_rejection_veto": True,
+                },
+            )
+            if status == "pass":
+                db.execute(
+                    "INSERT INTO music_decisions (decision_id, blind_id, decision_type, status, "
+                    "actor, evidence, created_at, actor_type) "
+                    "VALUES (?, ?, 'approval', 'approved', ?, ?, ?, 'machine')",
+                    (
+                        str(uuid4()),
+                        blind_id,
+                        POLICIES["approval"][2],
+                        f"policy evaluation {record['evaluation_id']}",
+                        now(),
+                    ),
+                )
+                db.execute(
+                    "UPDATE music_outputs SET approval_status = 'approved' WHERE blind_id = ?",
+                    (blind_id,),
+                )
+            else:
+                self._invalidate(db, blind_id, "approval policy blocked: " + "; ".join(blockers))
+            db.commit()
+        return record
+
+    def evaluate_timing(self, blind_id: str, version: int) -> dict[str, Any]:
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            row = db.execute(
+                "SELECT analysis_json FROM music_timing WHERE blind_id = ? AND version = ?",
+                (blind_id, version),
+            ).fetchone()
+            if row is None:
+                raise KeyError((blind_id, version))
+            analysis = TimingAnalysis.model_validate_json(row["analysis_json"])
+            checks = {
+                "audio_sha_matches": analysis.audio_sha256 == output["sha256"],
+                "duration_matches": abs(analysis.duration_seconds - output["duration_seconds"])
+                < 0.001,
+                "beats_present": bool(analysis.beat_seconds),
+                "downbeats_present": bool(analysis.downbeat_seconds),
+                "lyric_lines_present": bool(analysis.lyric_lines),
+                "sections_present": bool(analysis.sections),
+                "words_present": bool(analysis.words),
+                "ordered": all(
+                    tuple(sorted(items)) == items
+                    for items in (analysis.beat_seconds, analysis.downbeat_seconds)
+                ),
+            }
+            status = "pass" if all(checks.values()) else "fail"
+            record = self._record_evaluation(
+                db,
+                "timing",
+                "timing",
+                f"{blind_id}:{version}",
+                output["sha256"],
+                status,
+                {"checks": checks, "analysis_sha256": json_hash(analysis.model_dump(mode="json"))},
+                {
+                    "required_fields": [
+                        "beat_seconds",
+                        "downbeat_seconds",
+                        "sections",
+                        "lyric_lines",
+                        "words",
+                    ],
+                    "duration_tolerance_seconds": 0.001,
+                },
+            )
+            if status == "pass":
+                db.execute(
+                    "INSERT INTO music_timing_decisions (decision_id, blind_id, version, "
+                    "status, actor, evidence, created_at, actor_type) "
+                    "VALUES (?, ?, ?, 'approved', ?, ?, ?, 'machine')",
+                    (
+                        str(uuid4()),
+                        blind_id,
+                        version,
+                        POLICIES["timing"][2],
+                        f"policy evaluation {record['evaluation_id']}",
+                        now(),
+                    ),
+                )
+            db.commit()
+        return record
+
     def decision(
         self, blind_id: str, decision_type: str, status: str, actor: str, evidence: str
     ) -> str:
@@ -544,31 +1056,12 @@ class MusicBenchmark:
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             if decision_type == "approval" and status == "approved":
-                row = db.execute(
-                    "SELECT o.rights_status, r.canonical_spec_json FROM music_outputs o "
-                    "JOIN music_requests r USING (request_id) WHERE o.blind_id = ?",
-                    (blind_id,),
-                ).fetchone()
-                if row is None or row["rights_status"] != "commercial_use_confirmed":
-                    raise ValueError("music approval requires cleared rights")
-                lyrics = CanonicalMusicSpec.model_validate_json(row["canonical_spec_json"]).lyrics
-                lyric_row = db.execute(
-                    "SELECT status FROM music_lyric_decisions WHERE lyric_id = ? "
-                    "AND lyric_sha256 = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                    (lyrics.id, lyric_hash(lyrics)),
-                ).fetchone()
-                if lyric_row is None or lyric_row["status"] != "approved":
-                    raise ValueError("music approval requires approved lyrics")
-                reviews = db.execute(
-                    "SELECT reviewer, hard_failures_json FROM music_reviews WHERE blind_id = ?",
-                    (blind_id,),
-                ).fetchall()
-                if len(reviews) < 2 or any(
-                    json.loads(item["hard_failures_json"]) for item in reviews
-                ):
-                    raise ValueError("music approval requires two clean listening reviews")
+                blockers = self._approval_blockers(db, blind_id)
+                if blockers:
+                    raise ValueError("music approval blocked: " + "; ".join(blockers))
             db.execute(
-                "INSERT INTO music_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO music_decisions (decision_id, blind_id, decision_type, status, "
+                "actor, evidence, created_at, actor_type) VALUES (?, ?, ?, ?, ?, ?, ?, 'human')",
                 (decision_id, blind_id, decision_type, status, actor, evidence, now()),
             )
             column = "rights_status" if decision_type == "rights" else "approval_status"
@@ -576,15 +1069,7 @@ class MusicBenchmark:
                 f"UPDATE music_outputs SET {column} = ? WHERE blind_id = ?", (status, blind_id)
             )
             if decision_type == "rights" and status != "commercial_use_confirmed":
-                db.execute(
-                    "UPDATE music_outputs SET approval_status = 'pending' WHERE blind_id = ?",
-                    (blind_id,),
-                )
-                db.execute(
-                    "INSERT INTO music_decisions VALUES (?, ?, 'approval', 'pending', "
-                    "'system', 'rights no longer confirmed', ?)",
-                    (str(uuid4()), blind_id, now()),
-                )
+                self._invalidate(db, blind_id, "rights no longer confirmed")
             db.commit()
         return decision_id
 
@@ -596,7 +1081,9 @@ class MusicBenchmark:
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                "INSERT INTO music_lyric_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO music_lyric_decisions (decision_id, lyric_id, lyric_sha256, "
+                "status, actor, evidence, created_at, actor_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'human')",
                 (decision_id, lyrics.id, exact_hash, status, actor, evidence, now()),
             )
             if status == "rejected":
@@ -612,19 +1099,10 @@ class MusicBenchmark:
                     ).lyrics
                     if lyric_hash(candidate) != exact_hash:
                         continue
-                    db.execute(
-                        "UPDATE music_outputs SET approval_status = 'pending' WHERE blind_id = ?",
-                        (output["blind_id"],),
-                    )
-                    db.execute(
-                        "INSERT INTO music_decisions VALUES (?, ?, 'approval', 'pending', "
-                        "'system', ?, ?)",
-                        (
-                            str(uuid4()),
-                            output["blind_id"],
-                            f"exact lyrics rejected: {lyrics.id} {exact_hash}",
-                            now(),
-                        ),
+                    self._invalidate(
+                        db,
+                        output["blind_id"],
+                        f"exact lyrics rejected: {lyrics.id} {exact_hash}",
                     )
             db.commit()
         return decision_id
@@ -652,7 +1130,9 @@ class MusicBenchmark:
         decision_id = str(uuid4())
         with closing(self.database.connect()) as db:
             db.execute(
-                "INSERT INTO music_timing_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO music_timing_decisions (decision_id, blind_id, version, status, "
+                "actor, evidence, created_at, actor_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'human')",
                 (decision_id, blind_id, version, status, actor, evidence, now()),
             )
             db.commit()
