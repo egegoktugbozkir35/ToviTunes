@@ -102,8 +102,8 @@ class BenchmarkStore:
         error_reason: str | None = None,
     ) -> None:
         allowed = {
-            "prepared": {"remote_started", "retryable_failure", "terminal_failure"},
-            "retryable_failure": {"remote_started"},
+            "prepared": {"remote_started", "retryable_failure", "terminal_failure", "ambiguous"},
+            "retryable_failure": {"remote_started", "retryable_failure", "ambiguous"},
             "remote_started": {
                 "retryable_failure",
                 "terminal_failure",
