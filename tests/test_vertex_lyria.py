@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
+from tovitunes.cli import main
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.benchmark import MusicBenchmark, plan
 from tovitunes.music.models import load_brief, load_lyrics
@@ -96,6 +97,7 @@ def setup(
 def vertex_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "tovitunes")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.delenv("GOOGLE_CLOUD_QUOTA_PROJECT", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
 
@@ -114,6 +116,7 @@ def test_dry_run_has_three_deterministic_plans_without_adc(
     request = first[0].translated_request
     assert request["backend"] == "vertex_ai_interactions"
     assert request["project"] == "{GOOGLE_CLOUD_PROJECT}"
+    assert request["quota_project"] == "{GOOGLE_CLOUD_PROJECT}"
     assert request["location"] == "global"
     assert request["endpoint"].endswith("/locations/global/interactions")
     assert set(request["body"]) == {"model", "input", "store"}
@@ -129,7 +132,8 @@ def test_dry_run_has_three_deterministic_plans_without_adc(
 
 
 @pytest.mark.parametrize(
-    "reason", ["missing_project", "wrong_location", "missing_adc", "refresh_failure"]
+    "reason",
+    ["missing_project", "invalid_quota", "wrong_location", "missing_adc", "refresh_failure"],
 )
 def test_preflight_failure_has_zero_generation_posts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reason: str
@@ -144,6 +148,8 @@ def test_preflight_failure_has_zero_generation_posts(
     store, provider, item = setup(tmp_path, handler, credentials=credentials)
     if reason == "missing_project":
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT")
+    elif reason == "invalid_quota":
+        monkeypatch.setenv("GOOGLE_CLOUD_QUOTA_PROJECT", "bad/project")
     elif reason == "wrong_location":
         monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
     elif reason == "missing_adc":
@@ -186,6 +192,8 @@ def test_completed_post_boundary_receipt_and_evidence(tmp_path: Path) -> None:
             "locations/global/interactions"
         )
         assert request.headers["authorization"] == f"Bearer {TOKEN}"
+        assert request.headers["content-type"] == "application/json"
+        assert request.headers["x-goog-user-project"] == "tovitunes"
         assert set(json.loads(request.content)) == {"model", "input", "store"}
         return httpx.Response(200, json=interaction())
 
@@ -215,6 +223,7 @@ def test_completed_post_boundary_receipt_and_evidence(tmp_path: Path) -> None:
     assert output["approval_status"] == "pending"
     assert (store.audio_root / output["relative_path"]).read_bytes() == TONE.read_bytes()
     assert TOKEN not in json.dumps(row) + json.dumps(receipt)
+    assert json.loads(row["translated_request_json"])["quota_project"] == "tovitunes"
     assert store.run(item, provider)["action"] == "reused" and posts == ["POST"]
 
 
@@ -349,6 +358,7 @@ def test_queued_post_resumes_with_gets_until_completed(tmp_path: Path) -> None:
         if request.method == "POST":
             return httpx.Response(200, json=interaction(status="queued"))
         assert request.method == "GET"
+        assert request.headers["x-goog-user-project"] == "tovitunes"
         assert request.url.path.endswith("/interactions/vertex-interaction-123")
         get_count += 1
         return httpx.Response(
@@ -378,6 +388,105 @@ def test_queued_post_resumes_with_gets_until_completed(tmp_path: Path) -> None:
     assert (store.audio_root / f"{request_id}.mp3").read_bytes() == TONE.read_bytes()
     assert store.run(item, provider)["action"] == "reused"
     assert methods.count("POST") == 1
+
+
+def test_explicit_quota_project_is_used_for_post_and_get(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GOOGLE_CLOUD_QUOTA_PROJECT", "quota-project-1")
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        assert request.headers["x-goog-user-project"] == "quota-project-1"
+        return httpx.Response(
+            200, json=interaction(status="queued" if request.method == "POST" else "completed")
+        )
+
+    store, provider, item = setup(tmp_path, handler)
+    assert item.translated_request["project"] == "tovitunes"
+    assert item.translated_request["quota_project"] == "quota-project-1"
+    first = store.run(item, provider)
+    assert first["status"] == "ambiguous"
+    assert store.provider_resume(first["request_id"], provider)["status"] == "succeeded"
+    assert methods == ["POST", "GET"]
+
+
+def test_attempt_selector_limits_cli_to_one_post(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "schema_version: 1\n"
+        f"database_path: {tmp_path.as_posix()}/music.sqlite\n"
+        f"data_root: {tmp_path.as_posix()}/data\n"
+        f"brand_root: {(ROOT / 'brands/tovitunes').as_posix()}\n"
+        "publication_enabled: false\nexpected_youtube_channel_id: null\n",
+        encoding="utf-8",
+    )
+    argv = ["--config", str(config), "music-benchmark"]
+
+    def invoke(*arguments: str) -> dict[str, Any]:
+        assert main([*argv, *arguments]) == 0
+        return json.loads(capsys.readouterr().out)
+
+    full = invoke("plan", "--provider", "google")
+    assert full["planned_request_count"] == 3
+    for attempt in (1, 2, 3):
+        selected = invoke("plan", "--provider", "google", "--attempt", str(attempt))
+        assert selected["planned_request_count"] == 1
+        assert selected["requests"][0]["attempt"] == attempt
+    first = invoke("run", "--provider", "google", "--attempt", "1", "--dry-run")
+    second = invoke("run", "--provider", "google", "--attempt", "1", "--dry-run")
+    assert first == second
+    assert first["planned_request_count"] == 1
+    assert first["requests"][0]["translated_request"]["quota_project"] == "tovitunes"
+
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(200, json=interaction())
+
+    provider = VertexLyriaProvider(
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        credentials_loader=lambda: FakeCredentials(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("tovitunes.cli.VertexLyriaProvider", lambda: provider)
+    live_style = invoke("run", "--provider", "google", "--attempt", "1")
+    assert len(live_style["results"]) == 1
+    assert methods == ["POST"]
+
+
+@pytest.mark.parametrize("selector", ["0", "-1", "4", "1.5", "abc"])
+def test_invalid_cli_attempt_does_not_call_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, selector: str
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        (ROOT / "config.example.yaml")
+        .read_text(encoding="utf-8")
+        .replace(
+            "brand_root: brands/tovitunes", f"brand_root: {(ROOT / 'brands/tovitunes').as_posix()}"
+        )
+    )
+    monkeypatch.setattr(
+        "tovitunes.cli.VertexLyriaProvider",
+        lambda: (_ for _ in ()).throw(AssertionError("provider constructed")),
+    )
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--config",
+                str(config),
+                "music-benchmark",
+                "run",
+                "--provider",
+                "google",
+                "--attempt",
+                selector,
+            ]
+        )
 
 
 def test_budget_exceeded_post_is_terminal_without_retry(tmp_path: Path) -> None:

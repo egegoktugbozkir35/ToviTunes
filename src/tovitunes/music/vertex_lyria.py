@@ -110,9 +110,11 @@ class VertexLyriaProvider:
 
     def translate(self, spec: CanonicalMusicSpec) -> dict[str, Any]:
         project = os.environ.get("GOOGLE_CLOUD_PROJECT") or "{GOOGLE_CLOUD_PROJECT}"
+        quota_project = os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT", project)
         return {
             "backend": self.backend,
             "project": project,
+            "quota_project": quota_project,
             "location": self.location,
             "endpoint": (
                 "https://aiplatform.googleapis.com/v1beta1/projects/"
@@ -125,10 +127,15 @@ class VertexLyriaProvider:
             },
         }
 
-    def _preflight(self, translated: dict[str, Any]) -> tuple[str, str]:
+    def _preflight(self, translated: dict[str, Any]) -> tuple[str, str, str]:
         project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
         if not PROJECT_PATTERN.fullmatch(project):
             raise MusicFailure("GOOGLE_CLOUD_PROJECT is missing or invalid", "retryable_failure")
+        quota_project = os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT", project)
+        if not PROJECT_PATTERN.fullmatch(quota_project):
+            raise MusicFailure(
+                "GOOGLE_CLOUD_QUOTA_PROJECT is missing or invalid", "retryable_failure"
+            )
         if os.environ.get("GOOGLE_CLOUD_LOCATION", "global") != "global":
             raise MusicFailure("GOOGLE_CLOUD_LOCATION must be global", "retryable_failure")
         expected_endpoint = (
@@ -139,6 +146,7 @@ class VertexLyriaProvider:
             translated.get("backend") != self.backend
             or translated.get("location") != self.location
             or translated.get("project") not in (project, "{GOOGLE_CLOUD_PROJECT}")
+            or translated.get("quota_project") not in (quota_project, "{GOOGLE_CLOUD_PROJECT}")
             or translated.get("endpoint")
             not in (
                 expected_endpoint,
@@ -158,7 +166,7 @@ class VertexLyriaProvider:
             raise MusicFailure(
                 "Vertex Application Default Credentials unavailable", "retryable_failure"
             ) from exc
-        return expected_endpoint, token
+        return expected_endpoint, token, quota_project
 
     @staticmethod
     def _response_json(response: httpx.Response, expected_id: str | None = None) -> dict[str, Any]:
@@ -296,13 +304,17 @@ class VertexLyriaProvider:
     ) -> MusicResult:
         if translated.get("body") != self.translate(spec)["body"]:
             raise MusicFailure("Vertex plan differs from canonical inputs", "retryable_failure")
-        endpoint, token = self._preflight(translated)
+        endpoint, token, quota_project = self._preflight(translated)
         try:
             body = json.dumps(translated["body"], sort_keys=True, separators=(",", ":")).encode()
             request = httpx.Request(
                 "POST",
                 endpoint,
-                headers={"authorization": f"Bearer {token}", "content-type": "application/json"},
+                headers={
+                    "authorization": f"Bearer {token}",
+                    "content-type": "application/json",
+                    "x-goog-user-project": quota_project,
+                },
                 content=body,
             )
         except (TypeError, ValueError) as exc:
@@ -328,10 +340,20 @@ class VertexLyriaProvider:
     def retrieve(self, interaction_id: str, translated: dict[str, Any]) -> MusicResult:
         if not INTERACTION_PATTERN.fullmatch(interaction_id):
             raise MusicFailure("stored Vertex interaction ID invalid", "retryable_failure")
-        endpoint, token = self._preflight(translated)
-        request = httpx.Request(
-            "GET", f"{endpoint}/{interaction_id}", headers={"authorization": f"Bearer {token}"}
-        )
+        endpoint, token, quota_project = self._preflight(translated)
+        try:
+            request = httpx.Request(
+                "GET",
+                f"{endpoint}/{interaction_id}",
+                headers={
+                    "authorization": f"Bearer {token}",
+                    "x-goog-user-project": quota_project,
+                },
+            )
+        except (TypeError, ValueError) as exc:
+            raise MusicFailure(
+                "invalid local Vertex interaction request", "retryable_failure"
+            ) from exc
         client = self._client or httpx.Client(timeout=httpx.Timeout(60.0), follow_redirects=False)
         try:
             try:
