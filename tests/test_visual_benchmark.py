@@ -1,6 +1,7 @@
 import base64
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
@@ -104,8 +105,14 @@ class FakeProvider:
         )
 
     def generate(
-        self, spec: CanonicalImageSpec, reference_paths: tuple[Path, ...]
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult:
+        if on_remote_start is not None:
+            on_remote_start()
         self.calls += 1
         if isinstance(self.result, Exception):
             raise self.result
@@ -118,10 +125,75 @@ class FakeTransport:
         self.calls: list[tuple[str, dict[str, str], bytes]] = []
 
     def send(
-        self, url: str, headers: dict[str, str], body: bytes, timeout_seconds: float
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+        timeout_seconds: float,
+        *,
+        on_remote_start: Callable[[], None] | None = None,
     ) -> HttpResponse:
+        if on_remote_start is not None:
+            on_remote_start()
         self.calls.append((url, headers, body))
         return self.response
+
+
+class BoundaryTransport:
+    """Offline transport that observes the durable state at the call boundary."""
+
+    def __init__(self, state: BenchmarkStore, response: HttpResponse | Exception) -> None:
+        self.state = state
+        self.response = response
+        self.calls = 0
+        self.hooks = 0
+        self.before: list[str] = []
+        self.at_send: list[str] = []
+
+    def send(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: bytes,
+        timeout_seconds: float,
+        *,
+        on_remote_start: Callable[[], None] | None = None,
+    ) -> HttpResponse:
+        assert on_remote_start is not None
+        request_id = self.state.requests()[0]["request_id"]
+        self.before.append(self.state.get_request(request_id)["status"])
+        on_remote_start()
+        self.hooks += 1
+        self.at_send.append(self.state.get_request(request_id)["status"])
+        self.calls += 1
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+def _boundary_response(kind: str, status: int = 200) -> HttpResponse:
+    encoded = base64.b64encode(png_bytes()).decode("ascii")
+    if kind == "openai":
+        body = {"data": [{"b64_json": encoded}]}
+    else:
+        body = {
+            "id": "gemini-request",
+            "steps": [
+                {
+                    "type": "model_output",
+                    "content": [{"type": "image", "data": encoded, "mime_type": "image/png"}],
+                }
+            ],
+        }
+    return HttpResponse(status, {"x-request-id": "remote-boundary"}, json.dumps(body).encode())
+
+
+def _boundary_provider(
+    kind: str, transport: BoundaryTransport, *, api_key: str | None = "test"
+) -> Any:
+    if kind == "openai":
+        return OpenAIImageProvider(transport=transport, api_key=api_key)
+    return GeminiImageProvider(transport=transport, api_key=api_key)
 
 
 def test_cases_rubric_prompt_and_canonical_references_are_locked() -> None:
@@ -845,3 +917,117 @@ def test_receipted_result_cannot_be_marked_safe_to_retry(
         state.transition(request_id, "retryable_failure")
     assert state.get_request(request_id)["status"] == "remote_started"
     assert provider.calls == 0
+
+@pytest.mark.parametrize("kind", ["openai", "gemini"])
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+def test_local_reference_preflight_preserves_same_attempt(
+    tmp_path: Path, catalog: BrandCatalog, kind: str, damage: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = BoundaryTransport(state, _boundary_response(kind))
+    provider = _boundary_provider(kind, transport)
+    plan = make_plan(spec, provider)
+    reference_path = runner.assets.path_for(spec.references[0].artifact_id)
+    original = reference_path.read_bytes()
+    if damage == "corrupt":
+        reference_path.write_bytes(b"corrupt reference")
+    else:
+        reference_path.unlink()
+    failed = runner.run(plan, provider)
+    request_id = failed["request_id"]
+    assert failed["status"] == "retryable_failure"
+    assert state.get_request(request_id)["error_kind"] == "local_preflight"
+    assert state.get_request(request_id)["attempt"] == 1
+    assert state.receipt(request_id) is None
+    assert transport.calls == transport.hooks == 0
+
+    reference_path.write_bytes(original)
+    success = runner.run(plan, provider)
+    assert success["status"] == "succeeded"
+    assert success["request_id"] == request_id
+    assert state.get_request(request_id)["attempt"] == 1
+    assert transport.calls == transport.hooks == 1
+    assert transport.before == ["retryable_failure"]
+    assert transport.at_send == ["remote_started"]
+
+
+@pytest.mark.parametrize("kind", ["openai", "gemini"])
+def test_missing_credential_is_local_preflight(
+    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    key_name = "OPENAI_API_KEY" if kind == "openai" else "GEMINI_API_KEY"
+    monkeypatch.delenv(key_name, raising=False)
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = BoundaryTransport(state, _boundary_response(kind))
+    provider = _boundary_provider(kind, transport, api_key=None)
+    plan = make_plan(spec, provider)
+    failed = runner.run(plan, provider)
+    assert failed["status"] == "retryable_failure"
+    assert state.receipt(failed["request_id"]) is None
+    assert transport.calls == transport.hooks == 0
+    assert state.get_request(failed["request_id"])["error_kind"] == "local_preflight"
+    monkeypatch.setenv(key_name, "test")
+    success = runner.run(plan, provider)
+    assert success["status"] == "succeeded"
+    assert success["request_id"] == failed["request_id"]
+    assert transport.calls == transport.hooks == 1
+    assert transport.at_send == ["remote_started"]
+
+
+@pytest.mark.parametrize("kind", ["openai", "gemini"])
+@pytest.mark.parametrize("outcome", ["timeout", "http_500", "http_429"])
+def test_post_boundary_outcome_stays_fail_closed(
+    tmp_path: Path, catalog: BrandCatalog, kind: str, outcome: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    response: HttpResponse | Exception = (
+        TimeoutError("transport lost")
+        if outcome == "timeout"
+        else _boundary_response(kind, 500 if outcome == "http_500" else 429)
+    )
+    transport = BoundaryTransport(state, response)
+    provider = _boundary_provider(kind, transport)
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    expected = "retryable_failure" if outcome == "http_429" else "ambiguous"
+    assert first["status"] == expected
+    assert transport.calls == transport.hooks == 1
+    assert transport.before == ["prepared"]
+    assert transport.at_send == ["remote_started"]
+    assert state.receipt(first["request_id"]) is None
+    transport.response = _boundary_response(kind)
+    second = runner.run(plan, provider)
+    if outcome == "http_429":
+        assert second["status"] == "succeeded"
+        assert second["request_id"] == first["request_id"]
+        assert transport.calls == transport.hooks == 2
+        assert transport.at_send == ["remote_started", "remote_started"]
+    else:
+        assert second["action"] == "manual_reconciliation_required"
+        assert transport.calls == transport.hooks == 1
+
+
+def test_urllib_hook_runs_after_request_construction_before_urlopen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.request
+
+    from tovitunes.benchmark.providers import UrllibTransport
+
+    calls: list[str] = []
+
+    def broken_request(*args: Any, **kwargs: Any) -> None:
+        calls.append("request")
+        raise ValueError("bad local request")
+
+    monkeypatch.setattr(urllib.request, "Request", broken_request)
+    with pytest.raises(ValueError, match="bad local request"):
+        UrllibTransport().send(
+            "https://example.invalid",
+            {},
+            b"body",
+            1,
+            on_remote_start=lambda: calls.append("remote_start"),
+        )
+    assert calls == ["request"]
+
