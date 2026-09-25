@@ -121,13 +121,17 @@ def _api_failure(response: HttpResponse) -> ProviderFailure:
     request_id = response.headers.get("x-request-id")
     try:
         raw = json.loads(response.body)
-        error = raw.get("error", raw)
+        error = raw.get("error", raw) if isinstance(raw, dict) else raw
         message = error.get("message") if isinstance(error, dict) else None
+        if request_id is None and isinstance(raw, dict):
+            request_id = raw.get("id") or raw.get("request_id")
     except (json.JSONDecodeError, UnicodeDecodeError):
         message = None
-    outcome: Literal["retryable_failure", "terminal_failure"] = (
+    outcome: Literal["retryable_failure", "terminal_failure", "ambiguous"] = (
         "retryable_failure"
-        if response.status == 429 or response.status >= 500
+        if response.status == 429
+        else "ambiguous"
+        if response.status == 408 or response.status >= 500
         else "terminal_failure"
     )
     return ProviderFailure(
@@ -222,8 +226,7 @@ class OpenAIImageProvider:
                 [
                     f"--{boundary}\r\n".encode(),
                     (
-                        'Content-Disposition: form-data; name="image[]"; '
-                        f'filename="{filename}"\r\n'
+                        f'Content-Disposition: form-data; name="image[]"; filename="{filename}"\r\n'
                     ).encode(),
                     f"Content-Type: {mime_type}\r\n\r\n".encode(),
                     data,
@@ -242,21 +245,34 @@ class OpenAIImageProvider:
         )
         if response.status >= 400:
             raise _api_failure(response)
+        raw: Any = None
         try:
             raw = json.loads(response.body)
+            if not isinstance(raw, dict):
+                raise ValueError("success body is not an object")
             encoded = raw["data"][0]["b64_json"]
             image_bytes = base64.b64decode(encoded, validate=True)
-        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            return ProviderResult(
+                image_bytes=image_bytes,
+                mime_type="image/png",
+                provider_request_id=response.headers.get("x-request-id") or raw.get("id"),
+                usage=raw.get("usage"),
+                response_metadata={"created": raw.get("created"), "output_count": len(raw["data"])},
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as exc:
             raise ProviderFailure(
-                "malformed OpenAI image response", outcome="terminal_failure"
+                "malformed OpenAI image response",
+                outcome="ambiguous",
+                provider_request_id=response.headers.get("x-request-id")
+                or (raw.get("id") if isinstance(raw, dict) else None),
             ) from exc
-        return ProviderResult(
-            image_bytes=image_bytes,
-            mime_type="image/png",
-            provider_request_id=response.headers.get("x-request-id") or raw.get("id"),
-            usage=raw.get("usage"),
-            response_metadata={"created": raw.get("created"), "output_count": len(raw["data"])},
-        )
 
 
 class GeminiImageProvider:
@@ -341,8 +357,11 @@ class GeminiImageProvider:
         )
         if response.status >= 400:
             raise _api_failure(response)
+        raw = None
         try:
             raw = json.loads(response.body)
+            if not isinstance(raw, dict):
+                raise ValueError("success body is not an object")
             interaction = raw.get("interaction", raw)
             steps = interaction["steps"]
             images = [
@@ -355,14 +374,26 @@ class GeminiImageProvider:
             image = images[-1]
             image_bytes = base64.b64decode(image["data"], validate=True)
             mime_type = image.get("mime_type", "image/png")
-        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            return ProviderResult(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                provider_request_id=interaction.get("id") or response.headers.get("x-request-id"),
+                usage=interaction.get("usage") or interaction.get("usage_metadata"),
+                response_metadata={"step_count": len(steps), "image_output_count": len(images)},
+            )
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            json.JSONDecodeError,
+        ) as exc:
+            nested = raw.get("interaction") if isinstance(raw, dict) else None
             raise ProviderFailure(
-                "malformed Gemini image response", outcome="terminal_failure"
+                "malformed Gemini image response",
+                outcome="ambiguous",
+                provider_request_id=response.headers.get("x-request-id")
+                or (nested.get("id") if isinstance(nested, dict) else None)
+                or (raw.get("id") if isinstance(raw, dict) else None),
             ) from exc
-        return ProviderResult(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            provider_request_id=interaction.get("id") or response.headers.get("x-request-id"),
-            usage=interaction.get("usage") or interaction.get("usage_metadata"),
-            response_metadata={"step_count": len(steps), "image_output_count": len(images)},
-        )
