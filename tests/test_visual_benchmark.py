@@ -1,5 +1,6 @@
 import base64
 import json
+import sqlite3
 from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
@@ -10,7 +11,7 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 
-from tovitunes.artifacts.store import AssetStore
+from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.benchmark.models import (
     CanonicalImageSpec,
     ReferenceImage,
@@ -188,16 +189,14 @@ def test_provider_translation_and_response_extraction(
         HttpResponse(
             200,
             {"x-request-id": "oa-123"},
-            json.dumps(
-                {"data": [{"b64_json": output}], "usage": {"input_tokens": 4}}
-            ).encode(),
+            json.dumps({"data": [{"b64_json": output}], "usage": {"input_tokens": 4}}).encode(),
         )
     )
     openai = OpenAIImageProvider(transport=openai_transport, api_key="test")
     openai_result = openai.generate(spec, tuple(paths))
     assert openai_result.image_bytes == png_bytes()
     assert openai_result.provider_request_id == "oa-123"
-    assert b'gpt-image-2.5-sunburst' in openai_transport.calls[0][2]
+    assert b"gpt-image-2.5-sunburst" in openai_transport.calls[0][2]
     assert openai_transport.calls[0][2].count(b'name="image[]"') == 3
 
     gemini_transport = FakeTransport(
@@ -440,12 +439,8 @@ def test_score_validation_gates_averaging_and_adjudication() -> None:
     )
     assert median_score.scores["character_identity"] == 3
     assert median_score.usable
-    identity_fail = resolve_reviews(
-        (scorecard("b", "a", 2), scorecard("b", "b", 2)), rubric
-    )
-    teaching_fail = resolve_reviews(
-        (scorecard("b", "a", 4, 2), scorecard("b", "b", 4, 2)), rubric
-    )
+    identity_fail = resolve_reviews((scorecard("b", "a", 2), scorecard("b", "b", 2)), rubric)
+    teaching_fail = resolve_reviews((scorecard("b", "a", 4, 2), scorecard("b", "b", 4, 2)), rubric)
     hard_fail = resolve_reviews(
         (
             scorecard("b", "a", hard=("wrong target color",)),
@@ -487,3 +482,366 @@ def test_known_and_unknown_cost_aggregation_and_median_latency(
     report = aggregate(state, rubric)["providers"][0]
     assert report["actual_spend"] is None
     assert report["usable_outputs_per_dollar"] is None
+
+@pytest.mark.parametrize(
+    ("status", "outcome"),
+    [
+        (429, "retryable_failure"),
+        (408, "ambiguous"),
+        (500, "ambiguous"),
+        (503, "ambiguous"),
+        (400, "terminal_failure"),
+        (401, "terminal_failure"),
+    ],
+)
+def test_http_failure_classification_and_request_id(
+    tmp_path: Path, catalog: BrandCatalog, status: int, outcome: str
+) -> None:
+    data = png_bytes()
+    paths = tuple(tmp_path / f"r-{i}.png" for i in range(3))
+    for path in paths:
+        path.write_bytes(data)
+    refs = tuple(
+        ReferenceImage(
+            role=str(i),
+            artifact_id=str(uuid4()),
+            sha256=sha256(data).hexdigest(),
+            mime_type="image/png",
+        )
+        for i in range(3)
+    )
+    provider = OpenAIImageProvider(
+        transport=FakeTransport(HttpResponse(status, {"x-request-id": "remote-123"}, b"{}")),
+        api_key="test",
+    )
+    with pytest.raises(ProviderFailure) as failure:
+        provider.generate(simple_spec(catalog, refs), paths)
+    assert failure.value.outcome == outcome
+    assert failure.value.provider_request_id == "remote-123"
+
+
+@pytest.mark.parametrize("provider_type", [OpenAIImageProvider, GeminiImageProvider])
+def test_malformed_2xx_is_ambiguous(
+    tmp_path: Path, catalog: BrandCatalog, provider_type: Any
+) -> None:
+    data = png_bytes()
+    paths = tuple(tmp_path / f"r-{i}.png" for i in range(3))
+    for path in paths:
+        path.write_bytes(data)
+    refs = tuple(
+        ReferenceImage(
+            role=str(i),
+            artifact_id=str(uuid4()),
+            sha256=sha256(data).hexdigest(),
+            mime_type="image/png",
+        )
+        for i in range(3)
+    )
+    provider = provider_type(
+        transport=FakeTransport(HttpResponse(200, {"x-request-id": "remote-456"}, b"{}")),
+        api_key="test",
+    )
+    with pytest.raises(ProviderFailure) as failure:
+        provider.generate(simple_spec(catalog, refs), paths)
+    assert failure.value.outcome == "ambiguous"
+    assert failure.value.provider_request_id == "remote-456"
+
+
+@pytest.mark.parametrize("error", ["url", "timeout"])
+def test_transport_loss_is_ambiguous(error: str) -> None:
+    import urllib.error
+
+    from tovitunes.benchmark.providers import UrllibTransport
+
+    with pytest.MonkeyPatch.context() as patch:
+
+        def lost(*args: Any, **kwargs: Any) -> None:
+            if error == "timeout":
+                raise TimeoutError("timed out")
+            raise urllib.error.URLError("lost")
+
+        patch.setattr("urllib.request.urlopen", lost)
+        with pytest.raises(ProviderFailure) as failure:
+            UrllibTransport().send("https://example.invalid", {}, b"data", 1)
+    assert failure.value.outcome == "ambiguous"
+
+
+def _received_result(
+    runner: BenchmarkRunner,
+    state: BenchmarkStore,
+    spec: CanonicalImageSpec,
+    *,
+    mime_type: str = "image/png",
+    byte_count: int | None = None,
+    digest: str | None = None,
+) -> tuple[str, FakeProvider]:
+    provider = FakeProvider(ProviderResult(image_bytes=png_bytes(), mime_type="image/png"))
+    plan = make_plan(spec, provider)
+    row = state.prepare(
+        benchmark_version=spec.benchmark_version,
+        prompt_version=spec.prompt_version,
+        pack_revision_id=spec.pack_revision_id,
+        brand_revision_id=spec.brand_revision_id,
+        case_id=spec.case_id,
+        attempt=spec.attempt,
+        provider=provider.provider,
+        model=provider.model,
+        fingerprint=plan.input_fingerprint,
+        canonical_spec=plan.canonical_spec,
+        translated_request=plan.translated_request,
+        capabilities=plan.capabilities,
+    )
+    request_id = row["request_id"]
+    state.transition(request_id, "remote_started")
+    data = png_bytes()
+    runner._staged_path(request_id, mime_type).write_bytes(data)
+    state.record_receipt(
+        request_id,
+        provider_request_id="remote-789",
+        returned_sha256=digest or sha256(data).hexdigest(),
+        returned_byte_count=byte_count if byte_count is not None else len(data),
+        mime_type=mime_type,
+        latency_seconds=1.25,
+        usage={"images": 1},
+        actual_cost_amount=None,
+        cost_currency=None,
+        pricing_policy=None,
+        response_metadata={"safe": True},
+    )
+    return request_id, provider
+
+
+def test_reconcile_staged_receipt_and_idempotence(tmp_path: Path, catalog: BrandCatalog) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    request_id, provider = _received_result(runner, state, spec)
+    first = runner.reconcile(request_id)
+    second = runner.reconcile(request_id)
+    assert first["action"] == "ingested_staged_result"
+    assert second["action"] == "finalized_mapping"
+    assert first["artifact_id"] == second["artifact_id"]
+    assert provider.calls == 0
+    assert not runner._staged_path(request_id, "image/png").exists()
+    assert state.get_request(request_id)["status"] == "succeeded"
+    with state.database.connect() as connection:
+        rights = connection.execute(
+            "SELECT status FROM rights_decisions WHERE artifact_id = ?", (first["artifact_id"],)
+        ).fetchone()
+        approval = connection.execute(
+            "SELECT status FROM approval_decisions WHERE artifact_id = ?", (first["artifact_id"],)
+        ).fetchone()
+    assert rights["status"] == "unknown"
+    assert approval["status"] == "pending"
+
+
+def test_reconcile_orphan_artifact_and_output_mapping(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    request_id, provider = _received_result(runner, state, spec)
+    artifact_id = runner._ingest_result(request_id, runner._staged_path(request_id, "image/png"))
+    restored = runner.reconcile(request_id)
+    assert restored["action"] == "restored_mapping"
+    assert restored["artifact_id"] == artifact_id
+    assert provider.calls == 0
+
+    second_spec = spec.model_copy(update={"attempt": 2})
+    second_id, _ = _received_result(runner, state, second_spec)
+    second_artifact = runner._ingest_result(second_id, runner._staged_path(second_id, "image/png"))
+    record = runner.assets.get(second_artifact)
+    state.record_output(second_id, second_artifact, record.identity.slot_key, 90, 160, "image/png")
+    assert state.get_request(second_id)["status"] == "remote_started"
+    assert runner.reconcile(second_id)["action"] == "finalized_mapping"
+    assert state.get_request(second_id)["status"] == "succeeded"
+
+
+@pytest.mark.parametrize("damage", ["sha", "byte_count", "mime"])
+def test_staged_bytes_must_match_receipt(
+    tmp_path: Path, catalog: BrandCatalog, damage: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    data = png_bytes()
+    request_id, provider = _received_result(
+        runner,
+        state,
+        spec,
+        digest="f" * 64 if damage == "sha" else None,
+        byte_count=len(data) + 1 if damage == "byte_count" else None,
+        mime_type="image/jpeg" if damage == "mime" else "image/png",
+    )
+    with pytest.raises(ValueError):
+        runner.reconcile(request_id)
+    assert state.get_request(request_id)["status"] == "remote_started"
+    assert provider.calls == 0
+
+
+def test_wrong_artifact_identity_and_duplicate_orphans_fail_closed(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    request_id, _ = _received_result(runner, state, spec)
+    source = runner._staged_path(request_id, "image/png")
+    artifact_id = runner._ingest_result(request_id, source)
+    other_spec = spec.model_copy(update={"attempt": 2})
+    other_id, _ = _received_result(runner, state, other_spec)
+    other_artifact = runner._ingest_result(other_id, runner._staged_path(other_id, "image/png"))
+    with pytest.raises(ValueError, match="identity"):
+        state.validate_output(request_id, other_artifact, runner.assets)
+    runner._ingest_result(request_id, source)
+    with pytest.raises(ValueError, match="multiple"):
+        runner.reconcile(request_id)
+    assert state.output(request_id) is None
+    assert artifact_id != other_artifact
+
+
+def test_no_local_evidence_never_generates_and_success_trigger_requires_mapping(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    provider = FakeProvider(ProviderResult(image_bytes=png_bytes(), mime_type="image/png"))
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == "succeeded"
+    second_spec = spec.model_copy(update={"attempt": 2})
+    second_plan = make_plan(second_spec, provider)
+    row = state.prepare(
+        benchmark_version=second_spec.benchmark_version,
+        prompt_version=second_spec.prompt_version,
+        pack_revision_id=second_spec.pack_revision_id,
+        brand_revision_id=second_spec.brand_revision_id,
+        case_id=second_spec.case_id,
+        attempt=second_spec.attempt,
+        provider=provider.provider,
+        model=provider.model,
+        fingerprint=second_plan.input_fingerprint,
+        canonical_spec=second_plan.canonical_spec,
+        translated_request=second_plan.translated_request,
+        capabilities=second_plan.capabilities,
+    )
+    request_id = row["request_id"]
+    state.transition(request_id, "remote_started")
+    assert runner.reconcile(request_id)["action"] == "provider_side_reconciliation_required"
+    assert runner.run(second_plan, provider)["action"] == "manual_reconciliation_required"
+    assert provider.calls == 1
+    with state.database.connect() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE visual_benchmark_requests SET status = 'succeeded' WHERE request_id = ?",
+                (request_id,),
+            )
+
+
+def test_safe_429_can_retry_same_attempt(tmp_path: Path, catalog: BrandCatalog) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    provider = FakeProvider(ProviderFailure("throttled", outcome="retryable_failure"))
+    plan = make_plan(spec, provider)
+    assert runner.run(plan, provider)["status"] == "retryable_failure"
+    provider.result = ProviderResult(image_bytes=png_bytes(), mime_type="image/png")
+    assert runner.run(plan, provider)["status"] == "succeeded"
+    assert provider.calls == 2
+    assert len(state.requests()) == 1
+
+
+@pytest.mark.parametrize("fault", ["before_ingest", "after_ingest"])
+def test_run_crash_boundaries_reconcile_without_regeneration(
+    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    provider = FakeProvider(ProviderResult(image_bytes=png_bytes(), mime_type="image/png"))
+    plan = make_plan(spec, provider)
+    if fault == "before_ingest":
+        original = runner._ingest_result
+        monkeypatch.setattr(
+            runner, "_ingest_result", lambda *_: (_ for _ in ()).throw(RuntimeError())
+        )
+    else:
+        original = state.finalize_success
+        monkeypatch.setattr(
+            state, "finalize_success", lambda *_: (_ for _ in ()).throw(RuntimeError())
+        )
+    first = runner.run(plan, provider)
+    assert first["status"] == "remote_started"
+    request_id = first["request_id"]
+    assert state.receipt(request_id) is not None
+    if fault == "before_ingest":
+        monkeypatch.setattr(runner, "_ingest_result", original)
+    else:
+        monkeypatch.setattr(state, "finalize_success", original)
+    assert runner.run(plan, provider)["action"] == "manual_reconciliation_required"
+    assert runner.reconcile(request_id)["status"] == "succeeded"
+    assert provider.calls == 1
+
+
+@pytest.mark.parametrize("defect", ["dependencies", "provider", "model"])
+def test_orphan_with_wrong_identity_or_dependencies_is_rejected(
+    tmp_path: Path, catalog: BrandCatalog, defect: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    request_id, _ = _received_result(runner, state, spec)
+    source = runner._staged_path(request_id, "image/png")
+    references = spec.references
+    dependencies = tuple(
+        InputDependency(ref.artifact_id, f"benchmark reference {ref.role}") for ref in references
+    )
+    if defect == "dependencies":
+        dependencies = dependencies[:-1]
+    artifact = runner.assets.ingest(
+        source,
+        owner_scope="brand",
+        owner_id=spec.brand_revision_id,
+        kind="benchmark_image",
+        slot_key="vb_wrong" + uuid4().hex,
+        provenance=Provenance(
+            source_kind="provider",
+            acquired_at=datetime.now(UTC),
+            provider="other" if defect == "provider" else "fake",
+            model="other" if defect == "model" else "fake-image-v1",
+            request_id="remote-789",
+            local_request_id=request_id,
+            prompt_version=spec.prompt_version,
+            input_artifact_ids=tuple(ref.artifact_id for ref in references),
+        ),
+        dependencies=dependencies,
+        expected_media_type="image/png",
+    )
+    with pytest.raises(ValueError):
+        runner.reconcile(request_id)
+    assert state.output(request_id) is None
+    assert state.get_request(request_id)["status"] == "remote_started"
+    assert (
+        runner.assets.get(artifact.identity.artifact_id).sha256 == sha256(png_bytes()).hexdigest()
+    )
+
+
+def test_succeeded_file_is_revalidated_on_reuse(tmp_path: Path, catalog: BrandCatalog) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    provider = FakeProvider(ProviderResult(image_bytes=png_bytes(), mime_type="image/png"))
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == "succeeded"
+    runner.assets.path_for(first["artifact_id"]).write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="invalid"):
+        runner.run(plan, provider)
+    assert provider.calls == 1
+
+
+def test_known_bad_returned_image_is_terminal(tmp_path: Path, catalog: BrandCatalog) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    provider = FakeProvider(ProviderResult(image_bytes=b"not a png", mime_type="image/png"))
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == "terminal_failure"
+    assert state.receipt(first["request_id"]) is not None
+    assert runner.run(plan, provider)["action"] == "new_attempt_required"
+    assert provider.calls == 1
+
+
+def test_receipted_result_cannot_be_marked_safe_to_retry(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    request_id, provider = _received_result(runner, state, spec)
+    with pytest.raises(ValueError, match="cannot become safely retryable"):
+        state.transition(request_id, "retryable_failure")
+    assert state.get_request(request_id)["status"] == "remote_started"
+    assert provider.calls == 0
+
