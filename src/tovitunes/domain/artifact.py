@@ -58,6 +58,7 @@ class Provenance(BaseModel):
     provider: str | None = None
     model: str | None = None
     request_id: str | None = None
+    local_request_id: str | None = None
     operator: str | None = None
     source_uri: str | None = None
     prompt_version: str | None = None
@@ -65,7 +66,9 @@ class Provenance(BaseModel):
 
     @model_validator(mode="after")
     def source_identity(self) -> "Provenance":
-        provider_complete = self.provider and self.model and self.request_id
+        provider_complete = self.provider and self.model and (
+            self.request_id or self.local_request_id
+        )
         if self.source_kind == "provider" and not provider_complete:
             raise ValueError("provider provenance requires provider, model, and request ID")
         if self.source_kind == "manual" and not (self.operator and self.source_uri):
@@ -82,4 +85,3 @@ class Provenance(BaseModel):
             operator=operator,
             source_uri=source_uri,
         )
-
