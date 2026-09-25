@@ -70,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     run.add_argument("--lock", type=Path)
     status_parser = visual_commands.add_parser("status")
     status_parser.add_argument("--blind", action="store_true")
+    reconcile_parser = visual_commands.add_parser("reconcile")
+    reconcile_parser.add_argument("--request-id", required=True)
     review_parser = visual_commands.add_parser("review")
     review_parser.add_argument("--scorecard", type=Path, required=True)
     report_parser = visual_commands.add_parser("report")
@@ -127,9 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             database.register_catalog(load_brand(config.brand_root))
             returned_root = config.data_root / ".benchmark-returned"
             returned_root.mkdir(parents=True, exist_ok=True)
-            assets = AssetStore(
-                config.data_root, database, generated_source_roots=[returned_root]
-            )
+            assets = AssetStore(config.data_root, database, generated_source_roots=[returned_root])
             runner = BenchmarkRunner(BenchmarkStore(database), assets, returned_root)
             adapters = {(item.provider, item.model): item for item in providers}
             results = [runner.run(item, adapters[(item.provider, item.model)]) for item in plans]
@@ -140,6 +140,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         benchmark_database = Database(config.database_path)
         benchmark_database.migrate()
         state = BenchmarkStore(benchmark_database)
+        if args.visual_command == "reconcile":
+            returned_root = config.data_root / ".benchmark-returned"
+            returned_root.mkdir(parents=True, exist_ok=True)
+            assets = AssetStore(
+                config.data_root, benchmark_database, generated_source_roots=[returned_root]
+            )
+            reconciliation_result = BenchmarkRunner(state, assets, returned_root).reconcile(
+                args.request_id
+            )
+            print(json.dumps(reconciliation_result, sort_keys=True))
+            return 0 if reconciliation_result["status"] == "succeeded" else 1
         if args.visual_command == "status":
             rows = state.requests()
             output = blind_review_queue(rows) if args.blind else rows
@@ -149,9 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scorecard = load_scorecard(args.scorecard)
             review_id = state.record_review(scorecard)
             print(
-                json.dumps(
-                    {"blind_id": scorecard.blind_id, "review_id": review_id}, sort_keys=True
-                )
+                json.dumps({"blind_id": scorecard.blind_id, "review_id": review_id}, sort_keys=True)
             )
             return 0
         rubric_path = args.rubric or repository_root / "benchmarks/visual/rubric.v1.yaml"
