@@ -6,6 +6,9 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
+from PIL import Image
+
+from tovitunes.artifacts.store import AssetStore
 from tovitunes.benchmark.models import Scorecard
 from tovitunes.persistence.db import Database
 
@@ -102,7 +105,6 @@ class BenchmarkStore:
             "prepared": {"remote_started", "retryable_failure", "terminal_failure"},
             "retryable_failure": {"remote_started"},
             "remote_started": {
-                "succeeded",
                 "retryable_failure",
                 "terminal_failure",
                 "ambiguous",
@@ -119,10 +121,35 @@ class BenchmarkStore:
                 raise ValueError(
                     f"invalid benchmark request transition: {row['status']} -> {status}"
                 )
+            if (
+                status == "retryable_failure"
+                and connection.execute(
+                    "SELECT 1 FROM visual_benchmark_receipts WHERE request_id = ?", (request_id,)
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError("a received provider result cannot become safely retryable")
+            if status == "remote_started":
+                connection.execute(
+                    "UPDATE visual_benchmark_requests SET status = 'remote_started', "
+                    "provider_request_id = NULL, latency_seconds = NULL, "
+                    "usage_json = NULL, actual_cost_amount = NULL, cost_currency = NULL, "
+                    "pricing_policy = NULL, response_metadata_json = NULL, "
+                    "error_kind = NULL, error_reason = NULL, updated_at = ? "
+                    "WHERE request_id = ?",
+                    (_now(), request_id),
+                )
+                connection.commit()
+                return
             connection.execute(
-                "UPDATE visual_benchmark_requests SET status = ?, provider_request_id = ?, "
-                "latency_seconds = ?, usage_json = ?, actual_cost_amount = ?, "
-                "cost_currency = ?, pricing_policy = ?, response_metadata_json = ?, "
+                "UPDATE visual_benchmark_requests SET status = ?, "
+                "provider_request_id = COALESCE(?, provider_request_id), "
+                "latency_seconds = COALESCE(?, latency_seconds), "
+                "usage_json = COALESCE(?, usage_json), "
+                "actual_cost_amount = COALESCE(?, actual_cost_amount), "
+                "cost_currency = COALESCE(?, cost_currency), "
+                "pricing_policy = COALESCE(?, pricing_policy), "
+                "response_metadata_json = COALESCE(?, response_metadata_json), "
                 "error_kind = ?, error_reason = ?, updated_at = ? WHERE request_id = ?",
                 (
                     status,
@@ -141,6 +168,195 @@ class BenchmarkStore:
                     request_id,
                 ),
             )
+            connection.commit()
+
+    def get_request(self, request_id: str) -> dict[str, Any]:
+        with closing(self.database.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_benchmark_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        return dict(row)
+
+    def receipt(self, request_id: str) -> dict[str, Any] | None:
+        with closing(self.database.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_benchmark_receipts WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def record_receipt(
+        self,
+        request_id: str,
+        *,
+        provider_request_id: str | None,
+        returned_sha256: str,
+        returned_byte_count: int,
+        mime_type: str,
+        latency_seconds: float,
+        usage: dict[str, Any] | None,
+        actual_cost_amount: float | None,
+        cost_currency: str | None,
+        pricing_policy: str | None,
+        response_metadata: dict[str, Any],
+    ) -> None:
+        with closing(self.database.connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM visual_benchmark_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if row is None or row["status"] != "remote_started":
+                raise ValueError("receipt requires a started remote request")
+            connection.execute(
+                "INSERT INTO visual_benchmark_receipts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request_id,
+                    provider_request_id,
+                    returned_sha256,
+                    returned_byte_count,
+                    mime_type,
+                    latency_seconds,
+                    json.dumps(usage, sort_keys=True) if usage is not None else None,
+                    actual_cost_amount,
+                    cost_currency,
+                    pricing_policy,
+                    json.dumps(response_metadata, sort_keys=True),
+                    _now(),
+                ),
+            )
+            connection.execute(
+                "UPDATE visual_benchmark_requests SET provider_request_id = ?, "
+                "latency_seconds = ?, usage_json = ?, actual_cost_amount = ?, "
+                "cost_currency = ?, pricing_policy = ?, response_metadata_json = ?, "
+                "updated_at = ? WHERE request_id = ?",
+                (
+                    provider_request_id,
+                    latency_seconds,
+                    json.dumps(usage, sort_keys=True) if usage is not None else None,
+                    actual_cost_amount,
+                    cost_currency,
+                    pricing_policy,
+                    json.dumps(response_metadata, sort_keys=True),
+                    _now(),
+                    request_id,
+                ),
+            )
+            connection.commit()
+
+    def output(self, request_id: str) -> dict[str, Any] | None:
+        with closing(self.database.connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM visual_benchmark_outputs WHERE request_id = ?", (request_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def candidates(self, request_id: str) -> list[str]:
+        with closing(self.database.connect()) as connection:
+            return [
+                row["artifact_id"]
+                for row in connection.execute(
+                    "SELECT artifact_id FROM artifact_versions WHERE kind = 'benchmark_image' "
+                    "AND json_extract(provenance_json, '$.local_request_id') = ?",
+                    (request_id,),
+                )
+            ]
+
+    def validate_output(
+        self, request_id: str, artifact_id: str, assets: AssetStore
+    ) -> tuple[int, int, str]:
+        request = self.get_request(request_id)
+        receipt = self.receipt(request_id)
+        if receipt is None:
+            raise ValueError("provider-result receipt is missing")
+        for field in (
+            "provider_request_id",
+            "latency_seconds",
+            "usage_json",
+            "actual_cost_amount",
+            "cost_currency",
+            "pricing_policy",
+            "response_metadata_json",
+        ):
+            if request[field] != receipt[field]:
+                raise ValueError(f"request metadata differs from provider receipt: {field}")
+        artifact = assets.get(artifact_id)
+        spec = json.loads(request["canonical_spec_json"])
+        references = spec["references"]
+        provenance = artifact.provenance
+        if (
+            artifact.identity.owner_scope != "brand"
+            or artifact.identity.owner_id != request["brand_revision_id"]
+            or artifact.identity.kind != "benchmark_image"
+            or artifact.sha256 != receipt["returned_sha256"]
+            or artifact.byte_count != receipt["returned_byte_count"]
+            or artifact.mime_type != receipt["mime_type"]
+            or provenance.source_kind != "provider"
+            or provenance.local_request_id != request_id
+            or provenance.request_id != receipt["provider_request_id"]
+            or provenance.provider != request["provider"]
+            or provenance.model != request["model"]
+            or provenance.prompt_version != request["prompt_version"]
+            or tuple(provenance.input_artifact_ids)
+            != tuple(ref["artifact_id"] for ref in references)
+        ):
+            raise ValueError("benchmark artifact identity or receipt differs")
+        with closing(self.database.connect()) as connection:
+            dependencies = connection.execute(
+                "SELECT input_artifact_id, input_sha256, purpose FROM artifact_dependencies "
+                "WHERE consumer_artifact_id = ? ORDER BY purpose",
+                (artifact_id,),
+            ).fetchall()
+        expected = sorted(
+            (ref["artifact_id"], ref["sha256"], f"benchmark reference {ref['role']}")
+            for ref in references
+        )
+        if sorted(tuple(row) for row in dependencies) != expected:
+            raise ValueError("benchmark artifact dependencies differ")
+        if not assets.inspect(artifact_id).valid:
+            raise ValueError("benchmark artifact file is invalid")
+        with Image.open(assets.path_for(artifact_id)) as image:
+            image.load()
+            width, height = image.size
+        return width, height, artifact.mime_type
+
+    def finalize_success(
+        self, request_id: str, artifact_id: str, blind_id: str, assets: AssetStore
+    ) -> None:
+        width, height, mime_type = self.validate_output(request_id, artifact_id, assets)
+        with closing(self.database.connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            request = connection.execute(
+                "SELECT status FROM visual_benchmark_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if request is None or request["status"] not in {
+                "remote_started",
+                "ambiguous",
+                "succeeded",
+            }:
+                raise ValueError("request is not eligible for success finalization")
+            existing = connection.execute(
+                "SELECT artifact_id, blind_id, width, height, mime_type "
+                "FROM visual_benchmark_outputs WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            expected = (artifact_id, blind_id, width, height, mime_type)
+            if existing is None:
+                if request["status"] == "succeeded":
+                    raise ValueError("succeeded request has no output")
+                connection.execute(
+                    "INSERT INTO visual_benchmark_outputs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (request_id, *expected, _now()),
+                )
+            elif tuple(existing) != expected:
+                raise ValueError("conflicting benchmark output mapping")
+            if request["status"] != "succeeded":
+                connection.execute(
+                    "UPDATE visual_benchmark_requests SET status = 'succeeded', "
+                    "error_kind = NULL, error_reason = NULL, updated_at = ? "
+                    "WHERE request_id = ?",
+                    (_now(), request_id),
+                )
             connection.commit()
 
     def record_output(
