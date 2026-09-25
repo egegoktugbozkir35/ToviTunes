@@ -69,10 +69,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_plan.add_argument(
         "--provider", choices=("offline_fake", "google"), default="offline_fake"
     )
+    music_plan.add_argument("--attempt", type=int)
     music_run = music_commands.add_parser("run")
     music_run.add_argument("--offline-fake", action="store_true")
     music_run.add_argument("--provider", choices=("google",))
     music_run.add_argument("--dry-run", action="store_true")
+    music_run.add_argument("--attempt", type=int)
     music_provider_resume = music_commands.add_parser("provider-resume")
     music_provider_resume.add_argument("--request-id", required=True)
     music_commands.add_parser("status")
@@ -143,11 +145,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 parser.error("choose one music provider")
             if args.music_command == "run" and not (args.offline_fake or args.provider):
                 parser.error("choose --offline-fake or --provider google")
+            if (
+                args.attempt is not None
+                and not 1 <= args.attempt <= brief.candidate_count_per_provider
+            ):
+                parser.error("attempt must be an integer in the planned candidate set")
             provider_name = (
                 args.provider if args.music_command == "plan" else args.provider or "offline_fake"
             )
             provider = VertexLyriaProvider() if provider_name == "google" else FakeMusicProvider()
-            music_plans = plan_music(brief, lyrics, [provider])
+            try:
+                music_plans = plan_music(brief, lyrics, [provider], attempt=args.attempt)
+            except ValueError as exc:
+                parser.error(str(exc))
             if args.music_command == "plan" or args.dry_run:
                 print(
                     json.dumps(

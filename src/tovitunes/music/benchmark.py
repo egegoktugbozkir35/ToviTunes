@@ -64,18 +64,26 @@ class PlannedMusicRequest(StrictModel):
 
 
 def plan(
-    brief: MusicBrief, lyrics: Any, providers: Sequence[MusicProvider]
+    brief: MusicBrief, lyrics: Any, providers: Sequence[MusicProvider], attempt: int | None = None
 ) -> tuple[PlannedMusicRequest, ...]:
+    if attempt is not None and (
+        isinstance(attempt, bool)
+        or not isinstance(attempt, int)
+        or not 1 <= attempt <= brief.candidate_count_per_provider
+    ):
+        raise ValueError("attempt must be an integer in the planned candidate set")
     plans = []
     for provider in providers:
-        for attempt in range(1, brief.candidate_count_per_provider + 1):
-            spec = CanonicalMusicSpec(brief=brief, lyrics=lyrics, attempt=attempt)
+        for candidate_attempt in (
+            (attempt,) if attempt is not None else range(1, brief.candidate_count_per_provider + 1)
+        ):
+            spec = CanonicalMusicSpec(brief=brief, lyrics=lyrics, attempt=candidate_attempt)
             translated = provider.translate(spec)
             plans.append(
                 PlannedMusicRequest(
                     provider=provider.provider,
                     model=provider.model,
-                    attempt=attempt,
+                    attempt=candidate_attempt,
                     input_fingerprint=fingerprint(
                         spec, provider.provider, provider.model, translated
                     ),
