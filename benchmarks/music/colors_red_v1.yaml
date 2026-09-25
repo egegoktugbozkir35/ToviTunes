@@ -1,0 +1,18 @@
+schema_version: 1
+id: colors_red_v1
+episode_key: colors-red-001
+objective: Red is a color.
+examples: [apple, ball]
+language: en
+age_min: 3
+age_max: 6
+preferred_duration_seconds: [30, 40]
+maximum_duration_seconds: 45
+target_bpm: 112
+bpm_range: [100, 124]
+style: Bright, warm, catchy, simple and bouncy preschool pop with clear downbeats.
+arrangement: Light percussion, gentle bass and simple pitched instruments; no aggressive sounds or dense harmony.
+vocal_direction: Friendly clear English diction; teaching words intelligible; no mature styling, dense layering or melisma.
+sections: [tiny_intro, hook, teaching_line, reinforcement, short_ending]
+avoid: [frightening_sounds, aggressive_instrumentation, named_artist_imitation]
+candidate_count_per_provider: 3

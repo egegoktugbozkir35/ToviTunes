@@ -27,6 +27,11 @@ from tovitunes.benchmark.runner import (
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
+from tovitunes.music.benchmark import MusicBenchmark
+from tovitunes.music.benchmark import plan as plan_music
+from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
+from tovitunes.music.models import load_rubric as load_music_rubric
+from tovitunes.music.providers import FakeMusicProvider
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.planner import Goal, load_snapshot, plan, requirements
 
@@ -57,6 +62,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     character_commands.add_parser("approve")
     character_commands.add_parser("assess")
     visual = subcommands.add_parser("visual-benchmark")
+    music = subcommands.add_parser("music-benchmark")
+    music_commands = music.add_subparsers(dest="music_command", required=True)
+    music_commands.add_parser("plan")
+    music_run = music_commands.add_parser("run")
+    music_run.add_argument("--offline-fake", action="store_true", required=True)
+    music_commands.add_parser("status")
+    music_commands.add_parser("review-export")
+    music_commands.add_parser("review-report")
+    music_reconcile = music_commands.add_parser("reconcile")
+    music_reconcile.add_argument("--request-id", required=True)
+    music_review = music_commands.add_parser("review")
+    music_review.add_argument("--scorecard", type=Path, required=True)
+    lyric_decision = music_commands.add_parser("lyric-decision")
+    lyric_decision.add_argument("--lyrics-file", type=Path, required=True)
+    lyric_decision.add_argument("--status", choices=("approved", "rejected"), required=True)
+    lyric_decision.add_argument("--actor", required=True)
+    lyric_decision.add_argument("--evidence", required=True)
+    music_decision = music_commands.add_parser("decision")
+    music_decision.add_argument("--blind-id", required=True)
+    music_decision.add_argument("--type", choices=("rights", "approval"), required=True)
+    music_decision.add_argument("--status", required=True)
+    music_decision.add_argument("--actor", required=True)
+    music_decision.add_argument("--evidence", required=True)
+    music_timing = music_commands.add_parser("timing-import")
+    music_timing.add_argument("--blind-id", required=True)
+    music_timing.add_argument("--file", type=Path, required=True)
     visual_commands = visual.add_subparsers(dest="visual_command", required=True)
     run = visual_commands.add_parser("run")
     run.add_argument("--provider", action="append", choices=("google", "openai"))
@@ -78,6 +109,65 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "music-benchmark":
+        root = config.brand_root.parent.parent
+        if args.music_command in {"plan", "run"}:
+            brief = load_brief(root / "benchmarks/music/colors_red_v1.yaml")
+            lyrics = load_lyrics(root / "benchmarks/music/colors_red_lyrics_v1.yaml")
+            fake = FakeMusicProvider()
+            music_plans = plan_music(brief, lyrics, [fake])
+            if args.music_command == "plan":
+                print(
+                    json.dumps(
+                        {
+                            "dry_run": True,
+                            "live_calls": 0,
+                            "planned_request_count": len(music_plans),
+                            "requests": [p.model_dump(mode="json") for p in music_plans],
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            database = Database(config.database_path)
+            database.migrate()
+            benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
+            results = [benchmark.run(item, fake) for item in music_plans]
+            print(json.dumps({"offline_fake": True, "results": results}, sort_keys=True))
+            return 0 if all(r["status"] == "succeeded" for r in results) else 1
+        if not config.database_path.is_file():
+            parser.error("an existing music benchmark database is required")
+        database = Database(config.database_path)
+        database.migrate()
+        benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
+        if args.music_command == "status":
+            print(json.dumps(benchmark.status(), sort_keys=True))
+        elif args.music_command == "review-export":
+            print(json.dumps(benchmark.review_export(), sort_keys=True))
+        elif args.music_command == "review":
+            review = MusicReview.model_validate_json(args.scorecard.read_text(encoding="utf-8"))
+            print(json.dumps({"review_id": benchmark.review(review)}, sort_keys=True))
+        elif args.music_command == "review-report":
+            rubric = load_music_rubric(root / "benchmarks/music/rubric.v1.yaml")
+            print(json.dumps(benchmark.review_report(rubric), sort_keys=True))
+        elif args.music_command == "reconcile":
+            print(json.dumps(benchmark.reconcile(args.request_id), sort_keys=True))
+        elif args.music_command == "lyric-decision":
+            lyrics = load_lyrics(args.lyrics_file)
+            decision_id = benchmark.lyric_decision(lyrics, args.status, args.actor, args.evidence)
+            print(json.dumps({"decision_id": decision_id}, sort_keys=True))
+        elif args.music_command == "decision":
+            decision_id = benchmark.decision(
+                args.blind_id, args.type, args.status, args.actor, args.evidence
+            )
+            print(json.dumps({"decision_id": decision_id}, sort_keys=True))
+        else:
+            timing = TimingAnalysis.model_validate_json(args.file.read_text(encoding="utf-8"))
+            benchmark.save_timing(args.blind_id, timing)
+            print(
+                json.dumps({"blind_id": args.blind_id, "version": timing.version}, sort_keys=True)
+            )
+        return 0
     if args.command == "visual-benchmark":
         repository_root = config.brand_root.parent.parent
         if args.visual_command == "run":
