@@ -2,18 +2,35 @@
 
 This protocol executes the ten-scene comparison from the development plan. It does not rank providers. The adapters use the exact durable model identifiers `gemini-3.1-flash-image` and `gpt-image-2.5-sunburst`. The OpenAI model can be overridden with `--openai-model`, including compatible models such as `gpt-image-2.5-flare`.
 
-The implementation follows the first-party [Gemini image generation](https://ai.google.dev/gemini-api/docs/image-generation) and [OpenAI image generation](https://developers.openai.com/api/docs/guides/image-generation) contracts. Gemini requests omit search tools and explicitly keep grounding disabled. OpenAI uses the multiple-image edit endpoint because every request must carry the same three Tovi references. It requests the supported custom size `1008x1792`, an exact 9:16 ratio with dimensions divisible by 16.
+The Google adapter uses the first-party [Google Gen AI SDK on Vertex AI](https://googleapis.github.io/python-genai/) with Application Default Credentials (ADC), the configured Google Cloud project, and `gemini-3.1-flash-image`. It calls `models.generate_content` with the canonical prompt and all three inline Tovi references, requests `TEXT` and `IMAGE` output at 9:16, extracts exactly one inline image while ignoring accompanying text, and supplies no search or grounding tools. OpenAI uses the [multiple-image edit endpoint](https://developers.openai.com/api/docs/guides/image-generation) because every request must carry the same three Tovi references. It requests the supported custom size `1008x1792`, an exact 9:16 ratio with dimensions divisible by 16.
 
 ## Setup and execution
 
-Live calls read credentials only at call time:
+For local Google setup, run:
+
+```text
+gcloud auth login
+gcloud config set project tovitunes
+gcloud services enable aiplatform.googleapis.com
+gcloud auth application-default login
+```
+
+Set the environment for the live Vertex request:
+
+```text
+GOOGLE_CLOUD_PROJECT=tovitunes
+GOOGLE_CLOUD_LOCATION=global
+```
+
+`GOOGLE_CLOUD_PROJECT` is required for live Google calls. `GOOGLE_CLOUD_LOCATION` defaults to `global` when omitted; this model also supports `us` and `eu`. ADC credentials remain local. No Gemini Developer API key, service-account JSON key file, or `GEMINI_API_KEY` is needed. Live Vertex image calls use the configured project's billing and credits. They may incur charges. Do not start one without approval.
+
+OpenAI live calls read this credential at call time:
 
 ```text
 OPENAI_API_KEY=...
-GEMINI_API_KEY=...
 ```
 
-No credential is needed to import the package, inspect state, run tests, or create a dry run. Start with one request and inspect the exact canonical and translated request data:
+No credential or network access is needed to import the package, inspect state, run tests, or create a dry run. Start with one request and inspect the exact canonical and translated request data:
 
 ```text
 uv run python -m tovitunes.cli --config config.yaml visual-benchmark run --provider google --case red_apple --attempts 1 --dry-run
@@ -43,7 +60,7 @@ Generated media is stored in the configured `data_root` through the immutable `A
 
 HTTP 429 is a safe `retryable_failure` for the same attempt. Ordinary deterministic 4xx errors are `terminal_failure` and require a new attempt. HTTP 408, 5xx, timeouts, lost connections, and malformed 2xx success payloads are `ambiguous`: the provider may already have generated and charged for an image. Generic 5xx must not be blindly retried. A returned image whose bytes are known but fail local image validation is a known failed output. `run` never contacts a provider again for `remote_started`, `ambiguous`, or `terminal_failure` requests.
 
-Provider credentials, canonical references and request payloads are prepared locally before `remote_started` is persisted. The transport persists that state immediately before its network operation. A local preflight error is recorded as a safe `retryable_failure` with `local_preflight` as its error kind; repair the local problem and rerun the same attempt. Once the transport boundary is reached, uncertain outcomes remain fail-closed.
+Provider credentials, canonical references and request payloads are prepared before `remote_started` is persisted. For Google, the adapter validates the project, discovers and refreshes ADC, verifies reference hashes, and lets the SDK serialize the Vertex request. Its HTTP transport persists `remote_started` immediately before the generation request is sent. A local preflight error is recorded as a safe `retryable_failure` with `local_preflight` as its error kind; repair the local problem and rerun the same attempt. No result receipt is created before a remote request. Once the transport boundary is reached, uncertain outcomes remain fail-closed. Tokens, credential contents, and credential paths are not stored in metadata.
 
 After a local crash, use:
 

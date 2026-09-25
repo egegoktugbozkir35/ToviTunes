@@ -110,14 +110,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
                 return 0
-            required_keys = {
-                "google": "GEMINI_API_KEY",
-                "openai": "OPENAI_API_KEY",
-            }
             missing_keys = [
-                required_keys[name]
+                "OPENAI_API_KEY"
                 for name in provider_names
-                if not os.environ.get(required_keys[name])
+                if name == "openai" and not os.environ.get("OPENAI_API_KEY")
             ]
             if missing_keys:
                 parser.error(
