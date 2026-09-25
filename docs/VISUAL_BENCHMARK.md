@@ -37,7 +37,19 @@ The ten locked briefs are in [`benchmarks/visual/cases.v1.yaml`](../benchmarks/v
 
 The canonical prompt is assembled deterministically from the case, teaching check, pack palette, visual identity rules, forbidden changes, 9:16 requirement, and negative constraints. Its normalized JSON and SHA-256 fingerprint are persisted separately from the provider translation.
 
-Generated media is stored in the configured `data_root` through the immutable `AssetStore`. Temporary returned bytes use `data_root/.benchmark-returned` and are removed after ingestion. The database stores provider identity, exact model, request state, translations, reference IDs and hashes, dimensions, MIME type, latency, usage, safe response metadata, and cost fields. Provenance points from every output to all three input artifacts. Ingestion creates `unknown` rights and `pending` approval decisions; generation never grants commercial rights.
+Generated media is stored in the configured `data_root` through the immutable `AssetStore`. Returned bytes are written, flushed and synced to a temporary sibling, then atomically renamed to a request-scoped file in `data_root/.benchmark-returned`. An immutable SQLite receipt records their hash, byte count, MIME type, provider request ID when known, latency, usage, known cost, safe response metadata and receipt time. Staged bytes are removed only after a valid immutable artifact is mapped and the request is finalized. Artifact provenance records the local benchmark request ID separately from the provider request ID, plus the exact model and three reference dependencies. Ingestion creates `unknown` rights and `pending` approval decisions; generation never grants commercial rights.
+
+## Failure and recovery
+
+HTTP 429 is a safe `retryable_failure` for the same attempt. Ordinary deterministic 4xx errors are `terminal_failure` and require a new attempt. HTTP 408, 5xx, timeouts, lost connections, and malformed 2xx success payloads are `ambiguous`: the provider may already have generated and charged for an image. Generic 5xx must not be blindly retried. A returned image whose bytes are known but fail local image validation is a known failed output. `run` never contacts a provider again for `remote_started`, `ambiguous`, or `terminal_failure` requests.
+
+After a local crash, use:
+
+```text
+uv run python -m tovitunes.cli --config config.yaml visual-benchmark reconcile --request-id <uuid>
+```
+
+Reconciliation **never generates an image**. With a receipt and matching staged bytes, it can ingest those bytes. With one request-owned immutable artifact matching the receipt, model, provider, MIME and canonical dependencies, it can restore a missing output mapping. With a valid existing mapping, it can complete the success transition. Exact repeats are idempotent. It verifies staged bytes against their recorded hash, size and MIME; conflicting or multiple artifacts fail closed. A request with no trustworthy local result evidence stays unresolved and needs operator/provider-side inspection using the provider request ID if available. A crash before the receipt was committed may leave bytes but lacks the metadata needed for automatic recovery; it must not be regenerated automatically.
 
 These images test environment/prop production and difficult Tovi poses. A successful generated Tovi image may be used only as an individually reviewed special asset; it does not become the canonical character or replace sprite animation. Ordinary recurring motion remains tied to the approved pack.
 
@@ -73,4 +85,3 @@ Exactly two initial reviews are required. Any axis difference of 2 or more requi
 The report groups facts by provider and model without selecting a winner. It includes request and output counts, hard failures, usable outputs and rate, per-scene usable counts, weighted score summaries, median latency, and repair reasons. `actual_spend` and usable outputs per dollar remain `null` unless every request in the group has a known cost. `known_spend` and `cost_known_requests` show partial information. Real adapters preserve usage but leave cost unknown because API usage alone does not provide a durable billed price; a future dated pricing policy can supply deterministic cost without changing the domain model.
 
 The benchmark ends with a dated human decision describing which image tasks a provider can support, rights evidence, unresolved controls and whether its output is limited to backgrounds/props or reviewed special poses. Software does not select a provider.
-
