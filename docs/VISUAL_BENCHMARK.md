@@ -43,6 +43,8 @@ Generated media is stored in the configured `data_root` through the immutable `A
 
 HTTP 429 is a safe `retryable_failure` for the same attempt. Ordinary deterministic 4xx errors are `terminal_failure` and require a new attempt. HTTP 408, 5xx, timeouts, lost connections, and malformed 2xx success payloads are `ambiguous`: the provider may already have generated and charged for an image. Generic 5xx must not be blindly retried. A returned image whose bytes are known but fail local image validation is a known failed output. `run` never contacts a provider again for `remote_started`, `ambiguous`, or `terminal_failure` requests.
 
+Provider credentials, canonical references and request payloads are prepared locally before `remote_started` is persisted. The transport persists that state immediately before its network operation. A local preflight error is recorded as a safe `retryable_failure` with `local_preflight` as its error kind; repair the local problem and rerun the same attempt. Once the transport boundary is reached, uncertain outcomes remain fail-closed.
+
 After a local crash, use:
 
 ```text
