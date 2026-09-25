@@ -918,6 +918,7 @@ def test_receipted_result_cannot_be_marked_safe_to_retry(
     assert state.get_request(request_id)["status"] == "remote_started"
     assert provider.calls == 0
 
+
 @pytest.mark.parametrize("kind", ["openai", "gemini"])
 @pytest.mark.parametrize("damage", ["corrupt", "missing"])
 def test_local_reference_preflight_preserves_same_attempt(
@@ -1030,4 +1031,3 @@ def test_urllib_hook_runs_after_request_construction_before_urlopen(
             on_remote_start=lambda: calls.append("remote_start"),
         )
     assert calls == ["request"]
-
