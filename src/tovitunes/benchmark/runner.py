@@ -1,6 +1,7 @@
 """Plan, execute, resume, review, and aggregate the visual benchmark."""
 
 import json
+import os
 import time
 from collections import Counter, defaultdict
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ from uuid import uuid4
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
+from tovitunes.artifacts.media import validate_media
 from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.benchmark.models import (
     BenchmarkDefinition,
@@ -108,6 +110,118 @@ class BenchmarkRunner:
         self.assets = assets
         self.returned_root = returned_root.resolve()
         self.returned_root.mkdir(parents=True, exist_ok=True)
+        if returned_root.is_symlink() or not self.returned_root.is_relative_to(assets.root):
+            raise ValueError("returned-byte staging must be under the trusted data root")
+
+    @staticmethod
+    def _suffix(mime_type: str) -> str:
+        suffixes = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+        if mime_type not in suffixes:
+            raise ValueError(f"unsupported returned image MIME type: {mime_type}")
+        return suffixes[mime_type]
+
+    def _staged_path(self, request_id: str, mime_type: str) -> Path:
+        return self.returned_root / f"{request_id}{self._suffix(mime_type)}"
+
+    def _verify_staged(self, request_id: str, receipt: dict[str, Any]) -> Path:
+        path = self._staged_path(request_id, receipt["mime_type"])
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or not path.resolve().is_relative_to(self.returned_root)
+        ):
+            raise ValueError("request-scoped returned bytes are missing or untrusted")
+        data = path.read_bytes()
+        if (
+            len(data) != receipt["returned_byte_count"]
+            or sha256(data).hexdigest() != receipt["returned_sha256"]
+        ):
+            raise ValueError("staged returned bytes differ from receipt")
+        mime_type, _, _ = validate_media(path)
+        if mime_type != receipt["mime_type"]:
+            raise ValueError("staged MIME type differs from receipt")
+        return path
+
+    def _ingest_result(self, request_id: str, source: Path) -> str:
+        request = self.state.get_request(request_id)
+        receipt = self.state.receipt(request_id)
+        if receipt is None:
+            raise ValueError("cannot ingest without a durable receipt")
+        spec = CanonicalImageSpec.model_validate_json(request["canonical_spec_json"])
+        blind_id = "vb_" + uuid4().hex
+        artifact = self.assets.ingest(
+            source,
+            owner_scope="brand",
+            owner_id=spec.brand_revision_id,
+            kind="benchmark_image",
+            slot_key=blind_id,
+            provenance=Provenance(
+                source_kind="provider",
+                acquired_at=datetime.now(UTC),
+                provider=request["provider"],
+                model=request["model"],
+                request_id=receipt["provider_request_id"],
+                local_request_id=request_id,
+                prompt_version=spec.prompt_version,
+                input_artifact_ids=tuple(item.artifact_id for item in spec.references),
+            ),
+            dependencies=tuple(
+                InputDependency(item.artifact_id, f"benchmark reference {item.role}")
+                for item in spec.references
+            ),
+            expected_media_type=receipt["mime_type"],
+        )
+        return artifact.identity.artifact_id
+
+    def reconcile(self, request_id: str) -> dict[str, Any]:
+        """Repair only from local evidence; this method has no provider argument or call."""
+        request = self.state.get_request(request_id)
+        if request["status"] in {"prepared", "retryable_failure", "terminal_failure"}:
+            return {
+                "request_id": request_id,
+                "status": request["status"],
+                "action": "not_reconcilable",
+            }
+        mapping = self.state.output(request_id)
+        receipt = self.state.receipt(request_id)
+        if receipt is None:
+            if request["status"] == "succeeded":
+                raise ValueError("succeeded request has no provider receipt")
+            return {
+                "request_id": request_id,
+                "status": request["status"],
+                "action": "provider_side_reconciliation_required",
+            }
+        staged = self._staged_path(request_id, receipt["mime_type"])
+        if staged.exists():
+            self._verify_staged(request_id, receipt)
+        candidates = self.state.candidates(request_id)
+        if len(candidates) > 1:
+            raise ValueError("multiple request-owned benchmark artifacts require inspection")
+        if mapping is not None:
+            artifact_id = mapping["artifact_id"]
+            if candidates != [artifact_id]:
+                raise ValueError("mapped artifact conflicts with request-owned artifacts")
+            blind_id = mapping["blind_id"]
+            action = "finalized_mapping"
+        elif candidates:
+            artifact_id = candidates[0]
+            blind_id = self.assets.get(artifact_id).identity.slot_key
+            action = "restored_mapping"
+        else:
+            source = self._verify_staged(request_id, receipt)
+            artifact_id = self._ingest_result(request_id, source)
+            blind_id = self.assets.get(artifact_id).identity.slot_key
+            action = "ingested_staged_result"
+        self.state.finalize_success(request_id, artifact_id, blind_id, self.assets)
+        staged.unlink(missing_ok=True)
+        return {
+            "request_id": request_id,
+            "status": "succeeded",
+            "action": action,
+            "artifact_id": artifact_id,
+            "blind_id": blind_id,
+        }
 
     def run(self, plan: PlannedRequest, provider: ImageProvider) -> dict[str, Any]:
         if (provider.provider, provider.model) != (plan.provider, plan.model):
@@ -134,6 +248,10 @@ class BenchmarkRunner:
         )
         request_id = row["request_id"]
         if row["status"] == "succeeded":
+            mapping = self.state.output(request_id)
+            if mapping is None:
+                raise ValueError("succeeded request has no output")
+            self.state.validate_output(request_id, mapping["artifact_id"], self.assets)
             return {"request_id": request_id, "status": "succeeded", "action": "reused"}
         if row["status"] in {"remote_started", "ambiguous"}:
             return {
@@ -146,6 +264,12 @@ class BenchmarkRunner:
                 "request_id": request_id,
                 "status": row["status"],
                 "action": "new_attempt_required",
+            }
+        if row["status"] == "retryable_failure" and self.state.receipt(request_id) is not None:
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "local_reconciliation_required",
             }
         reference_paths = tuple(self.assets.path_for(item.artifact_id) for item in spec.references)
         self.state.transition(request_id, "remote_started")
@@ -164,43 +288,30 @@ class BenchmarkRunner:
             )
             return {"request_id": request_id, "status": exc.outcome, "action": "recorded"}
         latency = time.monotonic() - started
-        suffix = ".png" if result.mime_type == "image/png" else ".jpg"
-        returned = self.returned_root / f"{request_id}{suffix}"
-        returned.write_bytes(result.image_bytes)
         try:
-            with Image.open(returned) as image:
-                image.load()
-                width, height = image.size
-            blind_id = "vb_" + uuid4().hex
-            provider_request_id = result.provider_request_id or request_id
-            artifact = self.assets.ingest(
-                returned,
-                owner_scope="brand",
-                owner_id=spec.brand_revision_id,
-                kind="benchmark_image",
-                slot_key=blind_id,
-                provenance=Provenance(
-                    source_kind="provider",
-                    acquired_at=datetime.now(UTC),
-                    provider=provider.provider,
-                    model=provider.model,
-                    request_id=provider_request_id,
-                    prompt_version=spec.prompt_version,
-                    input_artifact_ids=tuple(item.artifact_id for item in spec.references),
-                ),
-                dependencies=tuple(
-                    InputDependency(item.artifact_id, f"benchmark reference {item.role}")
-                    for item in spec.references
-                ),
-                expected_media_type=result.mime_type,
-            )
-            self.state.record_output(
-                request_id, artifact.identity.artifact_id, blind_id, width, height, result.mime_type
-            )
+            returned = self._staged_path(request_id, result.mime_type)
+        except ValueError:
             self.state.transition(
                 request_id,
-                "succeeded",
+                "ambiguous",
                 provider_request_id=result.provider_request_id,
+                latency_seconds=latency,
+                error_kind="unknown_result_mime",
+            )
+            return {"request_id": request_id, "status": "ambiguous", "action": "recorded"}
+        temporary = returned.with_suffix(returned.suffix + ".tmp")
+        try:
+            with temporary.open("xb") as stream:
+                stream.write(result.image_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, returned)
+            self.state.record_receipt(
+                request_id,
+                provider_request_id=result.provider_request_id,
+                returned_sha256=sha256(result.image_bytes).hexdigest(),
+                returned_byte_count=len(result.image_bytes),
+                mime_type=result.mime_type,
                 latency_seconds=latency,
                 usage=result.usage,
                 actual_cost_amount=result.actual_cost_amount,
@@ -208,27 +319,32 @@ class BenchmarkRunner:
                 pricing_policy=result.pricing_policy,
                 response_metadata=result.response_metadata,
             )
+            try:
+                with Image.open(returned) as image:
+                    image.load()
+            except (OSError, ValueError) as exc:
+                self.state.transition(
+                    request_id,
+                    "terminal_failure",
+                    error_kind="invalid_output",
+                    error_reason=str(exc),
+                )
+                return {
+                    "request_id": request_id,
+                    "status": "terminal_failure",
+                    "action": "recorded",
+                }
+            reconciled = self.reconcile(request_id)
+            return {**reconciled, "action": "generated"}
+        except Exception as exc:
             return {
                 "request_id": request_id,
-                "status": "succeeded",
-                "action": "generated",
-                "blind_id": blind_id,
-                "artifact_id": artifact.identity.artifact_id,
+                "status": "remote_started",
+                "action": "local_reconciliation_required",
+                "error": str(exc),
             }
-        except Exception as exc:
-            self.state.transition(
-                request_id,
-                "terminal_failure",
-                provider_request_id=result.provider_request_id,
-                latency_seconds=latency,
-                usage=result.usage,
-                response_metadata=result.response_metadata,
-                error_kind="invalid_output",
-                error_reason=str(exc),
-            )
-            return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
         finally:
-            returned.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
 
 
 def blind_review_queue(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
