@@ -119,8 +119,8 @@ def test_dry_run_has_three_deterministic_plans_without_adc(
     assert request["quota_project"] == "{GOOGLE_CLOUD_PROJECT}"
     assert request["location"] == "global"
     assert request["endpoint"].endswith("/locations/global/interactions")
-    assert set(request["body"]) == {"model", "input", "store"}
-    assert request["body"]["store"] is True
+    assert set(request["body"]) == {"model", "input"}
+    assert first[0].capabilities["provider_request_id"] is False
     assert len(request["body"]["input"]) == 1
     prompt = request["body"]["input"][0]["text"]
     assert request["body"]["input"][0]["type"] == "text"
@@ -194,7 +194,7 @@ def test_completed_post_boundary_receipt_and_evidence(tmp_path: Path) -> None:
         assert request.headers["authorization"] == f"Bearer {TOKEN}"
         assert request.headers["content-type"] == "application/json"
         assert request.headers["x-goog-user-project"] == "tovitunes"
-        assert set(json.loads(request.content)) == {"model", "input", "store"}
+        assert set(json.loads(request.content)) == {"model", "input"}
         return httpx.Response(200, json=interaction())
 
     store, provider, item = setup(tmp_path, handler)
@@ -214,6 +214,7 @@ def test_completed_post_boundary_receipt_and_evidence(tmp_path: Path) -> None:
     assert receipt["actual_cost_amount"] is None
     metadata = json.loads(receipt["response_metadata_json"])
     assert metadata["backend"] == "vertex_ai_interactions"
+    assert metadata["provider_interaction_id_supplied"] is True
     assert metadata["provider_lyrics_text"].startswith("Red, red")
     assert metadata["provider_description_text"] == "A bright preschool pop track."
     assert metadata["audio_sample_rate_hz"] == 44100
@@ -224,6 +225,50 @@ def test_completed_post_boundary_receipt_and_evidence(tmp_path: Path) -> None:
     assert (store.audio_root / output["relative_path"]).read_bytes() == TONE.read_bytes()
     assert TOKEN not in json.dumps(row) + json.dumps(receipt)
     assert json.loads(row["translated_request_json"])["quota_project"] == "tovitunes"
+    assert store.run(item, provider)["action"] == "reused" and posts == ["POST"]
+
+
+@pytest.mark.parametrize("http_status", [200, 201])
+def test_documented_completed_response_without_id_is_durable(
+    tmp_path: Path, http_status: int
+) -> None:
+    posts: list[str] = []
+    payload = interaction()
+    del payload["id"]
+    del payload["usage"]
+    payload.update(
+        role="model",
+        created="2026-09-25T12:00:00Z",
+        updated="2026-09-25T12:00:00Z",
+        object="interaction",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(request.method)
+        assert set(json.loads(request.content)) == {"model", "input"}
+        return httpx.Response(http_status, json=payload)
+
+    store, provider, item = setup(tmp_path, handler)
+    result = store.run(item, provider)
+    assert result["status"] == "succeeded" and posts == ["POST"]
+    row = store.request(result["request_id"])
+    assert row["provider_request_id"] is None
+    with store.database.connect() as db:
+        receipt = dict(db.execute("SELECT * FROM music_receipts").fetchone())
+        output = dict(db.execute("SELECT * FROM music_outputs").fetchone())
+    assert receipt["provider_request_id"] is None
+    assert receipt["sha256"] == sha256(TONE.read_bytes()).hexdigest()
+    assert receipt["byte_count"] == len(TONE.read_bytes())
+    assert receipt["actual_cost_amount"] is None
+    metadata = json.loads(receipt["response_metadata_json"])
+    assert metadata["provider_interaction_id_supplied"] is False
+    assert metadata["provider_lyrics_text"].startswith("Red, red")
+    assert metadata["provider_description_text"] == "A bright preschool pop track."
+    assert output["relative_path"] == result["request_id"] + ".mp3"
+    assert output["rights_status"] == "unknown"
+    assert output["approval_status"] == "pending"
+    assert (store.audio_root / output["relative_path"]).read_bytes() == TONE.read_bytes()
+    assert TOKEN not in json.dumps(row) + json.dumps(receipt)
     assert store.run(item, provider)["action"] == "reused" and posts == ["POST"]
 
 
@@ -251,6 +296,56 @@ def test_http_post_failure_never_retries(tmp_path: Path, code: int, expected: st
     result = store.run(item, provider)
     assert result["status"] == expected and posts == 1
     assert store.run(item, provider)["status"] == expected and posts == 1
+
+
+def test_google_400_diagnostic_is_safe_and_terminal(tmp_path: Path) -> None:
+    posts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posts
+        posts += 1
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": 400,
+                    "message": "Request contains an invalid argument.",
+                    "status": "INVALID_ARGUMENT",
+                    "details": [{"authorization": f"Bearer {TOKEN}"}],
+                }
+            },
+        )
+
+    store, provider, item = setup(tmp_path, handler)
+    result = store.run(item, provider)
+    assert result["status"] == "terminal_failure" and posts == 1
+    row = store.request(result["request_id"])
+    assert row["failure_reason"] == (
+        "Vertex rejected request (HTTP 400): Google code 400; "
+        "Google status INVALID_ARGUMENT; Google message Request contains an invalid argument."
+    )
+    assert TOKEN not in json.dumps(row)
+    assert store.run(item, provider)["action"] == "new_attempt_required" and posts == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(400, content=b"not JSON"),
+        httpx.Response(400, json={"error": "malformed"}),
+        httpx.Response(400, json={"error": {"message": f"Bearer {TOKEN}"}}),
+        httpx.Response(400, json={"error": {"message": "x" * 301}}),
+    ],
+)
+def test_unsafe_or_malformed_google_error_uses_generic_reason(
+    tmp_path: Path, response: httpx.Response
+) -> None:
+    store, provider, item = setup(tmp_path, lambda request: response)
+    result = store.run(item, provider)
+    assert result["status"] == "terminal_failure"
+    assert store.request(result["request_id"])["failure_reason"] == (
+        "Vertex rejected request (HTTP 400)"
+    )
 
 
 @pytest.mark.parametrize("error", [httpx.ReadTimeout("timeout"), httpx.ConnectError("lost")])
@@ -307,10 +402,11 @@ def test_step_content_audio_is_accepted(tmp_path: Path) -> None:
     assert store.run(item, provider)["status"] == "succeeded"
 
 
-def test_missing_interaction_id_cannot_trigger_resume_get(tmp_path: Path) -> None:
+def test_pending_without_interaction_id_cannot_trigger_resume_get(tmp_path: Path) -> None:
     methods: list[str] = []
     payload = interaction()
     del payload["id"]
+    payload["status"] = "queued"
 
     def handler(request: httpx.Request) -> httpx.Response:
         methods.append(request.method)
@@ -320,10 +416,51 @@ def test_missing_interaction_id_cannot_trigger_resume_get(tmp_path: Path) -> Non
     first = store.run(item, provider)
     assert first["status"] == "ambiguous"
     assert store.request(first["request_id"])["provider_request_id"] is None
+    assert store.run(item, provider)["action"] == "manual_reconciliation_required"
     assert store.provider_resume(first["request_id"], provider)["action"] == (
         "known_provider_identity_required"
     )
     assert methods == ["POST"]
+
+
+@pytest.mark.parametrize("invalid_id", ["", "bad/id", 42])
+def test_supplied_invalid_interaction_id_fails_closed(tmp_path: Path, invalid_id: Any) -> None:
+    payload = interaction()
+    payload["id"] = invalid_id
+    store, provider, item = setup(
+        tmp_path, lambda request: httpx.Response(200, json=payload)
+    )
+    result = store.run(item, provider)
+    assert result["status"] == "ambiguous"
+    assert store.request(result["request_id"])["provider_request_id"] is None
+
+
+def test_known_id_retrieval_rejects_changed_identity(tmp_path: Path) -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return httpx.Response(
+            200,
+            json=interaction(
+                status="queued" if request.method == "POST" else "completed",
+                interaction_id=(
+                    "vertex-interaction-123" if request.method == "POST" else "different-id"
+                ),
+            ),
+        )
+
+    store, provider, item = setup(tmp_path, handler)
+    first = store.run(item, provider)
+    assert first["status"] == "ambiguous"
+    result = store.provider_resume(first["request_id"], provider)
+    assert result["status"] == "ambiguous"
+    assert store.request(first["request_id"])["provider_request_id"] == (
+        "vertex-interaction-123"
+    )
+    with store.database.connect() as db:
+        assert db.execute("SELECT count(*) FROM music_receipts").fetchone()[0] == 0
+    assert methods == ["POST", "GET"]
 
 
 @pytest.mark.parametrize(
