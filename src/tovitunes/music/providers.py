@@ -1,12 +1,17 @@
 """Music provider contract and deterministic offline test adapter."""
 
 import io
+import json
 import math
+import os
 import struct
 import wave
 from collections.abc import Callable
+from email import policy
+from email.parser import BytesParser
 from typing import Any, Literal, Protocol
 
+import httpx
 from pydantic import Field
 
 from tovitunes.music.models import CanonicalMusicSpec, StrictModel
@@ -27,6 +32,9 @@ class MusicCapabilities(StrictModel):
     provider_request_id: bool
     rights_information: bool
     api_contract: str
+    structured_sections: bool = False
+    requested_section_durations: bool = False
+    word_timestamps: bool = False
 
 
 class MusicResult(StrictModel):
@@ -152,3 +160,196 @@ class FakeMusicProvider:
             provider_request_id=f"fake-{spec.attempt}",
             response_metadata={"simulated": True},
         )
+
+
+class ElevenMusicProvider:
+    """One request to Eleven Music detailed; transport is injectable for offline tests."""
+
+    provider = "elevenlabs"
+    model = "music_v2_5"
+    endpoint = "https://api.elevenlabs.io/v1/music/detailed"
+    output_format = "mp3_48000_192"
+    capabilities = MusicCapabilities(
+        text_to_music=True,
+        lyrics=True,
+        instrumental_only=False,
+        vocals=True,
+        target_duration=True,
+        bpm=False,
+        style=True,
+        seed=True,
+        stems=False,
+        output_formats=("audio/mpeg",),
+        usage_metadata=False,
+        provider_request_id=True,
+        rights_information=False,
+        api_contract="Eleven Music detailed v2.5; section durations enforced, BPM stylistic",
+        structured_sections=True,
+        requested_section_durations=True,
+        word_timestamps=True,
+    )
+    _sections = ("tiny_intro", "hook", "teaching_line", "reinforcement", "short_ending")
+    _durations = (3000, 9000, 10000, 9000, 3000)
+    _labels = ("Intro", "Chorus", "Verse", "Refrain", "Outro")
+
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self._client = client
+
+    def translate(self, spec: CanonicalMusicSpec) -> dict[str, Any]:
+        if spec.brief.id != "colors_red_v1" or spec.brief.sections != self._sections:
+            raise ValueError("unsupported Eleven music brief structure")
+        if not 30 <= sum(self._durations) / 1000 <= min(40, spec.brief.maximum_duration_seconds):
+            raise ValueError("composition plan duration is outside the brief")
+        if any(line.section not in self._sections[1:] for line in spec.lyrics.lines):
+            raise ValueError("lyric section is outside the brief")
+        chunks: list[dict[str, Any]] = []
+        for section, label, duration in zip(self._sections, self._labels, self._durations):
+            lines = [line.text for line in spec.lyrics.lines if line.section == section]
+            if section != "tiny_intro" and not lines:
+                raise ValueError("canonical lyric section is empty")
+            styles = [
+                "bright warm bouncy simple preschool pop",
+                "friendly clear intelligible English vocals",
+                "light percussion, gentle bass and simple pitched instruments",
+                "clear downbeats",
+                f"approximately {spec.brief.target_bpm} BPM",
+                "catchy uncluttered melody",
+                "age appropriate gentle delivery",
+            ]
+            if section == "tiny_intro":
+                styles = [*styles, "brief instrumental introduction"]
+            chunks.append(
+                {
+                    "text": f"[{label}]" + ("\n" + "\n".join(lines) if lines else ""),
+                    "duration_ms": duration,
+                    "positive_styles": styles,
+                    "negative_styles": [
+                        "frightening sounds",
+                        "aggressive instrumentation",
+                        "dense harmony",
+                        "mature vocal styling",
+                        "melisma",
+                        "artist or song imitation",
+                    ],
+                    "context_adherence": "high",
+                }
+            )
+        if (
+            "\n".join(line for chunk in chunks for line in chunk["text"].splitlines()[1:])
+            != spec.lyrics.text()
+        ):
+            raise ValueError("composition plan changes canonical lyrics")
+        return {
+            "endpoint": self.endpoint,
+            "query": {"output_format": self.output_format},
+            "body": {
+                "model_id": self.model,
+                "composition_plan": {"chunks": chunks},
+                "seed": 1000 + spec.attempt,
+                "with_timestamps": True,
+            },
+        }
+
+    @staticmethod
+    def _parse_multipart(response: httpx.Response) -> tuple[bytes, dict[str, Any]]:
+        content_type = response.headers.get("content-type", "")
+        if not content_type.lower().startswith("multipart/mixed;"):
+            raise ValueError("expected multipart/mixed music response")
+        envelope = (
+            b"MIME-Version: 1.0\r\nContent-Type: "
+            + content_type.encode("ascii")
+            + b"\r\n\r\n"
+            + response.content
+        )
+        message = BytesParser(policy=policy.default).parsebytes(envelope)
+        if not message.is_multipart() or message.defects:
+            raise ValueError("invalid music multipart response")
+        audio: list[bytes] = []
+        metadata: list[dict[str, Any]] = []
+        for part in message.iter_parts():
+            if part.is_multipart() or part.defects:
+                raise ValueError("nested music multipart response")
+            body = part.get_payload(decode=True)
+            if not isinstance(body, bytes):
+                raise ValueError("invalid music multipart payload")
+            mime = part.get_content_type().lower()
+            if mime == "application/json":
+                value = json.loads(body)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid music metadata")
+                metadata.append(value)
+            elif mime in {"audio/mpeg", "application/octet-stream"}:
+                audio.append(body)
+            else:
+                raise ValueError("unexpected music multipart part")
+        if len(audio) != 1 or len(metadata) != 1:
+            raise ValueError("music response requires one audio and one metadata part")
+        return audio[0], metadata[0]
+
+    def generate(
+        self,
+        spec: CanonicalMusicSpec,
+        translated: dict[str, Any],
+        on_remote_start: Callable[[], None],
+    ) -> MusicResult:
+        key = os.environ.get("ELEVENLABS_API_KEY")
+        if not key:
+            raise MusicFailure("ELEVENLABS_API_KEY is required", "retryable_failure")
+        if translated != self.translate(spec):
+            raise MusicFailure(
+                "Eleven music request differs from canonical plan", "retryable_failure"
+            )
+        try:
+            body = json.dumps(translated["body"], sort_keys=True, separators=(",", ":")).encode()
+            request = httpx.Request(
+                "POST",
+                translated["endpoint"],
+                params=translated["query"],
+                headers={"xi-api-key": key, "content-type": "application/json"},
+                content=body,
+            )
+        except (TypeError, ValueError) as exc:
+            raise MusicFailure("invalid local Eleven music request", "retryable_failure") from exc
+        client = self._client or httpx.Client(timeout=httpx.Timeout(180.0), follow_redirects=False)
+        try:
+            on_remote_start()
+            try:
+                response = client.send(request, follow_redirects=False)
+            except httpx.RequestError as exc:
+                raise MusicFailure("Eleven music transport outcome unknown", "ambiguous") from exc
+            song_id = response.headers.get("song-id")
+            if song_id and key in song_id:
+                raise MusicFailure("unsafe Eleven music response identity", "ambiguous")
+            if response.status_code == 408 or response.status_code >= 500:
+                raise MusicFailure("Eleven music server outcome unknown", "ambiguous", song_id)
+            if response.status_code >= 400:
+                raise MusicFailure(
+                    f"Eleven music rejected request (HTTP {response.status_code})",
+                    "terminal_failure",
+                    song_id,
+                )
+            if response.status_code != 200:
+                raise MusicFailure("unexpected Eleven music response", "ambiguous", song_id)
+            try:
+                audio, metadata = self._parse_multipart(response)
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise MusicFailure("malformed Eleven music response", "ambiguous", song_id) from exc
+            safe_metadata = {
+                field: metadata[field]
+                for field in ("composition_plan", "song_metadata", "words_timestamps", "song_id")
+                if field in metadata
+            }
+            safe_metadata["response_content_type"] = response.headers.get("content-type")
+            if key in json.dumps(safe_metadata):
+                raise MusicFailure("unsafe Eleven music response metadata", "ambiguous", song_id)
+            return MusicResult(
+                audio_bytes=audio,
+                mime_type="audio/mpeg",
+                container="mp3",
+                codec="mp3",
+                provider_request_id=song_id,
+                response_metadata=safe_metadata,
+            )
+        finally:
+            if self._client is None:
+                client.close()

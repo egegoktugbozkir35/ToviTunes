@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import (
     CanonicalMusicSpec,
     LyricCandidate,
@@ -208,11 +209,15 @@ class MusicBenchmark:
             )
             db.commit()
 
-    def _audio_path(self, request_id: str) -> Path:
-        return self.audio_root / f"{request_id}.wav"
+    def _audio_path(self, request_id: str, container: str = "wav") -> Path:
+        if container not in {"wav", "mp3"}:
+            raise ValueError("unsupported music container")
+        return self.audio_root / f"{request_id}.{container}"
 
-    def _staged_path(self, request_id: str) -> Path:
-        return self.audio_root / ".music-returned" / f"{request_id}.wav"
+    def _staged_path(self, request_id: str, container: str = "wav") -> Path:
+        if container not in {"wav", "mp3"}:
+            raise ValueError("unsupported music container")
+        return self.audio_root / ".music-returned" / f"{request_id}.{container}"
 
     @staticmethod
     def _sync_directory(path: Path) -> None:
@@ -223,16 +228,16 @@ class MusicBenchmark:
             finally:
                 os.close(descriptor)
 
-    def _write_audio(self, request_id: str, data: bytes) -> Path:
-        path = self._staged_path(request_id)
+    def _write_audio(self, request_id: str, data: bytes, container: str = "wav") -> Path:
+        path = self._staged_path(request_id, container)
         path.parent.mkdir(exist_ok=True)
         self._sync_directory(self.audio_root)
         if (
             path.parent.is_symlink()
             or path.exists()
             or path.is_symlink()
-            or self._audio_path(request_id).exists()
-            or self._audio_path(request_id).is_symlink()
+            or self._audio_path(request_id, container).exists()
+            or self._audio_path(request_id, container).is_symlink()
         ):
             raise FileExistsError("returned audio is already staged")
         temporary = path.with_name(f"{request_id}.{uuid4().hex}.tmp")
@@ -250,18 +255,16 @@ class MusicBenchmark:
         data = path.read_bytes()
         if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
             raise ValueError("received audio bytes changed")
-        duration, codec = inspect_wav_metadata(data)
+        info = inspect_audio(data, receipt["mime_type"])
         if (
-            receipt["mime_type"] != "audio/wav"
-            or receipt["container"] != "wav"
-            or receipt["codec"] != codec
-            or receipt["duration_seconds"] != duration
+            receipt["container"] != info.container
+            or receipt["codec"] != info.codec
+            or receipt["duration_seconds"] != info.duration_seconds
+            or path.suffix != info.extension
         ):
             raise ValueError("received audio metadata changed")
 
     def _finalize(self, request_id: str) -> dict[str, Any]:
-        path = self._audio_path(request_id)
-        staged = self._staged_path(request_id)
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             request = db.execute(
@@ -272,6 +275,8 @@ class MusicBenchmark:
             ).fetchone()
             if request is None or receipt is None or request["remote_started_at"] is None:
                 raise ValueError("no durable receipt")
+            path = self._audio_path(request_id, receipt["container"])
+            staged = self._staged_path(request_id, receipt["container"])
             if request["provider_request_id"] != receipt["provider_request_id"]:
                 raise ValueError("receipt provider request identity differs")
             if staged.exists() or staged.is_symlink():
@@ -357,17 +362,17 @@ class MusicBenchmark:
                 "blind_id": output["blind_id"],
                 "action": "reused",
             }
-        if row["remote_started_at"] is not None:
-            return {
-                "request_id": request_id,
-                "status": row["status"],
-                "action": "manual_reconciliation_required",
-            }
         if row["status"] == "terminal_failure":
             return {
                 "request_id": request_id,
                 "status": row["status"],
                 "action": "new_attempt_required",
+            }
+        if row["remote_started_at"] is not None:
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "manual_reconciliation_required",
             }
         started = False
 
@@ -392,7 +397,10 @@ class MusicBenchmark:
             return {"request_id": request_id, "status": status, "action": "recorded"}
         except Exception as exc:
             status = "ambiguous" if started else "retryable_failure"
-            self._transition(request_id, status, category="unexpected", reason=str(exc))
+            reason = (
+                "unexpected Eleven music error" if provider.provider == "elevenlabs" else str(exc)
+            )
+            self._transition(request_id, status, category="unexpected", reason=reason)
             return {"request_id": request_id, "status": status, "action": "recorded"}
         if not started:
             self._transition(
@@ -403,22 +411,22 @@ class MusicBenchmark:
             )
             return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
         try:
-            if result.mime_type != "audio/wav":
-                raise ValueError("only validated PCM WAV ingest is implemented")
-            duration, codec = inspect_wav_metadata(result.audio_bytes)
-            if result.container not in (None, "wav") or result.codec not in (None, codec):
-                raise ValueError("declared audio format differs from decoded WAV")
+            info = inspect_audio(result.audio_bytes, result.mime_type)
+            duration, codec = info.duration_seconds, info.codec
+            if result.container not in (None, info.container) or result.codec not in (None, codec):
+                raise ValueError("declared audio format differs from decoded audio")
         except ValueError as exc:
+            status = "ambiguous" if provider.provider == "elevenlabs" else "terminal_failure"
             self._transition(
                 request_id,
-                "terminal_failure",
+                status,
                 category="invalid_output",
                 reason=str(exc),
                 provider_request_id=result.provider_request_id,
             )
-            return {"request_id": request_id, "status": "terminal_failure", "action": "recorded"}
+            return {"request_id": request_id, "status": status, "action": "recorded"}
         try:
-            self._write_audio(request_id, result.audio_bytes)
+            self._write_audio(request_id, result.audio_bytes, info.container)
             self._record_receipt(request_id, result, duration, codec)
             output = self._finalize(request_id)
             return {
@@ -431,21 +439,28 @@ class MusicBenchmark:
             return {
                 "request_id": request_id,
                 "status": "remote_started",
-                "error": str(exc),
+                "error": (
+                    "local Eleven music finalization error"
+                    if provider.provider == "elevenlabs"
+                    else str(exc)
+                ),
                 "action": "local_reconciliation_required",
             }
 
     def _record_receipt(
         self, request_id: str, result: MusicResult, duration: float, codec: str
     ) -> None:
-        staged = self._staged_path(request_id)
+        info = inspect_audio(result.audio_bytes, result.mime_type)
+        if (duration, codec) != (info.duration_seconds, info.codec):
+            raise ValueError("receipt audio metadata differs from original bytes")
+        staged = self._staged_path(request_id, info.container)
         if not staged.is_file() or staged.is_symlink():
             raise ValueError("durable staged audio missing")
         staged_bytes = staged.read_bytes()
         if (
             len(staged_bytes) != len(result.audio_bytes)
             or sha256(staged_bytes).digest() != sha256(result.audio_bytes).digest()
-            or inspect_wav_metadata(staged_bytes) != (duration, codec)
+            or inspect_audio(staged_bytes, result.mime_type) != info
         ):
             raise ValueError("staged audio differs from returned bytes")
         with closing(self.database.connect()) as db:
@@ -459,7 +474,7 @@ class MusicBenchmark:
                     len(result.audio_bytes),
                     duration,
                     result.mime_type,
-                    "wav",
+                    info.container,
                     codec,
                     json.dumps(result.usage) if result.usage is not None else None,
                     result.actual_cost_amount,
@@ -803,7 +818,9 @@ class MusicBenchmark:
             spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
             objective: dict[str, Any] = {}
             try:
-                self._verify_audio(self._audio_path(output["request_id"]), output)
+                self._verify_audio(
+                    self._audio_path(output["request_id"], output["container"]), output
+                )
                 objective["decodes_and_matches_receipt"] = True
             except (OSError, ValueError):
                 objective["decodes_and_matches_receipt"] = False
@@ -909,7 +926,7 @@ class MusicBenchmark:
         if output["approval_status"] == "rejected":
             blockers.append("manual rejection veto")
         try:
-            self._verify_audio(self._audio_path(output["request_id"]), output)
+            self._verify_audio(self._audio_path(output["request_id"], output["container"]), output)
         except (OSError, ValueError):
             blockers.append("audio integrity failure")
         return blockers

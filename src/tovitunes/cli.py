@@ -31,7 +31,7 @@ from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
 from tovitunes.music.models import load_rubric as load_music_rubric
-from tovitunes.music.providers import FakeMusicProvider
+from tovitunes.music.providers import ElevenMusicProvider, FakeMusicProvider
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.planner import Goal, load_snapshot, plan, requirements
 
@@ -64,9 +64,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     visual = subcommands.add_parser("visual-benchmark")
     music = subcommands.add_parser("music-benchmark")
     music_commands = music.add_subparsers(dest="music_command", required=True)
-    music_commands.add_parser("plan")
+    music_plan = music_commands.add_parser("plan")
+    music_plan.add_argument(
+        "--provider", choices=("offline_fake", "elevenlabs"), default="offline_fake"
+    )
     music_run = music_commands.add_parser("run")
-    music_run.add_argument("--offline-fake", action="store_true", required=True)
+    music_run.add_argument("--offline-fake", action="store_true")
+    music_run.add_argument("--provider", choices=("elevenlabs",))
+    music_run.add_argument("--dry-run", action="store_true")
     music_commands.add_parser("status")
     music_commands.add_parser("review-export")
     music_commands.add_parser("review-report")
@@ -131,9 +136,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.music_command in {"plan", "run"}:
             brief = load_brief(root / "benchmarks/music/colors_red_v1.yaml")
             lyrics = load_lyrics(root / "benchmarks/music/colors_red_lyrics_v1.yaml")
-            fake = FakeMusicProvider()
-            music_plans = plan_music(brief, lyrics, [fake])
-            if args.music_command == "plan":
+            if args.music_command == "run" and args.offline_fake and args.provider:
+                parser.error("choose one music provider")
+            if args.music_command == "run" and not (args.offline_fake or args.provider):
+                parser.error("choose --offline-fake or --provider elevenlabs")
+            provider_name = (
+                args.provider if args.music_command == "plan" else args.provider or "offline_fake"
+            )
+            provider = (
+                ElevenMusicProvider() if provider_name == "elevenlabs" else FakeMusicProvider()
+            )
+            music_plans = plan_music(brief, lyrics, [provider])
+            if args.music_command == "plan" or args.dry_run:
                 print(
                     json.dumps(
                         {
@@ -149,8 +163,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             database = Database(config.database_path)
             database.migrate()
             benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
-            results = [benchmark.run(item, fake) for item in music_plans]
-            print(json.dumps({"offline_fake": True, "results": results}, sort_keys=True))
+            results = [benchmark.run(item, provider) for item in music_plans]
+            print(json.dumps({"provider": provider.provider, "results": results}, sort_keys=True))
             return 0 if all(r["status"] == "succeeded" for r in results) else 1
         if not config.database_path.is_file():
             parser.error("an existing music benchmark database is required")
