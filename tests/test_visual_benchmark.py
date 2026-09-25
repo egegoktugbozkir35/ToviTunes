@@ -483,6 +483,7 @@ def test_known_and_unknown_cost_aggregation_and_median_latency(
     assert report["actual_spend"] is None
     assert report["usable_outputs_per_dollar"] is None
 
+
 @pytest.mark.parametrize(
     ("status", "outcome"),
     [
@@ -844,4 +845,3 @@ def test_receipted_result_cannot_be_marked_safe_to_retry(
         state.transition(request_id, "retryable_failure")
     assert state.get_request(request_id)["status"] == "remote_started"
     assert provider.calls == 0
-
