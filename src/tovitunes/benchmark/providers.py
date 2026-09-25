@@ -405,7 +405,7 @@ class GeminiImageProvider:
                         for item in spec.references
                     ],
                 ],
-                "response_modalities": ["IMAGE"],
+                "response_modalities": ["TEXT", "IMAGE"],
                 "image_config": {"aspect_ratio": "9:16", "image_size": "1K"},
                 "tools": [],
             },
@@ -443,7 +443,7 @@ class GeminiImageProvider:
             ],
         )
         config = types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
+            response_modalities=[types.Modality.TEXT, types.Modality.IMAGE],
             image_config=types.ImageConfig(aspect_ratio="9:16", image_size="1K"),
             tools=[],
         )

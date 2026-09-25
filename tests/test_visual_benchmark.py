@@ -1063,7 +1063,9 @@ def test_vertex_dry_run_needs_no_credentials_or_network(
     assert translated["body"]["backend"] == "Vertex AI"
     assert translated["body"]["location"] == "global"
     assert translated["body"]["model"] == "gemini-3.1-flash-image"
+    assert translated["body"]["response_modalities"] == ["TEXT", "IMAGE"]
     assert translated["body"]["image_config"]["aspect_ratio"] == "9:16"
+    assert translated["body"]["image_config"]["image_size"] == "1K"
     assert translated["body"]["tools"] == []
     assert len(translated["supplied_reference_artifact_ids"]) == 3
     assert all("sha256" in item for item in translated["body"]["input"][1:])
@@ -1186,8 +1188,9 @@ def test_vertex_sdk_request_contract_and_metadata(
     assert request.headers["authorization"] == "Bearer fake-secret-token"
     assert request.headers["x-goog-user-project"] == "test-project"
     assert "x-goog-api-key" not in request.headers
-    assert body["generationConfig"]["responseModalities"] == ["IMAGE"]
+    assert body["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
     assert body["generationConfig"]["imageConfig"]["aspectRatio"] == "9:16"
+    assert body["generationConfig"]["imageConfig"]["imageSize"] == "1K"
     assert body["generationConfig"].get("tools", []) == []
     parts = body["contents"][0]["parts"]
     assert parts[0]["text"] == spec.prompt()
@@ -1261,6 +1264,7 @@ def test_vertex_remote_failures_preserve_boundary(
     first = runner.run(plan, provider)
     assert first["status"] == expected
     assert transport.at_send == ["remote_started"]
+    assert len(transport.calls) == 1
     assert state.receipt(first["request_id"]) is None
     transport.response = vertex_response()
     second = runner.run(plan, provider)
@@ -1282,6 +1286,29 @@ def test_vertex_multiple_images_are_ambiguous(
     result = runner.run(make_plan(spec, provider), provider)
     assert result["status"] == "ambiguous"
     assert state.receipt(result["request_id"]) is None
+
+
+def test_vertex_text_and_one_image_succeeds_without_persisting_text(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    payload = vertex_response().json()
+    generated_text = "generated response text is not a benchmark artifact"
+    payload["candidates"][0]["content"]["parts"].insert(0, {"text": generated_text})
+    transport = VertexTestTransport(httpx.Response(200, json=payload), state)
+    provider = vertex_provider(transport)
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "succeeded"
+    assert transport.at_send == ["remote_started"]
+    assert len(transport.calls) == 1
+    output = state.output(result["request_id"])
+    assert output is not None
+    assert len(state.candidates(result["request_id"])) == 1
+    receipt = state.receipt(result["request_id"])
+    assert receipt is not None
+    assert receipt["returned_sha256"] == sha256(png_bytes()).hexdigest()
+    assert generated_text not in json.dumps(receipt)
+    assert generated_text not in json.dumps(state.get_request(result["request_id"]))
 
 
 def test_vertex_uses_header_request_id_when_response_id_is_absent(
