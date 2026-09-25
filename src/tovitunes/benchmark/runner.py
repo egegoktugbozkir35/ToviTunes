@@ -271,22 +271,55 @@ class BenchmarkRunner:
                 "status": row["status"],
                 "action": "local_reconciliation_required",
             }
-        reference_paths = tuple(self.assets.path_for(item.artifact_id) for item in spec.references)
-        self.state.transition(request_id, "remote_started")
         started = time.monotonic()
+        remote_started = False
+
+        def on_remote_start() -> None:
+            nonlocal remote_started
+            if remote_started:
+                raise ValueError("remote-start callback invoked more than once")
+            self.state.transition(request_id, "remote_started")
+            remote_started = True
+
         try:
-            result = provider.generate(spec, reference_paths)
+            reference_paths = tuple(
+                self.assets.path_for(item.artifact_id) for item in spec.references
+            )
+            result = provider.generate(spec, reference_paths, on_remote_start=on_remote_start)
         except ProviderFailure as exc:
             latency = time.monotonic() - started
+            outcome = exc.outcome if remote_started else "retryable_failure"
             self.state.transition(
                 request_id,
-                exc.outcome,
-                provider_request_id=exc.provider_request_id,
+                outcome,
+                provider_request_id=exc.provider_request_id if remote_started else None,
                 latency_seconds=latency,
-                error_kind=exc.outcome,
+                error_kind=exc.outcome if remote_started else "local_preflight",
                 error_reason=str(exc),
             )
-            return {"request_id": request_id, "status": exc.outcome, "action": "recorded"}
+            return {"request_id": request_id, "status": outcome, "action": "recorded"}
+        except Exception as exc:
+            outcome = "ambiguous" if remote_started else "retryable_failure"
+            self.state.transition(
+                request_id,
+                outcome,
+                latency_seconds=time.monotonic() - started,
+                error_kind="post_boundary_error" if remote_started else "local_preflight",
+                error_reason=str(exc),
+            )
+            return {"request_id": request_id, "status": outcome, "action": "recorded"}
+        if not remote_started:
+            self.state.transition(
+                request_id,
+                "ambiguous",
+                error_kind="provider_contract",
+                error_reason="provider returned without remote-start callback",
+            )
+            return {
+                "request_id": request_id,
+                "status": "ambiguous",
+                "action": "manual_reconciliation_required",
+            }
         latency = time.monotonic() - started
         try:
             returned = self._staged_path(request_id, result.mime_type)
