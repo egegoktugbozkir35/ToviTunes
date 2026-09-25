@@ -25,6 +25,21 @@ from tovitunes.persistence.db import Database
 ROOT = Path(__file__).resolve().parents[1] / "benchmarks/music"
 
 
+def fake_qa_checks() -> dict[str, object]:
+    return {
+        key: {"passed": True, "source": "offline deterministic fixture"}
+        for key in (
+            "lyric_adherence",
+            "educational_correctness",
+            "teaching_intelligibility",
+            "preschool_safety",
+            "beat_usable",
+            "production_fit",
+            "artifact_free",
+        )
+    }
+
+
 @pytest.fixture
 def inputs() -> tuple[MusicBrief, object]:
     return load_brief(ROOT / "colors_red_v1.yaml"), load_lyrics(ROOT / "colors_red_lyrics_v1.yaml")
@@ -141,15 +156,15 @@ def test_blind_review_decisions_and_timing(
     report = store.review_report(load_rubric(ROOT / "rubric.v1.yaml"))
     assert report[0]["weighted_score"] == 75
     assert "provider" not in report[0]
-    with pytest.raises(ValueError, match="cleared rights"):
+    with pytest.raises(ValueError, match="rights not confirmed"):
         store.decision(blind_id, "approval", "approved", "teacher", "checked")
     store.decision(blind_id, "rights", "commercial_use_confirmed", "operator", "tier evidence")
-    with pytest.raises(ValueError, match="approved lyrics"):
+    with pytest.raises(ValueError, match="exact lyrics"):
         store.decision(blind_id, "approval", "approved", "teacher", "checked")
     store.lyric_decision(lyrics, "approved", "teacher", "educational and diction check")
-    with pytest.raises(ValueError, match="two clean"):
+    with pytest.raises(ValueError, match="music QA"):
         store.decision(blind_id, "approval", "approved", "teacher", "checked")
-    store.review(review.model_copy(update={"reviewer": "producer"}))
+    store.evaluate_qa(blind_id, fake_qa_checks())
     store.decision(blind_id, "approval", "approved", "teacher", "separate human decision")
     assert store.status()[0]["approval_status"] == "approved"
     store.decision(blind_id, "rights", "restricted", "operator", "later license finding")
@@ -396,7 +411,9 @@ def test_audit_tables_and_decision_pairs_are_enforced(
         ):
             with pytest.raises(sqlite3.IntegrityError):
                 db.execute(
-                    "INSERT INTO music_decisions VALUES (?, ?, ?, ?, 'sql', 'invalid', 'now')",
+                    "INSERT INTO music_decisions (decision_id, blind_id, decision_type, "
+                    "status, actor, evidence, created_at) "
+                    "VALUES (?, ?, ?, ?, 'sql', 'invalid', 'now')",
                     (f"bad-{decision_type}-{status}", blind_id, decision_type, status),
                 )
 
@@ -414,6 +431,7 @@ def test_exact_lyric_rejection_revokes_only_matching_audio(
     for candidate in (first, other):
         blind_id = candidate["blind_id"]
         store.decision(blind_id, "rights", "commercial_use_confirmed", "owner", "license")
+        store.evaluate_qa(blind_id, fake_qa_checks())
         for reviewer in ("teacher", "producer"):
             store.review(
                 MusicReview(
@@ -436,7 +454,7 @@ def test_exact_lyric_rejection_revokes_only_matching_audio(
         ).fetchall()
     assert [(row["status"], row["actor"]) for row in history] == [
         ("approved", "teacher"),
-        ("pending", "system"),
+        ("pending", "automated_release_policy_v1"),
     ]
     assert "exact lyrics rejected" in history[1]["evidence"]
     store.lyric_decision(lyrics, "approved", "editor", "corrected review")

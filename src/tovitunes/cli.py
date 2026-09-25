@@ -70,6 +70,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_commands.add_parser("status")
     music_commands.add_parser("review-export")
     music_commands.add_parser("review-report")
+    policy_evaluate = music_commands.add_parser("policy-evaluate")
+    policy_evaluate.add_argument(
+        "--type", choices=("lyrics", "rights", "qa", "approval", "timing"), required=True
+    )
+    policy_evaluate.add_argument("--blind-id")
+    policy_evaluate.add_argument("--brief-file", type=Path)
+    policy_evaluate.add_argument("--lyrics-file", type=Path)
+    policy_evaluate.add_argument("--evidence-file", type=Path)
+    policy_evaluate.add_argument("--version", type=int)
+    policy_status = music_commands.add_parser("policy-status")
+    policy_status.add_argument("--blind-id")
     music_reconcile = music_commands.add_parser("reconcile")
     music_reconcile.add_argument("--request-id", required=True)
     music_review = music_commands.add_parser("review")
@@ -156,6 +167,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.music_command == "review-report":
             rubric = load_music_rubric(root / "benchmarks/music/rubric.v1.yaml")
             print(json.dumps(benchmark.review_report(rubric), sort_keys=True))
+        elif args.music_command == "policy-status":
+            print(json.dumps(benchmark.policy_status(args.blind_id), sort_keys=True))
+        elif args.music_command == "policy-evaluate":
+            if args.type == "lyrics":
+                if args.brief_file is None or args.lyrics_file is None:
+                    parser.error("lyrics policy requires --brief-file and --lyrics-file")
+                evaluation = benchmark.evaluate_lyrics(
+                    load_brief(args.brief_file), load_lyrics(args.lyrics_file)
+                )
+            else:
+                if args.blind_id is None:
+                    parser.error("policy requires --blind-id")
+                if args.type in {"rights", "qa"}:
+                    if args.evidence_file is None:
+                        parser.error("rights and QA policy require --evidence-file")
+                    evidence = json.loads(args.evidence_file.read_text(encoding="utf-8"))
+                    evaluation = (
+                        benchmark.evaluate_rights(args.blind_id, evidence)
+                        if args.type == "rights"
+                        else benchmark.evaluate_qa(args.blind_id, evidence)
+                    )
+                elif args.type == "timing":
+                    if args.version is None:
+                        parser.error("timing policy requires --version")
+                    evaluation = benchmark.evaluate_timing(args.blind_id, args.version)
+                else:
+                    evaluation = benchmark.evaluate_approval(args.blind_id)
+            print(json.dumps(evaluation, sort_keys=True))
         elif args.music_command == "reconcile":
             print(json.dumps(benchmark.reconcile(args.request_id), sort_keys=True))
         elif args.music_command == "lyric-decision":
