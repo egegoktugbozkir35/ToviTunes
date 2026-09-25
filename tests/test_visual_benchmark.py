@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import httpx
 import pytest
+from google.oauth2.credentials import Credentials
 from PIL import Image
 
 from tovitunes.artifacts.store import AssetStore, InputDependency
@@ -191,9 +193,7 @@ def _boundary_response(kind: str, status: int = 200) -> HttpResponse:
 def _boundary_provider(
     kind: str, transport: BoundaryTransport, *, api_key: str | None = "test"
 ) -> Any:
-    if kind == "openai":
-        return OpenAIImageProvider(transport=transport, api_key=api_key)
-    return GeminiImageProvider(transport=transport, api_key=api_key)
+    return OpenAIImageProvider(transport=transport, api_key=api_key)
 
 
 def test_cases_rubric_prompt_and_canonical_references_are_locked() -> None:
@@ -271,33 +271,6 @@ def test_provider_translation_and_response_extraction(
     assert b"gpt-image-2.5-sunburst" in openai_transport.calls[0][2]
     assert openai_transport.calls[0][2].count(b'name="image[]"') == 3
 
-    gemini_transport = FakeTransport(
-        HttpResponse(
-            200,
-            {},
-            json.dumps(
-                {
-                    "id": "gm-123",
-                    "steps": [
-                        {
-                            "type": "model_output",
-                            "content": [
-                                {"type": "image", "data": output, "mime_type": "image/png"}
-                            ],
-                        }
-                    ],
-                }
-            ).encode(),
-        )
-    )
-    gemini = GeminiImageProvider(transport=gemini_transport, api_key="test")
-    gemini_result = gemini.generate(spec, tuple(paths))
-    body = json.loads(gemini_transport.calls[0][2])
-    assert gemini_result.provider_request_id == "gm-123"
-    assert body["response_format"]["aspect_ratio"] == "9:16"
-    assert body["tools"] == []
-    assert len(body["input"]) == 4
-    assert all("artifact_id" not in item for item in body["input"])
 
 
 def test_malformed_and_api_responses_map_to_failures(tmp_path: Path, catalog: BrandCatalog) -> None:
@@ -320,7 +293,7 @@ def test_malformed_and_api_responses_map_to_failures(tmp_path: Path, catalog: Br
     )
     with pytest.raises(ProviderFailure, match="malformed"):
         malformed.generate(spec, paths)
-    throttled = GeminiImageProvider(
+    throttled = OpenAIImageProvider(
         transport=FakeTransport(HttpResponse(429, {}, b'{"error":{"message":"slow down"}}')),
         api_key="test",
     )
@@ -593,7 +566,7 @@ def test_http_failure_classification_and_request_id(
     assert failure.value.provider_request_id == "remote-123"
 
 
-@pytest.mark.parametrize("provider_type", [OpenAIImageProvider, GeminiImageProvider])
+@pytest.mark.parametrize("provider_type", [OpenAIImageProvider])
 def test_malformed_2xx_is_ambiguous(
     tmp_path: Path, catalog: BrandCatalog, provider_type: Any
 ) -> None:
@@ -919,11 +892,11 @@ def test_receipted_result_cannot_be_marked_safe_to_retry(
     assert provider.calls == 0
 
 
-@pytest.mark.parametrize("kind", ["openai", "gemini"])
 @pytest.mark.parametrize("damage", ["corrupt", "missing"])
 def test_local_reference_preflight_preserves_same_attempt(
-    tmp_path: Path, catalog: BrandCatalog, kind: str, damage: str
+    tmp_path: Path, catalog: BrandCatalog, damage: str
 ) -> None:
+    kind = "openai"
     runner, state, spec = runner_fixture(tmp_path, catalog)
     transport = BoundaryTransport(state, _boundary_response(kind))
     provider = _boundary_provider(kind, transport)
@@ -952,11 +925,11 @@ def test_local_reference_preflight_preserves_same_attempt(
     assert transport.at_send == ["remote_started"]
 
 
-@pytest.mark.parametrize("kind", ["openai", "gemini"])
 def test_missing_credential_is_local_preflight(
-    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch, kind: str
+    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    key_name = "OPENAI_API_KEY" if kind == "openai" else "GEMINI_API_KEY"
+    kind = "openai"
+    key_name = "OPENAI_API_KEY"
     monkeypatch.delenv(key_name, raising=False)
     runner, state, spec = runner_fixture(tmp_path, catalog)
     transport = BoundaryTransport(state, _boundary_response(kind))
@@ -975,11 +948,11 @@ def test_missing_credential_is_local_preflight(
     assert transport.at_send == ["remote_started"]
 
 
-@pytest.mark.parametrize("kind", ["openai", "gemini"])
 @pytest.mark.parametrize("outcome", ["timeout", "http_500", "http_429"])
 def test_post_boundary_outcome_stays_fail_closed(
-    tmp_path: Path, catalog: BrandCatalog, kind: str, outcome: str
+    tmp_path: Path, catalog: BrandCatalog, outcome: str
 ) -> None:
+    kind = "openai"
     runner, state, spec = runner_fixture(tmp_path, catalog)
     response: HttpResponse | Exception = (
         TimeoutError("transport lost")
@@ -1031,3 +1004,297 @@ def test_urllib_hook_runs_after_request_construction_before_urlopen(
             on_remote_start=lambda: calls.append("remote_start"),
         )
     assert calls == ["request"]
+
+
+class VertexTestTransport(httpx.BaseTransport):
+    def __init__(self, response: httpx.Response | Exception, state: BenchmarkStore | None = None):
+        self.response = response
+        self.state = state
+        self.calls: list[httpx.Request] = []
+        self.at_send: list[str] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append(request)
+        if self.state is not None:
+            request_id = self.state.requests()[0]["request_id"]
+            self.at_send.append(self.state.get_request(request_id)["status"])
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+def vertex_response(*, image_count: int = 1) -> httpx.Response:
+    part = {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(png_bytes()).decode()}}
+    return httpx.Response(200, json={
+        "responseId": "vertex-123",
+        "modelVersion": "gemini-3.1-flash-image",
+        "candidates": [{"content": {"role": "model", "parts": [part] * image_count}}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "totalTokenCount": 10},
+    })
+
+
+def vertex_provider(
+    transport: VertexTestTransport,
+    *,
+    project: str | None = "test-project",
+    location: str | None = None,
+    credentials_loader: Callable[[], Credentials] | None = None,
+) -> GeminiImageProvider:
+    credentials = Credentials(token="fake-secret-token", quota_project_id="test-project")
+    return GeminiImageProvider(
+        transport=transport,
+        project=project,
+        location=location or "global",
+        credentials_loader=credentials_loader or (lambda: credentials),
+    )
+
+
+def test_vertex_dry_run_needs_no_credentials_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    provider = GeminiImageProvider(credentials_loader=lambda: pytest.fail("ADC used in dry run"))
+    plan = plan_requests(load_benchmark(CASES), [provider], pack_path=PACK, lock_path=LOCK,
+                         case_ids={"red_apple"}, attempts=1)[0]
+    translated = plan.translated_request
+    assert translated["body"]["backend"] == "Vertex AI"
+    assert translated["body"]["location"] == "global"
+    assert translated["body"]["model"] == "gemini-3.1-flash-image"
+    assert translated["body"]["image_config"]["aspect_ratio"] == "9:16"
+    assert translated["body"]["tools"] == []
+    assert len(translated["supplied_reference_artifact_ids"]) == 3
+    assert all("sha256" in item for item in translated["body"]["input"][1:])
+    assert plan.canonical_prompt and plan.input_fingerprint
+
+
+def test_vertex_missing_project_preflight_is_retryable(
+    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(), state)
+    auth_calls = 0
+
+    def load_credentials() -> Credentials:
+        nonlocal auth_calls
+        auth_calls += 1
+        return Credentials(token="fake-secret-token")
+
+    provider = vertex_provider(transport, project=None, credentials_loader=load_credentials)
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == "retryable_failure"
+    assert state.get_request(first["request_id"])["error_kind"] == "local_preflight"
+    assert state.receipt(first["request_id"]) is None
+    assert transport.calls == []
+    assert auth_calls == 0
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    repaired = runner.run(plan, provider)
+    assert repaired["status"] == "succeeded"
+    assert repaired["request_id"] == first["request_id"]
+    assert transport.at_send == ["remote_started"]
+    assert auth_calls == 1
+
+
+def test_vertex_invalid_location_fails_before_auth_or_generation(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(), state)
+    provider = vertex_provider(transport, location="bad/location",
+                               credentials_loader=lambda: pytest.fail("ADC used"))
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "retryable_failure"
+    assert state.receipt(result["request_id"]) is None
+    assert not transport.calls
+
+
+def test_vertex_default_adc_failure_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tovitunes.benchmark import providers
+
+    def unavailable(**kwargs: Any) -> None:
+        raise ValueError("secret credential file path")
+
+    monkeypatch.setattr(providers.google.auth, "default", unavailable)
+    with pytest.raises(ProviderFailure, match="ADC|Application Default Credentials") as error:
+        providers._vertex_credentials()
+    assert "secret" not in str(error.value)
+
+
+def test_vertex_location_environment_is_respected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "eu")
+    provider = GeminiImageProvider(credentials_loader=lambda: pytest.fail("ADC used"))
+    definition = load_benchmark(CASES)
+    spec = build_spec(definition, definition.cases[0], 1, PACK, LOCK)
+    assert provider.location == "eu"
+    assert provider.translate(spec).body["location"] == "eu"
+
+
+def test_vertex_adc_failure_then_same_attempt_repairs(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(), state)
+    available = False
+
+    def load_credentials() -> Credentials:
+        if not available:
+            raise ProviderFailure("ADC unavailable", outcome="terminal_failure")
+        return Credentials(token="fake-secret-token")
+
+    provider = vertex_provider(transport, credentials_loader=load_credentials)
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == "retryable_failure"
+    assert state.receipt(first["request_id"]) is None
+    assert not transport.calls
+    available = True
+    second = runner.run(plan, provider)
+    assert second["status"] == "succeeded"
+    assert second["request_id"] == first["request_id"]
+    assert len(transport.calls) == 1
+    assert transport.at_send == ["remote_started"]
+    assert state.get_request(second["request_id"])["attempt"] == 1
+
+
+@pytest.mark.parametrize("location", [None, "us"])
+def test_vertex_sdk_request_contract_and_metadata(
+    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch,
+    location: str | None,
+) -> None:
+    monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "unused-developer-key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "unused-google-key")
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(), state)
+    provider = vertex_provider(transport, location=location)
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "succeeded"
+    assert transport.at_send == ["remote_started"]
+    assert len(transport.calls) == 1
+    request = transport.calls[0]
+    body = json.loads(request.content)
+    assert "googleapis.com" in str(request.url)
+    assert f"locations/{location or 'global'}" in str(request.url)
+    assert "gemini-3.1-flash-image" in str(request.url)
+    assert "projects/test-project" in str(request.url)
+    assert request.headers["authorization"] == "Bearer fake-secret-token"
+    assert request.headers["x-goog-user-project"] == "test-project"
+    assert "x-goog-api-key" not in request.headers
+    assert body["generationConfig"]["responseModalities"] == ["IMAGE"]
+    assert body["generationConfig"]["imageConfig"]["aspectRatio"] == "9:16"
+    assert body["generationConfig"].get("tools", []) == []
+    parts = body["contents"][0]["parts"]
+    assert parts[0]["text"] == spec.prompt()
+    assert len(parts) == 4
+    assert [
+        base64.urlsafe_b64decode(part["inlineData"]["data"] + "==") for part in parts[1:]
+    ] == [
+        runner.assets.path_for(ref.artifact_id).read_bytes() for ref in spec.references
+    ]
+    receipt = state.receipt(result["request_id"])
+    assert receipt is not None
+    assert receipt["provider_request_id"] == "vertex-123"
+    assert json.loads(receipt["usage_json"])["total_token_count"] == 10
+    assert receipt["actual_cost_amount"] is None
+    metadata = json.loads(receipt["response_metadata_json"])
+    assert metadata["backend"] == "Vertex AI"
+    assert metadata["location"] == (location or "global")
+    assert metadata["project"] == "test-project"
+    assert "fake-secret-token" not in json.dumps(receipt)
+    assert "unused-developer-key" not in json.dumps(receipt)
+    assert "unused-google-key" not in json.dumps(receipt)
+    persisted_request = json.dumps(state.get_request(result["request_id"]))
+    assert "fake-secret-token" not in persisted_request
+    assert "unused-developer-key" not in persisted_request
+    assert "unused-google-key" not in persisted_request
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "missing"])
+def test_vertex_reference_preflight_and_repair(
+    tmp_path: Path, catalog: BrandCatalog, damage: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(), state)
+    provider = vertex_provider(transport)
+    path = runner.assets.path_for(spec.references[0].artifact_id)
+    original = path.read_bytes()
+    if damage == "corrupt":
+        path.write_bytes(b"bad")
+    else:
+        path.unlink()
+    plan = make_plan(spec, provider)
+    failed = runner.run(plan, provider)
+    assert failed["status"] == "retryable_failure"
+    assert state.receipt(failed["request_id"]) is None
+    assert not transport.calls
+    path.write_bytes(original)
+    success = runner.run(plan, provider)
+    assert success["status"] == "succeeded"
+    assert success["request_id"] == failed["request_id"]
+    assert transport.at_send == ["remote_started"]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (httpx.Response(429, json={"error": {"message": "quota"}}), "retryable_failure"),
+        (httpx.Response(408, json={"error": {"message": "timeout"}}), "ambiguous"),
+        (httpx.Response(500, json={"error": {"message": "server"}}), "ambiguous"),
+        (httpx.ReadTimeout("timeout"), "ambiguous"),
+        (httpx.Response(200, json={}), "ambiguous"),
+    ],
+)
+def test_vertex_remote_failures_preserve_boundary(
+    tmp_path: Path, catalog: BrandCatalog,
+    response: httpx.Response | Exception, expected: str,
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(response, state)
+    provider = vertex_provider(transport)
+    plan = make_plan(spec, provider)
+    first = runner.run(plan, provider)
+    assert first["status"] == expected
+    assert transport.at_send == ["remote_started"]
+    assert state.receipt(first["request_id"]) is None
+    transport.response = vertex_response()
+    second = runner.run(plan, provider)
+    if expected == "retryable_failure":
+        assert second["status"] == "succeeded"
+        assert second["request_id"] == first["request_id"]
+        assert transport.at_send == ["remote_started", "remote_started"]
+    else:
+        assert second["action"] == "manual_reconciliation_required"
+        assert len(transport.calls) == 1
+
+
+def test_vertex_multiple_images_are_ambiguous(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_response(image_count=2), state)
+    provider = vertex_provider(transport)
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "ambiguous"
+    assert state.receipt(result["request_id"]) is None
+
+
+def test_vertex_uses_header_request_id_when_response_id_is_absent(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    payload = vertex_response().json()
+    payload.pop("responseId")
+    transport = VertexTestTransport(httpx.Response(200, json=payload,
+                                                    headers={"x-request-id": "header-123"}), state)
+    provider = vertex_provider(transport)
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "succeeded"
+    receipt = state.receipt(result["request_id"])
+    assert receipt is not None
+    assert receipt["provider_request_id"] == "header-123"
