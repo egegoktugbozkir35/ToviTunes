@@ -35,6 +35,7 @@ uv run python -m tovitunes.cli --config config.example.yaml music-benchmark revi
 uv run python -m tovitunes.cli --config config.example.yaml music-benchmark lyric-decision --lyrics-file benchmarks/music/colors_red_lyrics_v1.yaml --status approved --actor NAME --evidence "educational review"
 uv run python -m tovitunes.cli --config config.example.yaml music-benchmark decision --blind-id ID --type rights --status commercial_use_confirmed --actor NAME --evidence "license/tier evidence"
 uv run python -m tovitunes.cli --config config.example.yaml music-benchmark timing-import --blind-id ID --file timing.json
+uv run python -m tovitunes.cli --config config.example.yaml music-benchmark timing-decision --blind-id ID --version 1 --status approved --actor NAME --evidence "manual alignment check"
 ```
 
 `plan` is credential-free and writes nothing. `run` currently permits only the explicitly named offline fake. Repeated runs reuse successful requests by deterministic fingerprint. A fresh data root is appropriate for each isolated dry-run. `status` includes provider identity for operators; `review-export` supplies blind IDs, brief IDs, duration and hash without provider identity. Scorecards contain `blind_id`, `reviewer`, eight integer `scores` (0–4), `evidence` and optional `hard_failures`.
@@ -57,4 +58,6 @@ Every output starts with rights `unknown` and approval `pending`, even if provid
 
 ## Timing and animation handoff
 
-`TimingAnalysis` is versioned and SHA-256 bound to one audio candidate. It has duration, estimated BPM, beats, downbeats, sections, lyric lines, optional word/phoneme intervals, accents, intro/outro ranges, correction attribution and independent approval. Automatic alignment is an estimate; the editor can import a corrected new version without overwriting prior versions. Beat/downbeat and accent markers can drive bobs and claps; lyric word or phoneme spans can switch mouth sprites; gaps can admit blinks; section boundaries can trigger pointing, celebration and scene transitions. The first animation proof should use these same markers against the accepted audio. The final `TimedStoryboard` remains open until accepted audio and its reviewed timing are available.
+Migration `0008_music_timing_decisions.sql` adds append-only human timing decisions.
+
+`TimingAnalysis` is versioned and SHA-256 bound to one audio candidate. It has duration, estimated BPM, beats, downbeats, sections, lyric lines, optional word/phoneme intervals, accents, intro/outro ranges and correction attribution. Each import starts pending; a separate named timing decision with evidence records approval or rejection. Automatic alignment is an estimate; the editor can import a corrected new version without overwriting prior versions. Beat/downbeat and accent markers can drive bobs and claps; lyric word or phoneme spans can switch mouth sprites; gaps can admit blinks; section boundaries can trigger pointing, celebration and scene transitions. The first animation proof should use these same markers against the accepted audio. The final `TimedStoryboard` remains open until accepted audio and its reviewed timing are available.

@@ -506,6 +506,8 @@ class MusicBenchmark:
         return decision_id
 
     def save_timing(self, blind_id: str, analysis: TimingAnalysis) -> None:
+        if analysis.approval != "pending":
+            raise ValueError("timing import cannot approve itself")
         with closing(self.database.connect()) as db:
             output = db.execute(
                 "SELECT sha256 FROM music_outputs WHERE blind_id = ?", (blind_id,)
@@ -517,3 +519,17 @@ class MusicBenchmark:
                 (blind_id, analysis.version, analysis.model_dump_json(), now()),
             )
             db.commit()
+
+    def timing_decision(
+        self, blind_id: str, version: int, status: str, actor: str, evidence: str
+    ) -> str:
+        if status not in {"approved", "rejected"} or not actor or not evidence:
+            raise ValueError("invalid timing decision")
+        decision_id = str(uuid4())
+        with closing(self.database.connect()) as db:
+            db.execute(
+                "INSERT INTO music_timing_decisions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (decision_id, blind_id, version, status, actor, evidence, now()),
+            )
+            db.commit()
+        return decision_id

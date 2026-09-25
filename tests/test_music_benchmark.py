@@ -160,6 +160,11 @@ def test_blind_review_decisions_and_timing(
         beat_seconds=(0.0, 0.536),
     )
     store.save_timing(blind_id, timing)
+    with pytest.raises(ValueError, match="cannot approve"):
+        store.save_timing(
+            blind_id, timing.model_copy(update={"version": 2, "approval": "approved"})
+        )
+    assert store.timing_decision(blind_id, 1, "approved", "editor", "beat map checked")
     with pytest.raises(Exception):
         store.save_timing(blind_id, timing)
     with pytest.raises(ValueError, match="hash"):

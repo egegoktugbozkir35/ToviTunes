@@ -88,6 +88,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_timing = music_commands.add_parser("timing-import")
     music_timing.add_argument("--blind-id", required=True)
     music_timing.add_argument("--file", type=Path, required=True)
+    timing_decision = music_commands.add_parser("timing-decision")
+    timing_decision.add_argument("--blind-id", required=True)
+    timing_decision.add_argument("--version", type=int, required=True)
+    timing_decision.add_argument("--status", choices=("approved", "rejected"), required=True)
+    timing_decision.add_argument("--actor", required=True)
+    timing_decision.add_argument("--evidence", required=True)
     visual_commands = visual.add_subparsers(dest="visual_command", required=True)
     run = visual_commands.add_parser("run")
     run.add_argument("--provider", action="append", choices=("google", "openai"))
@@ -159,6 +165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.music_command == "decision":
             decision_id = benchmark.decision(
                 args.blind_id, args.type, args.status, args.actor, args.evidence
+            )
+            print(json.dumps({"decision_id": decision_id}, sort_keys=True))
+        elif args.music_command == "timing-decision":
+            decision_id = benchmark.timing_decision(
+                args.blind_id, args.version, args.status, args.actor, args.evidence
             )
             print(json.dumps({"decision_id": decision_id}, sort_keys=True))
         else:
