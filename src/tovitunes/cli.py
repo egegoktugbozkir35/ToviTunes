@@ -94,7 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     models = music_commands.add_parser("analysis-models")
     model_commands = models.add_subparsers(dest="model_command", required=True)
     prepare = model_commands.add_parser("prepare")
-    prepare.add_argument("--asr-model", choices=("small.en",), default="small.en")
+    prepare.add_argument("--asr-model", choices=("small.en", "medium.en"), default="small.en")
     prepare.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     prepare.add_argument("--allow-model-download", action="store_true", required=True)
     music_commands.add_parser("status")
