@@ -173,6 +173,12 @@ def test_deterministic_red_props(kind, catalog):
         assert metadata["props"][0]["count"] == 1
         assert metadata["props"][0]["lesson_color"] == LESSON_RED
         assert metadata["contains_tovi"] is False
+        assert metadata["prop_style_version"] == "preschool_soft_v1"
+        assert metadata["supersample"] == 4
+        assert all(
+            metadata["prop_style_contract"][key]
+            for key in ("antialiased", "soft_shadow", "highlight")
+        )
     assert sha256(outputs[0]).digest() == sha256(outputs[1]).digest()
 
 

@@ -36,6 +36,19 @@ class CharacterAnimation(ProductionModel):
     downbeat_indices: tuple[int, int]
     beat_seconds: tuple[float, ...]
     downbeat_seconds: tuple[float, ...]
+    composition_style: str = "legacy_center"
+    character_slot: str = "lower_center"
+    gesture_direction: Literal["left", "right", "none"] = "none"
+    visual_state_id: str = "legacy"
+    inherited_from_scene_id: str | None = None
+    micro_scene: bool = False
+    emphasis: Literal["gentle_pulse"] | None = None
+    duration_seconds: float = Field(default=1, gt=0)
+    motion_time_offset: float = Field(default=0, ge=0)
+    motion_duration_seconds: float = Field(default=1, gt=0)
+    motion_has_drift: bool = False
+    outro_phases: tuple[tuple[str, float, float], ...] = ()
+    long_scene_activity: bool = False
     mouth_animation_supported: Literal[False] = False
     mouth_mode: Literal["approved_sprite_as_is"] = "approved_sprite_as_is"
     mouth_reason: str = "Component normalization has no registered singing-pose mouth anchor."

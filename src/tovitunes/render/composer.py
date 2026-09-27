@@ -22,6 +22,23 @@ def ball_position(t: float, bbox: list[int], canvas_width: int) -> tuple[float, 
     return canvas_width + (bbox[0] - canvas_width) * (1 - (1 - u) ** 3), float(bbox[1])
 
 
+def prop_position(t: float, prop: dict[str, Any], canvas_width: int) -> tuple[float, float]:
+    """Ground-contact translation for any registered rolling object."""
+    bbox = prop["bbox"]
+    if prop["motion"] == "roll_in":
+        if not prop["grounded"] or prop["placement_mode"] != "ground":
+            raise ValueError("rolling prop must be grounded")
+        if abs(bbox[3] - prop["ground_plane_y"]) > 1:
+            raise ValueError("rolling target is off the ground plane")
+        # Enter from the target's nearest edge, avoiding the character on the opposite side.
+        start_x = (
+            canvas_width if (bbox[0] + bbox[2]) / 2 >= canvas_width / 2 else -(bbox[2] - bbox[0])
+        )
+        u = min(1.0, max(0.0, t / 0.95))
+        return start_x + (bbox[0] - start_x) * (1 - (1 - u) ** 3), float(bbox[1])
+    return float(bbox[0]), float(bbox[1])
+
+
 def build_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
     # Imports stay inside the adapter; minimal installs can still plan and inspect.
     import numpy as np
@@ -42,9 +59,11 @@ def build_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
     for prop in payload["metadata"]["props"]:
         if prop["motion"] == "roll_in":
             bbox = prop["bbox"]
-            ball = ImageClip(np.array(prop_image("red_ball", bbox[2] - bbox[0])), transparent=True)
+            ball = ImageClip(
+                np.array(prop_image(prop["type"], bbox[2] - bbox[0])), transparent=True
+            )
             ball = ball.with_duration(duration).with_position(
-                lambda t, b=bbox: ball_position(t, b, canvas[0])
+                lambda t, p=prop: prop_position(t, p, canvas[0])
             )
             layers.insert(1, ball)
     clip = CompositeVideoClip(layers, size=canvas).with_duration(duration)
