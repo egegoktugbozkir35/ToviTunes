@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from tovitunes.artifacts.store import ArtifactRecord, AssetStore, InputDependency
+from tovitunes.catalog import BrandCatalog
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import (
     EpisodeConcept,
@@ -33,9 +34,10 @@ class GeneratedDraft(Generic[T]):
     output: T
     provider: str
     model: str
-    request_id: str
+    request_id: str | None
     prompt_version: str
     generated_at: datetime
+    local_request_id: str | None = None
 
 
 class DraftGenerator(Protocol):
@@ -155,7 +157,7 @@ class CreativeDraftService:
                 (episode_id,),
             ).fetchone()
         if decision is None or decision["status"] != "approved":
-            raise PermissionError("pinned learning objective needs human approval")
+            raise PermissionError("pinned learning objective needs approval")
 
     def review_objective(
         self,
@@ -216,6 +218,17 @@ class CreativeDraftService:
         draft: GeneratedDraft[T],
         dependencies: Sequence[str] = (),
     ) -> ArtifactRecord:
+        if draft.local_request_id:
+            with closing(self.store.database.connect()) as connection:
+                row = connection.execute(
+                    "SELECT artifact_id FROM artifact_versions WHERE episode_id=? AND kind=? "
+                    "AND json_extract(provenance_json,'$.local_request_id')=?",
+                    (episode_id, kind, draft.local_request_id),
+                ).fetchone()
+            if row:
+                if not self.store.inspect(row[0]).valid:
+                    raise ValueError("retained creative artifact is corrupt; do not regenerate")
+                return self.store.get(row[0])
         source = self.generated_root / f"{uuid4()}.json"
         source.write_text(draft.output.model_dump_json(indent=2), encoding="utf-8")
         try:
@@ -231,6 +244,7 @@ class CreativeDraftService:
                     provider=draft.provider,
                     model=draft.model,
                     request_id=draft.request_id,
+                    local_request_id=draft.local_request_id,
                     prompt_version=draft.prompt_version,
                     input_artifact_ids=tuple(dependencies),
                 ),
@@ -296,3 +310,70 @@ class CreativeDraftService:
             raise ValueError("music spec differs from selected lyrics or objective")
         return self._persist(episode_id, "music_spec", draft, (selected.identity.artifact_id,))
 
+    def approve_curriculum_objective(
+        self, episode_id: str, catalog: BrandCatalog, *, committed_curriculum_sha256: str
+    ) -> None:
+        """Identity approval only, from a trusted committed catalog digest, never an LLM."""
+        from tovitunes.creative.director import validate_pins
+
+        if committed_curriculum_sha256 != catalog.curriculum_revision.sha256:
+            raise PermissionError("curriculum bytes differ from committed curriculum revision")
+        validate_pins(self.store.database.get_episode(episode_id), catalog)
+        with closing(self.store.database.connect()) as connection:
+            prior = connection.execute(
+                "SELECT status FROM approval_decisions WHERE episode_id=? ORDER BY rowid "
+                "DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+        if prior:
+            if prior[0] != "approved":
+                raise PermissionError("existing objective review requires human escalation")
+            return
+        self.review_objective(
+            episode_id,
+            "approved",
+            actor="machine:curriculum_policy",
+            policy_version="canonical_curriculum_v1",
+            reason="Exact identity and bytes of the committed curriculum objective.",
+        )
+
+    def select_structural(self, artifact_id: str) -> None:
+        """Structural admission retains human overrides and makes no artistic-quality claim."""
+        from tovitunes.creative.validation import (
+            validate_episode_spec,
+            validate_lyrics,
+            validate_music,
+        )
+
+        record = self.store.get(artifact_id)
+        episode = self.store.database.get_episode(record.identity.owner_id)
+        data = self.store.read_json(artifact_id)
+        if record.identity.kind == "episode_spec":
+            validate_episode_spec(episode, EpisodeSpec.model_validate(data))
+        elif record.identity.kind == "lyrics":
+            spec = self.store.selected("episode", episode.episode_id, "episode_spec", "main")
+            if spec is None:
+                raise ValueError("episode spec must be selected")
+            validate_lyrics(episode, LyricsSpec.model_validate(data), spec.identity.artifact_id)
+        elif record.identity.kind == "music_spec":
+            lyrics = self.store.selected("episode", episode.episode_id, "lyrics", "main")
+            if lyrics is None:
+                raise ValueError("lyrics must be selected")
+            validate_music(episode, MusicSpec.model_validate(data), lyrics.identity.artifact_id)
+        else:
+            raise ValueError("artifact is not a creative draft")
+        with closing(self.store.database.connect()) as connection:
+            prior = connection.execute(
+                "SELECT status FROM approval_decisions WHERE artifact_id=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (artifact_id,),
+            ).fetchone()
+        if prior and prior[0] in {"rejected", "needs_review"}:
+            raise PermissionError("existing creative review requires human escalation")
+        self.review_candidate(
+            artifact_id,
+            "approved",
+            actor="machine:creative_policy",
+            policy_version="creative_structural_v1",
+            reason="Conforms to pinned curriculum, brand structure and schema only.",
+        )
