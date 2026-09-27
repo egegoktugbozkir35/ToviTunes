@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1", "mypy>=1.15,<2"]
 audio-analysis = ["librosa>=0.11,<1"]
+audio-timing = ["beat-this==1.1.0"]
 audio-asr = ["whisperx>=3.7,<4; python_version < '3.13'"]
 
 [tool.setuptools]
@@ -49,5 +50,5 @@ packages = ["tovitunes"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk"]
+module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk", "beat_this.*"]
 ignore_missing_imports = true

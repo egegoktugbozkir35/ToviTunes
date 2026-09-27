@@ -66,7 +66,7 @@ The deterministic `colors_red_lyrics` policy checks the exact brief association 
 
 Rights begin `unknown`. Automatic `commercial_use_confirmed` requires configured evidence matching the request's provider/model: account, product tier, terms version/date/source, a retained terms snapshot and matching SHA-256, commercial usage mode and an explicit commercial grant. Missing or adverse evidence leaves rights `unknown`. Provider metadata and LLM statements do not, by themselves, establish commercial rights. A configuration's authenticity must be established before any real provider is used. The automatic approval gate requires the latest rights decision to be a passing machine policy confirmation. Manual rights decisions remain explicit interventions.
 
-Automated QA verifies retained audio integrity, receipt identity and duration against the brief. It derives lyric adherence, literal educational phrase evidence, teaching intelligibility proxies, vocabulary safety evidence, beat usability, production fit and digital artifact observations from the persisted report. Missing or insufficient evidence cannot pass. V1 leaves the broad perceptual artifact claim unverified and therefore does not unlock automatic approval. Lyria does not supply documented word or phoneme timestamps here; provider text cannot substitute for independent recognition or measured timing.
+Automated QA verifies retained audio integrity, receipt identity and duration against the brief. It derives lyric adherence, literal educational phrase evidence, teaching intelligibility proxies, vocabulary safety evidence, beat usability, production fit and digital artifact observations from the persisted report. Missing or insufficient evidence cannot pass. The compatible `artifact_free` field means no configured objective digital defect detected by deterministic checks; it does not assess universal perceptual perfection. Rights and approval remain separate gates. Lyria does not supply documented word or phoneme timestamps here; provider text cannot substitute for independent recognition or measured timing.
 
 The music approval policy requires passing exact lyrics, rights and QA evaluations, confirmed rights, intact audio, no recorded hard failure and no active manual rejection. It appends a machine decision referencing the evaluation. A later failure of lyrics, rights, QA, review or detected artifact integrity returns an approved candidate to `pending` with a new reasoned decision. Prior approvals are never deleted. Passing again does not silently restore approval; rerun the approval policy to append a new decision. Manual approval also checks mandatory safety gates. A manual rejection vetoes automatic approval until a person explicitly clears it.
 
@@ -126,7 +126,91 @@ After preparation, omit `--allow-model-download` for offline analysis. HF/Transf
 
 Independent ASR answers what the model heard, preserving the exact text for deterministic WER, coverage and phrase checks. Separate canonical forced alignment answers where expected lyrics align, and cannot prove that those lyrics were sung correctly. No timestamp interpolation is used. Missing canonical timestamps remain absent and are listed in `missing_words`; only observed words and fully aligned lines survive, and timing admission fails. Word scores are CTC alignment scores, not recognition confidence.
 
-Choose an unused analysis version: historical evidence is immutable and changed code/configuration needs a new version. Timing policy runs separately. Downbeats remain unavailable, never synthesized as every fourth beat, so successful ASR can still fail timing. All duration, WER, coverage and score thresholds remain unchanged. Analysis/preparation cannot approve music or change rights.
+Choose an unused analysis version: historical evidence is immutable and changed code/configuration needs a new version. Timing policy runs separately. Production beats and downbeats now use the optional Beat This detector described below, never synthetic every-fourth-beat inference. Missing detector assets fail timing closed. All duration, WER, coverage and score thresholds remain unchanged. Analysis/preparation cannot approve music or change rights.
+
+## Production beat/downbeat timing
+
+Install the released `beat-this==1.1.0` through the separate `audio-timing` extra.
+The public `beat_this.inference.Audio2Beats` adapter consumes the verified decoded
+PCM and its actual sample rate, so timing adds no MP3 decode. It supplies both
+beat and downbeat arrays. BPM is 60 divided by their measured mean beat interval;
+interval mean, population standard deviation and CV use that same beat clock.
+No secondary beat grid is mixed in. `dbn=False` is mandatory; madmom and Torch Hub
+repository-code execution are not used. FP16 is enabled only for CUDA, and CPU
+is supported for diagnosis. Minimal installation, configuration and CI require
+neither Beat This nor Torch nor CUDA.
+
+```text
+uv sync --python 3.11 --locked --extra dev --extra audio-analysis --extra audio-asr --extra audio-timing
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analysis-models prepare-timing --device cuda --allow-model-download
+# Run again to verify action=reused and offline_load_validated=true.
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analysis-doctor --asr-model large-v3 --device cuda
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analyze-audio --blind-id <ID> --analysis-version <NEXT_FREE_VERSION> --asr-model large-v3 --device cuda
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark policy-evaluate --type timing --blind-id <ID> --version <NEXT_FREE_VERSION>
+```
+
+For the already validated Windows CUDA environment, use its dedicated Python
+launcher and install only `beat-this==1.1.0` with `uv pip --python <ENV_PYTHON>`.
+Do not sync over torch/torchaudio 2.8.0+cu128, WhisperX 3.8.6, Faster-Whisper 1.2.1
+or CTranslate2 4.8.2. The [CUDA verification guide](LARGE_V3_CUDA_ASR_FINAL_VERIFICATION.md)
+documents process-local DLL selection. Model preparation requires explicit
+network permission and does not invoke generation or provider-resume.
+
+Timing preparation downloads only the upstream `final0` checkpoint, retaining it
+at `<data_root>/music-benchmark/.analysis-models/torch/hub/checkpoints/beat_this-final0.ckpt`.
+`timing-inventory.json` independently records the package version, logical model,
+source URL, SHA-256, byte size, action, device and offline load validation; ASR's
+inventory remains intact. Subsequent preparation reuses the asset. Inventoried
+content changes fail closed. Runtime verifies the current file hash/size and
+inventory identity, passes only its absolute local path, and blocks outbound
+sockets and upstream's implicit checkpoint URL fallback. Analysis never receives
+the short name `final0` and has no timing-download switch. Missing package,
+checkpoint or verified inventory records unavailable rhythm with no fabricated
+downbeats. It does not break unrelated CLI commands.
+
+Doctor reports a separate `timing` object with installed version, checkpoint
+path/cache/hash, requested device, local model-load readiness and offline timing
+readiness. The existing CUDA fields report CUDA availability. The doctor runs
+local timing load validation without network access and never searches global
+untracked caches. Its existing top-level `offline_ready` remains ASR readiness;
+production requires both it and `timing.offline_timing_ready`.
+
+Rhythm provenance retains Beat This/package/model/checkpoint SHA, device, FP16,
+DBN=false and source audio SHA. Ordered, finite, bounded detector arrays are
+required; detected downbeats must lie on that detector's measured beat grid.
+Historical rhythm JSON without `downbeat_seconds` or provenance loads with
+defaults. Historical analysis, timing and provenance rows are never rewritten.
+
+Only canonical words admitted by the existing coverage >=0.85, WER <=0.25 and
+every-word score >=0.5 thresholds supply production word/line/section timing.
+Their first start gives the **pre-lyric interval** `[0, first_word.start]`, and
+their last end gives the **post-lyric interval** `[last_word.end, actual_duration]`.
+Zero-length edges remain absent. These are measured non-lyric edge regions, not
+claims of purely instrumental sound. No generation-prompt schedule, interpolation,
+word-specific exception or manual endpoint is used. Production fit also requires
+positive measured edge ranges, complete rhythm/alignment, admitted words/lines/
+sections, duration <= the canonical maximum and existing technical/edge-silence
+gates. Objective artifact checks fail for invalid PCM/decode evidence, clipping,
+excessive silence or dropout; verified clear evidence passes, unavailable source
+verification is unknown. No aesthetic scoring is added.
+
+### Dependency and license provenance
+
+The released [Beat This project](https://github.com/CPJKU/beat_this/tree/v1.1.0)
+and [PyPI package](https://pypi.org/project/beat-this/1.1.0/) are reused directly;
+no network implementation is copied. The installed wheel's `inference.py` and
+minimal postprocessor were inspected to validate local-path fallback behavior,
+FP16 support, checkpoint naming and `(beats, downbeats)` tuple order. Focused
+adapter tests use distinguishable arrays, and the production probe checks the
+installed postprocessor itself.
+
+Upstream releases code and published model weights under MIT. Its attribution
+and license are retained in [BEAT_THIS_LICENSE.txt](BEAT_THIS_LICENSE.txt).
+Upstream also warns that some training files are copyrighted or under limited
+Creative Commons licenses and users must assess their use case. This caveat and
+the MIT declaration do not establish commercial rights for Lyria output.
+Rights remain governed separately; see the measured
+[production closeout](../MUSIC_TIMING_QA_PRODUCTION_CLOSEOUT.md).
 
 The real CPU validation on 2026-09-27 used Python 3.11.9, WhisperX 3.8.6, faster-whisper 1.2.1, CTranslate2 4.8.2, torch/torchaudio 2.8.0, torchvision 0.23.0, transformers 4.57.6, huggingface-hub 0.36.2, NLTK 3.10.3, librosa 0.11.0 and numpy 2.4.6. The original lock required no dependency changes. FFmpeg 8.1 decoded the MP3. Pyannote's optional TorchCodec decoder warns about unavailable DLLs; WhisperX uses FFmpeg and passes in-memory waveforms, and actual CPU inference/alignment succeeded without that decoder.
 

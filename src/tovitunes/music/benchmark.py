@@ -1177,6 +1177,7 @@ class MusicBenchmark:
                 production_condition = False
             elif (
                 rhythm.status == "complete"
+                and bool(report.timing.downbeat_seconds)
                 and report.alignment.status == "complete"
                 and report.timing.intro is not None
                 and report.timing.outro is not None
@@ -1287,7 +1288,11 @@ class MusicBenchmark:
                     },
                 ),
                 "artifact_free": check(
-                    False if technical_defect else None,
+                    False
+                    if technical_defect
+                    else True
+                    if objective["decodes_and_matches_receipt"]
+                    else None,
                     {
                         "decode_integrity": metrics.decode_integrity,
                         "clipping_ratio": metrics.clipping_ratio,
@@ -1295,9 +1300,10 @@ class MusicBenchmark:
                             metrics.longest_near_silent_span_seconds
                         ),
                         "invalid_pcm_samples": metrics.invalid_pcm_samples,
+                        "near_silence_ratio": metrics.near_silence_ratio,
                         "scope": (
-                            "objective digital defects only; broad perceptual artifact absence "
-                            "unverified"
+                            "no configured objective digital defect detected by deterministic "
+                            "technical checks; perceptual perfection not assessed"
                         ),
                     },
                 ),

@@ -114,6 +114,8 @@ class RhythmEvidence(AnalysisModel):
     status: EvidenceStatus
     estimated_bpm: float | None = Field(default=None, gt=0)
     beat_seconds: tuple[float, ...] = ()
+    downbeat_seconds: tuple[float, ...] = ()
+    provenance: AnalyzerProvenance | None = None
     beat_count: int = Field(ge=0)
     mean_interval_seconds: float | None = Field(default=None, gt=0)
     interval_std_seconds: float | None = Field(default=None, ge=0)
@@ -130,6 +132,14 @@ class RhythmEvidence(AnalysisModel):
             or any(b <= a for a, b in zip(self.beat_seconds, self.beat_seconds[1:]))
         ):
             raise ValueError("beat timestamps must increase and match beat count")
+        for points in (self.beat_seconds, self.downbeat_seconds):
+            if any(t < 0 for t in points) or any(b <= a for a, b in zip(points, points[1:])):
+                raise ValueError("rhythm timestamps must be nonnegative and increase")
+        if not set(self.downbeat_seconds).issubset(self.beat_seconds):
+            raise ValueError("downbeats must belong to the measured beat grid")
+        if self.provenance and self.provenance.name == "Beat This" and self.status == "complete":
+            if not self.downbeat_seconds:
+                raise ValueError("complete Beat This evidence requires downbeats")
         return self
 
 
@@ -188,6 +198,8 @@ class AudioAnalysis(AnalysisModel):
             or self.sample_rate_hz != self.technical_metrics.sample_rate_hz
             or self.channel_count != self.technical_metrics.channel_count
             or self.rhythm.beat_seconds != self.timing.beat_seconds
+            or self.rhythm.downbeat_seconds != self.timing.downbeat_seconds
+            or any(t > self.duration_seconds for t in self.rhythm.downbeat_seconds)
             or any(t < 0 or t > self.duration_seconds for t in self.rhythm.beat_seconds)
             or self.timing.audio_sha256 != self.audio_sha256
             or self.timing.version != self.version

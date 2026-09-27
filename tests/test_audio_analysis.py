@@ -43,7 +43,7 @@ def deterministic_ml(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("socket.socket.connect", no_network)
 
-    def rhythm(decoded, brief):
+    def rhythm(decoded, brief, root, device, audio_sha):
         return RhythmEvidence(
             status="unavailable",
             beat_count=0,
@@ -252,6 +252,152 @@ def test_58_second_audio_fails_45_second_ceiling(tmp_path: Path) -> None:
     evidence = json.loads(result["evidence_json"])
     assert evidence["objective_checks"]["duration_in_scope"] is False
     assert evidence["derived_checks"]["production_fit"]["status"] == "fail"
+
+
+def production_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tovitunes.music.timing_runtime import measured_rhythm
+
+    def rhythm(decoded, brief, root, device, audio_sha):
+        beats = tuple(i * 0.5 for i in range(int(decoded.duration * 2)))
+        return measured_rhythm(beats, beats[::4], decoded.duration, brief)
+
+    def asr(path, spec, duration, config):
+        words = tuple(
+            RecognizedWord(start=0.5 + i * 0.5, end=0.8 + i * 0.5, text=w, score=0.9)
+            for i, w in enumerate(normalized_words(spec.lyrics.text()))
+        )
+        lines, offset = [], 0
+        for line in spec.lyrics.lines:
+            count = len(normalized_words(line.text))
+            lines.append(
+                TimedText(
+                    start=words[offset].start, end=words[offset + count - 1].end, text=line.text
+                )
+            )
+            offset += count
+        return (
+            TranscriptionEvidence(
+                status="complete",
+                recognized_text=spec.lyrics.text(),
+                words=words,
+                mean_word_score=0.9,
+            ),
+            AlignmentEvidence(
+                status="complete",
+                canonical_words=words,
+                lyric_lines=tuple(lines),
+                aligned_word_count=len(words),
+                aligned_line_count=len(lines),
+            ),
+            "fixture",
+            "cpu",
+        )
+
+    monkeypatch.setattr("tovitunes.music.analysis.analyze_rhythm", rhythm)
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", asr)
+
+
+def test_production_gates_satisfiable_with_measured_evidence(case, monkeypatch):
+    production_fixture(monkeypatch)
+    store, blind_id, provider = case
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig())
+    assert report.timing.intro.start == 0
+    assert report.timing.intro.end == 0.5  # measured first word, not prompt schedule
+    assert report.timing.outro.start == report.alignment.canonical_words[-1].end
+    assert report.timing.outro.end == report.duration_seconds
+    assert store.evaluate_analysis_qa(blind_id, 1)["status"] == "pass"
+    assert store.evaluate_timing(blind_id, 1)["status"] == "pass"
+    assert provider.calls == 1  # only fixture setup; analysis never generates
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"clipping_ratio": 0.002},
+        {"longest_near_silent_span_seconds": 2.1},
+        {"decode_integrity": False, "invalid_pcm_samples": 1},
+        {"near_silence_ratio": 0.21},
+    ],
+)
+def test_configured_digital_defects_fail_artifact_gate(case, monkeypatch, changes):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import technical_measurements as measure
+
+    monkeypatch.setattr(
+        "tovitunes.music.analysis.technical_measurements",
+        lambda decoded: measure(decoded).model_copy(update=changes),
+    )
+    store, blind_id, _ = case
+    store.analyze_audio(blind_id, 1, AnalysisConfig())
+    checks = json.loads(store.evaluate_analysis_qa(blind_id, 1)["evidence_json"])["derived_checks"]
+    assert checks["artifact_free"]["status"] == "fail"
+    assert checks["production_fit"]["status"] == "fail"
+
+
+def test_unverifiable_technical_source_is_unknown(case, monkeypatch):
+    store, blind_id, _ = case
+    store.analyze_audio(blind_id, 1, AnalysisConfig())
+
+    def unavailable(*args):
+        raise OSError("source unavailable")
+
+    monkeypatch.setattr(store, "_verify_audio", unavailable)
+    result = store.evaluate_analysis_qa(blind_id, 1)
+    assert (
+        json.loads(result["evidence_json"])["derived_checks"]["artifact_free"]["status"]
+        == "unknown"
+    )
+
+
+@pytest.mark.parametrize("edges", [(0, 30), (0.5, 29)])
+def test_measured_zero_length_edges_absent(edges):
+    spec = plan(
+        load_brief(ROOT / "colors_red_v1.yaml"),
+        load_lyrics(ROOT / "colors_red_lyrics_v1.yaml"),
+        [FakeMusicProvider()],
+        attempt=1,
+    )[0].canonical_spec
+    words = (RecognizedWord(start=edges[0], end=edges[1], text="fixture", score=0.9),)
+    alignment = AlignmentEvidence(
+        status="complete",
+        canonical_words=words,
+        lyric_lines=(TimedText(start=edges[0], end=edges[1], text="fixture"),),
+        aligned_word_count=1,
+        aligned_line_count=1,
+    )
+    rhythm = RhythmEvidence(
+        status="unavailable", beat_count=0, target_bpm=112, allowed_bpm_range=(100, 124)
+    )
+    comparison = compare_lyrics(spec.lyrics.text(), spec.lyrics.text(), complete=True)
+    result = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison)
+    if edges == (0, 30):
+        assert result.intro is result.outro is None
+    else:
+        assert (result.intro.start, result.intro.end) == (0, 0.5)
+        assert (result.outro.start, result.outro.end) == (29, 30)
+
+
+def test_low_scored_generic_word_blocks_edges(case, monkeypatch):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as aligned
+
+    def low_score(*args):
+        transcript, alignment, version, device = aligned(*args)
+        words = list(alignment.canonical_words)
+        words[3] = words[3].model_copy(update={"score": 0.421})
+        return (
+            transcript,
+            alignment.model_copy(update={"canonical_words": tuple(words)}),
+            version,
+            device,
+        )
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", low_score)
+    store, blind_id, _ = case
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig())
+    assert report.timing.words == ()
+    assert report.timing.intro is report.timing.outro is None
+    assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
 
 
 def test_pcm_measurements_and_invalid_samples() -> None:
