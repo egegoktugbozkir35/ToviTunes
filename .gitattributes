@@ -7,3 +7,4 @@ brands/tovitunes/characters/tovi/character.yaml -text
 brands/tovitunes/characters/tovi/packs/v1/pack.yaml -text
 brands/tovitunes/characters/tovi/packs/v1/intake.yaml -text
 brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml -text
+brands/tovitunes/storyboards/*.yaml -text

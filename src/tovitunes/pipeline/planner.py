@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tovitunes.artifacts.store import AssetStore
+from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedStoryboard, beat_range
 
 Goal = Literal["audio", "storyboard", "render", "release"]
 Action = Literal[
@@ -20,7 +21,7 @@ _SCENE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class TimedStoryboardIndex(BaseModel):
-    """Small stable index; richer scene fields are added in the storyboard phase."""
+    """Read-only compatibility for historical index artifacts; new writers use TimedStoryboard."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -63,6 +64,7 @@ class PlanSnapshot:
     uncleared_rights: tuple[str, ...] = ()
     objective_approval: str | None = None
     character_pack_readiness: tuple[str, ...] = ()
+    production_audio_handoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,13 +83,18 @@ class PlanResult:
     artifact_id: str | None = None
 
 
-def requirements(goal: Goal, scene_ids: tuple[str, ...]) -> tuple[Requirement, ...]:
+def requirements(
+    goal: Goal, scene_ids: tuple[str, ...], production_audio_handoff: bool = False
+) -> tuple[Requirement, ...]:
     nodes = [
         Requirement("episode_spec", "episode_spec", "main"),
         Requirement("lyrics", "lyrics", "main", ("episode_spec",)),
         Requirement("music_spec", "music_spec", "main", ("lyrics",)),
         Requirement("audio_master", "audio_master", "main", ("music_spec",)),
     ]
+    if production_audio_handoff:
+        # Retained accepted music enters via a selected immutable provider handoff manifest.
+        nodes = [Requirement("audio_master", "audio_master", "main")]
     if goal == "audio":
         return tuple(nodes)
     nodes.extend(
@@ -142,9 +149,9 @@ def _classify(candidate: CandidateFact) -> Action:
 def plan(snapshot: PlanSnapshot, goal: Goal) -> PlanResult:
     """Pure decision over one snapshot; callers must recheck before side effects."""
     if snapshot.objective_approval != "approved":
-        return PlanResult("review", "learning_objective", "pinned objective needs human approval")
+        return PlanResult("review", "learning_objective", "pinned objective needs approval")
     selected_by_key: dict[str, str] = {}
-    for node in requirements(goal, snapshot.scene_ids):
+    for node in requirements(goal, snapshot.scene_ids, snapshot.production_audio_handoff):
         slot = (node.kind, node.slot_key)
         fact = snapshot.slots.get(slot, SlotFact(None, ()))
         required_ids = {selected_by_key[key] for key in node.prerequisites}
@@ -303,11 +310,75 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
         requests[(row["kind"], row["slot_key"])].append(row["status"])
     scene_ids: tuple[str, ...] = ()
     storyboard_problem: str | None = None
+    production_audio_handoff = False
+    master_id = selected.get(("audio_master", "main"))
+    manifest_id = selected.get(("production_handoff", "main"))
+    if master_id and manifest_id and manifest_id in dependencies[master_id]:
+        try:
+            master = store.get(master_id)
+            manifest = store.read_json(manifest_id)
+            production_audio_handoff = (
+                isinstance(manifest, dict)
+                and manifest.get("source_audio_sha256") == master.sha256
+                and manifest.get("local_request_id") == master.provenance.local_request_id
+                and manifest.get("provider") == master.provenance.provider
+                and manifest.get("model") == master.provenance.model
+                and manifest.get("prompt_contract") == master.provenance.prompt_version
+                and master.provenance.source_kind == "provider"
+                and master.provenance.input_artifact_ids == (manifest_id,)
+            )
+        except (ValueError, KeyError):
+            production_audio_handoff = False
     storyboard_id = selected.get(("timed_storyboard", "main"))
     if storyboard_id is not None:
         try:
-            index = TimedStoryboardIndex.model_validate(store.read_json(storyboard_id))
-            master_id = selected.get(("audio_master", "main"))
+            payload = store.read_json(storyboard_id)
+            index: TimedStoryboard | TimedStoryboardIndex
+            if isinstance(payload, dict) and "scenes" in payload:
+                index = TimedStoryboard.model_validate(payload)
+                episode = store.database.get_episode(episode_id)
+                alignment = AudioAlignment.model_validate(
+                    store.read_json(index.audio_alignment_artifact_id)
+                )
+                beats = BeatAnalysis.model_validate(
+                    store.read_json(index.beat_analysis_artifact_id)
+                )
+                if (
+                    index.episode_id != episode_id
+                    or episode.character_packs != (index.character_pack,)
+                    or index.concept_id != episode.concept_id
+                    or index.objective_id != episode.objective_id
+                    or index.audio_sha256 != store.get(index.audio_master_artifact_id).sha256
+                    or index.audio_sha256 != alignment.audio_sha256
+                    or index.audio_sha256 != beats.audio_sha256
+                    or index.duration_seconds != alignment.duration_seconds
+                    or index.duration_seconds != beats.duration_seconds
+                    or index.audio_alignment_artifact_id
+                    != selected.get(("audio_alignment", "main"))
+                    or index.beat_analysis_artifact_id != selected.get(("beat_analysis", "main"))
+                    or alignment.audio_master_artifact_id != index.audio_master_artifact_id
+                    or beats.audio_master_artifact_id != index.audio_master_artifact_id
+                    or tuple(
+                        (s.lyric_text, s.lyric_start, s.lyric_end)
+                        for s in index.scenes
+                        if s.kind == "lyric"
+                    )
+                    != tuple((x.text, x.start, x.end) for x in alignment.lyric_lines)
+                    or any(
+                        s.beat_index_range
+                        != beat_range(beats.beat_seconds, s.start, s.end, beats.duration_seconds)
+                        or s.downbeat_index_range
+                        != beat_range(
+                            beats.downbeat_seconds, s.start, s.end, beats.duration_seconds
+                        )
+                        for s in index.scenes
+                    )
+                ):
+                    raise ValueError(
+                        "storyboard differs from selected production evidence or episode"
+                    )
+            else:
+                index = TimedStoryboardIndex.model_validate(payload)
             if index.audio_master_artifact_id != master_id:
                 raise ValueError("storyboard points to a different audio master")
             scene_ids = index.scene_ids
@@ -315,7 +386,7 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
             storyboard_problem = str(exc)
     required_roots = [
         selected[(node.kind, node.slot_key)]
-        for node in requirements("release", scene_ids)
+        for node in requirements("release", scene_ids, production_audio_handoff)
         if (node.kind, node.slot_key) in selected
     ]
     uncleared: set[str] = set()
@@ -338,9 +409,9 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
         uncleared_rights=tuple(sorted(uncleared)),
         objective_approval=objective_decision["status"] if objective_decision else None,
         character_pack_readiness=tuple(row["readiness"] for row in pack_rows),
+        production_audio_handoff=production_audio_handoff,
     )
 
 
 def plan_episode(store: AssetStore, episode_id: str, goal: Goal) -> PlanResult:
     return plan(load_snapshot(store, episode_id), goal)
-
