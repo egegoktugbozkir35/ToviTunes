@@ -1,6 +1,7 @@
 """Canonical song inputs, review rubric and editable timing artifact."""
 
 import json
+import math
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
@@ -175,9 +176,12 @@ class TimingAnalysis(StrictModel):
 
     @model_validator(mode="after")
     def within_audio(self) -> "TimingAnalysis":
+        if not math.isfinite(self.duration_seconds):
+            raise ValueError("timing duration must be finite")
         points = (self.beat_seconds, self.downbeat_seconds, self.accents)
         if any(
-            any(t < 0 or t > self.duration_seconds for t in group) or tuple(sorted(group)) != group
+            any(not math.isfinite(t) or t < 0 or t > self.duration_seconds for t in group)
+            or tuple(sorted(group)) != group
             for group in points
         ):
             raise ValueError("timing points must be ordered and within audio")
@@ -190,6 +194,9 @@ class TimingAnalysis(StrictModel):
         )
         if any(item.end > self.duration_seconds for item in ranges):
             raise ValueError("timing ranges exceed audio")
+        for group in (self.words, self.lyric_lines):
+            if any(a.end > b.start for a, b in zip(group, group[1:])):
+                raise ValueError("word and lyric line ranges must be ordered and nonoverlapping")
         return self
 
 

@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Sequence
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 
 from tovitunes.artifacts.character_intake import ingest_prepared, load_recipe, prepare_assets
@@ -27,6 +28,7 @@ from tovitunes.benchmark.runner import (
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
+from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
@@ -77,12 +79,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_run.add_argument("--attempt", type=int)
     music_provider_resume = music_commands.add_parser("provider-resume")
     music_provider_resume.add_argument("--request-id", required=True)
+    audio_analysis = music_commands.add_parser("analyze-audio")
+    audio_analysis.add_argument("--blind-id", required=True)
+    audio_analysis.add_argument("--analysis-version", type=int, default=1)
+    audio_analysis.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    audio_analysis.add_argument("--asr-model", default="small.en")
+    audio_analysis.add_argument("--allow-model-download", action="store_true")
     music_commands.add_parser("status")
     music_commands.add_parser("review-export")
     music_commands.add_parser("review-report")
     policy_evaluate = music_commands.add_parser("policy-evaluate")
     policy_evaluate.add_argument(
-        "--type", choices=("lyrics", "rights", "qa", "approval", "timing"), required=True
+        "--type",
+        choices=("lyrics", "rights", "qa", "qa-analysis", "approval", "timing"),
+        required=True,
     )
     policy_evaluate.add_argument("--blind-id")
     policy_evaluate.add_argument("--brief-file", type=Path)
@@ -184,6 +194,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
         if args.music_command == "status":
             print(json.dumps(benchmark.status(), sort_keys=True))
+        elif args.music_command == "analyze-audio":
+            audio_report, reused = benchmark.analyze_audio(
+                args.blind_id,
+                args.analysis_version,
+                AnalysisConfig(
+                    asr_model=args.asr_model,
+                    device=args.device,
+                    allow_model_download=args.allow_model_download,
+                ),
+            )
+            evaluation = benchmark.evaluate_analysis_qa(args.blind_id, args.analysis_version)
+            print(
+                json.dumps(
+                    {
+                        "analysis_ref": (
+                            f"music_audio_analysis:{args.blind_id}:{args.analysis_version}"
+                        ),
+                        "analysis_json_sha256": sha256(
+                            audio_report.model_dump_json().encode()
+                        ).hexdigest(),
+                        "audio_sha256": audio_report.audio_sha256,
+                        "database_path": str(config.database_path),
+                        "retained_audio_path": str(
+                            benchmark.audio_root
+                            / (
+                                audio_report.request_id
+                                + (".mp3" if audio_report.source_format == "audio/mpeg" else ".wav")
+                            )
+                        ),
+                        "blind_id": args.blind_id,
+                        "duration_seconds": audio_report.duration_seconds,
+                        "qa_status": evaluation["status"],
+                        "reused": reused,
+                        "rhythm_status": audio_report.rhythm.status,
+                        "transcription_status": audio_report.transcription.status,
+                        "timing_status": "candidate_pending",
+                        "timing_evidence_status": (
+                            "complete"
+                            if audio_report.timing.downbeat_seconds
+                            and audio_report.timing.words
+                            and audio_report.timing.lyric_lines
+                            and audio_report.timing.sections
+                            else "incomplete"
+                        ),
+                        "warnings": audio_report.warnings,
+                    },
+                    sort_keys=True,
+                )
+            )
         elif args.music_command == "provider-resume":
             request = benchmark.request(args.request_id)
             if (request["provider"], request["model"]) != ("google", VertexLyriaProvider.model):
@@ -223,6 +282,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         if args.type == "rights"
                         else benchmark.evaluate_qa(args.blind_id, evidence)
                     )
+                elif args.type == "qa-analysis":
+                    if args.version is None:
+                        parser.error("analysis QA policy requires --version")
+                    evaluation = benchmark.evaluate_analysis_qa(args.blind_id, args.version)
                 elif args.type == "timing":
                     if args.version is None:
                         parser.error("timing policy requires --version")

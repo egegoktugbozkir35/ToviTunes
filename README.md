@@ -1,6 +1,6 @@
 # ToviTunes
 
-Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. Tovi's v1 character pack is approved and has a checked-in canonical lock for clean-machine rehydration. Animation and external providers come later.
+Standalone children's educational musical-video production project. The current foundation provides versioned brand and curriculum data, character-pack identity, typed creative contracts, SQLite persistence, immutable file ingestion, review gates, and a dry continuation planner. Tovi's v1 character pack is approved and has a checked-in canonical lock for clean-machine rehydration. A live Vertex Lyria music adapter and an offline audio-analysis path exist; animation and publishing remain future work.
 
 ## Create a Colors episode
 
