@@ -2,9 +2,42 @@
 
 import os
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class CreativeLLMConfig(BaseModel):
+    """Explicit NIM configuration; credentials are read only from the named environment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    provider: Literal["nvidia"] = "nvidia"
+    model: Literal["moonshotai/kimi-k3"] = "moonshotai/kimi-k3"
+    base_url: str = "https://integrate.api.nvidia.com/v1"
+    api_key_env: str = Field(default="NVIDIA_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    timeout_seconds: float = Field(default=1800, gt=0)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=8192, ge=1, le=131072)
+
+    @field_validator("base_url")
+    @classmethod
+    def valid_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.endswith("/v1")
+        ):
+            raise ValueError("NIM base URL must be an HTTP(S) /v1 endpoint without credentials")
+        return value
 
 
 class RuntimeConfig(BaseModel):
@@ -16,6 +49,7 @@ class RuntimeConfig(BaseModel):
     brand_root: Path
     publication_enabled: bool = False
     expected_youtube_channel_id: str | None = None
+    creative_llm: CreativeLLMConfig = Field(default_factory=CreativeLLMConfig)
 
     @model_validator(mode="after")
     def publishing_requires_channel(self) -> "RuntimeConfig":
@@ -42,4 +76,3 @@ def load_config(path: Path) -> RuntimeConfig:
                 else candidate.resolve()
             )
     return RuntimeConfig.model_validate(raw)
-

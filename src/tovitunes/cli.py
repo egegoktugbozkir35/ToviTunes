@@ -30,6 +30,10 @@ from tovitunes.benchmark.runner import (
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
+from tovitunes.creative.metadata import MetadataWriter
+from tovitunes.creative.nvidia import NvidiaNIMClient
+from tovitunes.creative.provider import DurableStructuredGenerator
+from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot, eligibility
 from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.analysis_runtime import prepare_models, runtime_doctor
 from tovitunes.music.benchmark import MusicBenchmark
@@ -48,6 +52,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tovitunes")
     parser.add_argument("--config", type=Path, required=True)
     subcommands = parser.add_subparsers(dest="command", required=True)
+    creative = subcommands.add_parser("creative")
+    creative_commands = creative.add_subparsers(dest="creative_command", required=True)
+    creative_commands.add_parser("eligible")
+    creative_commands.add_parser("doctor")
+    creative_generate = creative_commands.add_parser("generate-next")
+    creative_resume = creative_generate.add_mutually_exclusive_group()
+    creative_resume.add_argument("--run-id")
+    creative_resume.add_argument("--episode-key")
+    creative_generate.add_argument(
+        "--live",
+        action="store_true",
+        help="explicit live smoke run (normal generation is also live)",
+    )
+    creative_metadata = creative_commands.add_parser("metadata")
+    creative_metadata.add_argument("--episode-key", required=True)
     production = subcommands.add_parser("production")
     production_commands = production.add_subparsers(dest="production_command", required=True)
     storyboard = production_commands.add_parser("prepare-storyboard")
@@ -175,6 +194,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "creative":
+        database = Database(config.database_path)
+        database.migrate()
+        catalog = load_brand(config.brand_root)
+        if args.creative_command == "eligible":
+            print(json.dumps(eligibility(database, catalog), sort_keys=True))
+            return 0
+        if args.creative_command == "doctor":
+            print(
+                json.dumps(
+                    {
+                        "provider": config.creative_llm.provider,
+                        "model": config.creative_llm.model,
+                        "timeout_seconds": config.creative_llm.timeout_seconds,
+                        "key_configured": bool(
+                            os.getenv(config.creative_llm.api_key_env, "").strip()
+                        ),
+                        "provider_calls": dict.fromkeys(
+                            (
+                                "subject",
+                                "episode_spec",
+                                "lyrics",
+                                "music_spec",
+                                "metadata",
+                                "repair",
+                            ),
+                            0,
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        before = call_snapshot(database)
+        transport = NvidiaNIMClient(config.creative_llm)
+        try:
+            workflow = CreativeWorkflow(
+                config, DurableStructuredGenerator(database, transport), catalog=catalog
+            )
+            if args.creative_command == "metadata":
+                creative_result = MetadataWriter(workflow).generate(args.episode_key)
+            else:
+                creative_result = workflow.generate_next(
+                    run_id=args.run_id, episode_key=args.episode_key
+                )
+        except (ValueError, KeyError, OSError, RuntimeError) as exc:
+            print(
+                json.dumps({"provider_calls": call_report(database, before)}, sort_keys=True),
+                file=sys.stderr,
+            )
+            parser.error(str(exc))
+        finally:
+            transport.close()
+        print(json.dumps(creative_result, sort_keys=True))
+        return 0
     if args.command == "production":
         try:
             if args.production_command == "render":

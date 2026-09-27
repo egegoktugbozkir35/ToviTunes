@@ -4,4 +4,12 @@ data_root: data
 brand_root: brands/tovitunes
 publication_enabled: false
 expected_youtube_channel_id: null
+creative_llm:
+  provider: nvidia
+  model: moonshotai/kimi-k3
+  base_url: https://integrate.api.nvidia.com/v1
+  api_key_env: NVIDIA_API_KEY
+  timeout_seconds: 1800
+  temperature: 0.7
+  max_tokens: 8192
 
