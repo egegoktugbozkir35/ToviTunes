@@ -490,6 +490,84 @@ def _transcribe_and_align_impl(
     return transcription, alignment, _version("whisperx"), device
 
 
+def timing_admission_evidence(
+    duration: float,
+    alignment: AlignmentEvidence,
+    spec: CanonicalMusicSpec,
+    comparison: LyricComparison,
+    transcription: TranscriptionEvidence,
+) -> dict[str, Any]:
+    """Two-source admission; CTC character means are not recognition probabilities."""
+    thresholds = AnalysisThresholds()
+    words = alignment.canonical_words
+    expected = normalized_words(spec.lyrics.text())
+    scores = [w.score for w in words if w.score is not None]
+    mean = statistics.mean(scores) if words and len(scores) == len(words) else None
+    minimum_word = min(
+        (w for w in words if w.score is not None), key=lambda w: w.score or 0.0, default=None
+    )
+    lines_complete = len(alignment.lyric_lines) == len(spec.lyrics.lines)
+    offset = 0
+    for measured, canonical in zip(alignment.lyric_lines, spec.lyrics.lines):
+        count = len(normalized_words(canonical.text))
+        group = words[offset : offset + count]
+        lines_complete = lines_complete and (
+            len(group) == count
+            and bool(group)
+            and measured.text == canonical.text
+            and measured.start == group[0].start
+            and measured.end == group[-1].end
+        )
+        offset += count
+
+    def ordered_bounded(sequence: tuple[TimedText, ...]) -> bool:
+        return all(
+            math.isfinite(w.start) and math.isfinite(w.end) and 0 <= w.start < w.end <= duration
+            for w in sequence
+        ) and all(a.end <= b.start for a, b in zip(sequence, sequence[1:]))
+
+    checks = {
+        "transcription_complete": transcription.status == "complete",
+        "comparison_complete": comparison.status == "complete",
+        "wer_in_range": comparison.wer is not None
+        and comparison.wer <= thresholds.maximum_timing_wer,
+        "coverage_in_range": comparison.coverage_ratio is not None
+        and comparison.coverage_ratio >= thresholds.minimum_timing_coverage,
+        "independent_mean_in_range": transcription.mean_word_score is not None
+        and transcription.mean_word_score >= thresholds.minimum_alignment_score,
+        "alignment_complete": alignment.status == "complete",
+        "no_missing_timestamps": not alignment.missing_words and len(words) == len(expected),
+        "canonical_scores_present": bool(words) and len(scores) == len(words),
+        "canonical_mean_in_range": mean is not None and mean >= thresholds.minimum_alignment_score,
+        "canonical_identity_matches": bool(expected)
+        and len(words) == len(expected)
+        and tuple(token for w in words for token in normalized_words(w.text)) == expected,
+        "comparison_identity_matches": comparison.expected_word_count == len(expected)
+        and comparison.expected_transcript == spec.lyrics.text()
+        and comparison.recognized_transcript == transcription.recognized_text,
+        "lines_complete": lines_complete,
+        "timestamps_ordered_bounded": ordered_bounded(words)
+        and ordered_bounded(alignment.lyric_lines)
+        and ordered_bounded(transcription.words),
+    }
+    return {
+        "rule": "aggregate_two_source_v1",
+        "independent_mean_word_score": transcription.mean_word_score,
+        "canonical_mean_word_score": mean,
+        "canonical_minimum_word_score": minimum_word.score if minimum_word else None,
+        "canonical_minimum_score_word": minimum_word.model_dump(mode="json")
+        if minimum_word
+        else None,
+        "canonical_low_score_count": sum(s < thresholds.minimum_alignment_score for s in scores),
+        "canonical_missing_score_count": len(words) - len(scores),
+        "missing_timestamp_count": max(len(alignment.missing_words), len(expected) - len(words)),
+        "wer": comparison.wer,
+        "coverage": comparison.coverage_ratio,
+        "checks": checks,
+        "eligible": all(checks.values()),
+    }
+
+
 def build_timing(
     version: int,
     sha: str,
@@ -498,21 +576,11 @@ def build_timing(
     alignment: AlignmentEvidence,
     spec: CanonicalMusicSpec,
     comparison: LyricComparison,
+    transcription: TranscriptionEvidence,
 ) -> TimingAnalysis:
-    thresholds = AnalysisThresholds()
-    reliable = (
-        alignment.status == "complete"
-        and comparison.status == "complete"
-        and comparison.coverage_ratio is not None
-        and comparison.coverage_ratio >= thresholds.minimum_timing_coverage
-        and comparison.wer is not None
-        and comparison.wer <= thresholds.maximum_timing_wer
-        and bool(alignment.canonical_words)
-        and all(
-            w.score is not None and w.score >= thresholds.minimum_alignment_score
-            for w in alignment.canonical_words
-        )
-    )
+    reliable = timing_admission_evidence(duration, alignment, spec, comparison, transcription)[
+        "eligible"
+    ]
     sections: list[TimedText] = []
     if reliable:
         section_names = {
@@ -586,7 +654,7 @@ def analyze_audio(
         complete=bool(transcription.recognized_text),
     )
     timing = build_timing(
-        version, sha, technical.duration_seconds, rhythm, alignment, spec, comparison
+        version, sha, technical.duration_seconds, rhythm, alignment, spec, comparison, transcription
     )
     config_sha = configuration_sha(config)
     warnings = []

@@ -20,6 +20,7 @@ from tovitunes.music.analysis import (
     compare_lyrics,
     configuration_sha,
     normalized_words,
+    timing_admission_evidence,
 )
 from tovitunes.music.analysis import analyze_audio as analyze_local_audio
 from tovitunes.music.analysis_models import AudioAnalysis
@@ -1323,6 +1324,16 @@ class MusicBenchmark:
                 {
                     "objective_checks": objective,
                     "derived_checks": checks,
+                    "timing_admission": {
+                        **timing_admission_evidence(
+                            report.duration_seconds,
+                            report.alignment,
+                            spec,
+                            report.lyric_comparison,
+                            report.transcription,
+                        ),
+                        "admitted": bool(report.timing.words),
+                    },
                     "analysis_version": version,
                     "analysis_sha256": sha256(row["analysis_json"].encode()).hexdigest(),
                     "evaluator_source_sha256": sha256(
