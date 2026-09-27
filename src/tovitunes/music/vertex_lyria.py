@@ -6,6 +6,7 @@ import json
 import os
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import google.auth
@@ -26,6 +27,59 @@ SENSITIVE_ERROR_TEXT = re.compile(
     r"cookie|credential|secret|private[_ -]?key|ya29\.|AIza|-----BEGIN|[{}]",
     re.IGNORECASE,
 )
+
+LYRIA_PROMPT_CONTRACT = "lyria_exact_lyrics_v2"
+
+
+@dataclass(frozen=True)
+class TimedLyric:
+    seconds: int
+    section: str
+    text: str
+
+
+@dataclass(frozen=True)
+class LyricsTimeline:
+    intro_end: int
+    vocal_cutoff: int
+    track_end: int
+    lines: tuple[TimedLyric, ...]
+
+    def validate(self, spec: CanonicalMusicSpec) -> None:
+        expected = tuple((line.section, line.text) for line in self.lines)
+        actual = tuple((line.section, line.text) for line in spec.lyrics.lines)
+        if len(self.lines) != 7 or len(actual) != len(self.lines) or actual != expected:
+            raise ValueError("canonical lyric count, sections or text order changed")
+        times = tuple(line.seconds for line in self.lines)
+        if not (
+            0 <= self.intro_end <= times[0]
+            and all(a < b for a, b in zip(times, times[1:]))
+            and times[-1] < self.vocal_cutoff <= self.track_end
+        ):
+            raise ValueError("invalid Lyria lyric timeline")
+        low, high = spec.brief.preferred_duration_seconds
+        if not low <= self.track_end <= min(high, spec.brief.maximum_duration_seconds):
+            raise ValueError("target duration is outside the canonical brief")
+
+
+LYRIA_TIMELINE = LyricsTimeline(
+    intro_end=3,
+    vocal_cutoff=33,
+    track_end=34,
+    lines=(
+        TimedLyric(3, "hook", "Red, red, look ahead!"),
+        TimedLyric(7, "hook", "Red is a color, yes, red!"),
+        TimedLyric(11, "teaching_line", "A red apple, round and bright."),
+        TimedLyric(16, "teaching_line", "A red ball rolls into sight."),
+        TimedLyric(21, "reinforcement", "Red, red, what do you see?"),
+        TimedLyric(25, "reinforcement", "Red is a color, sing with me!"),
+        TimedLyric(31, "short_ending", "Red!"),
+    ),
+)
+
+
+def _timestamp(seconds: int) -> str:
+    return f"[{seconds // 60:02d}:{seconds % 60:02d}]"
 
 
 def _default_credentials() -> Credentials:
@@ -75,23 +129,12 @@ class VertexLyriaProvider:
         brief = spec.brief
         if brief.id != "colors_red_v1" or brief.sections != VertexLyriaProvider._sections:
             raise ValueError("unsupported canonical Lyria brief")
-        lyric_sections = tuple(line.section for line in spec.lyrics.lines)
-        if lyric_sections != (
-            "hook",
-            "hook",
-            "teaching_line",
-            "teaching_line",
-            "reinforcement",
-            "reinforcement",
-            "short_ending",
-        ):
-            raise ValueError("canonical lyric sections changed")
-        if not 30 <= 34 <= min(brief.preferred_duration_seconds[1], brief.maximum_duration_seconds):
-            raise ValueError("target duration is outside the canonical brief")
+        timeline = LYRIA_TIMELINE
+        timeline.validate(spec)
         return "\n".join(
             [
-                "Create one original English preschool pop song for ages 3–6, "
-                "approximately 34 seconds.",
+                "Create one original English preschool pop song for ages 3–6.",
+                f"Target total duration: approximately {timeline.track_end} seconds.",
                 "Educational objective: Red is a color; a red apple and a red ball are examples.",
                 "Bright, warm, catchy, simple and bouncy. Light percussion, gentle bass, "
                 "simple pitched instruments, clear downbeats.",
@@ -101,16 +144,29 @@ class VertexLyriaProvider:
                 "No mature styling, melisma or dense harmony.",
                 "No frightening sounds, aggressive instruments, named artist imitation "
                 "or named song imitation.",
-                "Structure:",
-                "0:00–0:03 tiny instrumental intro.",
-                "0:03–0:12 hook.",
-                "0:12–0:22 teaching section.",
-                "0:22–0:31 reinforcement.",
-                "0:31–0:34 short ending.",
-                "Sing the supplied lyrics exactly, in order: first two lines in the hook, "
-                "next two in teaching, next two in reinforcement, final line in the ending.",
+                "Performance contract:",
+                "The timestamped Lyrics section below is the complete vocal script.",
+                "Perform each supplied lyric line exactly once.",
+                "Preserve the supplied line order.",
+                "Do not repeat a supplied line.",
+                "Do not repeat a chorus or refrain.",
+                "Do not omit a supplied line.",
+                "Do not invent additional sung words.",
+                "Do not add ad-libs containing words.",
+                "Do not restart earlier lyric material.",
+                "Vocals begin with the first timestamped lyric.",
+                "After the final lyric, no additional words may be sung.",
+                "Timeline:",
+                f"{_timestamp(0)} Instrumental intro only; no vocal words.",
+                f"{_timestamp(timeline.intro_end)} Begin the supplied lyrics.",
+                f"{_timestamp(timeline.vocal_cutoff)} All vocal words must be finished; "
+                "short instrumental ending only.",
+                f"{_timestamp(timeline.track_end)} End the track.",
                 "Lyrics:",
-                spec.lyrics.text(),
+                *[
+                    f"{_timestamp(timed.seconds)} {line.text}"
+                    for timed, line in zip(timeline.lines, spec.lyrics.lines, strict=True)
+                ],
             ]
         )
 
@@ -119,6 +175,7 @@ class VertexLyriaProvider:
         quota_project = os.environ.get("GOOGLE_CLOUD_QUOTA_PROJECT", project)
         return {
             "backend": self.backend,
+            "prompt_contract": LYRIA_PROMPT_CONTRACT,
             "project": project,
             "quota_project": quota_project,
             "location": self.location,
@@ -133,6 +190,8 @@ class VertexLyriaProvider:
         }
 
     def _preflight(self, translated: dict[str, Any]) -> tuple[str, str, str]:
+        if translated.get("prompt_contract") != LYRIA_PROMPT_CONTRACT:
+            raise MusicFailure("stored Lyria prompt contract differs", "retryable_failure")
         project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
         if not PROJECT_PATTERN.fullmatch(project):
             raise MusicFailure("GOOGLE_CLOUD_PROJECT is missing or invalid", "retryable_failure")
