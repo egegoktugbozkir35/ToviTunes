@@ -125,9 +125,15 @@ def test_versioned_report_qa_and_original_bytes(case: tuple) -> None:
     assert reused and again == report
     with pytest.raises(ValueError, match="version already exists"):
         store.analyze_audio(blind_id, 1, AnalysisConfig(asr_model="other"))
+    second, reused = store.analyze_audio(blind_id, 2, AnalysisConfig())
+    assert not reused and second.version == 2
     with store.database.connect() as db:
-        assert db.execute("SELECT count(*) FROM music_audio_analysis").fetchone()[0] == 1
-        assert db.execute("SELECT count(*) FROM music_timing").fetchone()[0] == 1
+        first_json = db.execute(
+            "SELECT analysis_json FROM music_audio_analysis WHERE version=1"
+        ).fetchone()[0]
+        assert AudioAnalysis.model_validate_json(first_json) == report
+        assert db.execute("SELECT count(*) FROM music_audio_analysis").fetchone()[0] == 2
+        assert db.execute("SELECT count(*) FROM music_timing").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("UPDATE music_audio_analysis SET version = 2")
     assert sha256(path.read_bytes()).hexdigest() == original_sha
@@ -290,7 +296,7 @@ def test_failed_asr_keeps_failure_and_no_timestamps(monkeypatch: pytest.MonkeyPa
         Path("fixture.mp3"), spec, 30, AnalysisConfig(device="cpu")
     )
     assert transcript.status == "incomplete"
-    assert transcript.failure_reason == "independent ASR failed: RuntimeError"
+    assert "ffmpeg" in transcript.failure_reason or "asr_model_missing" in transcript.failure_reason
     assert transcript.words == alignment.canonical_words == ()
     assert device == "cpu"
 
@@ -403,12 +409,22 @@ def test_cli_analysis_never_calls_provider(
     assert provider.calls == 1
 
 
+@pytest.mark.parametrize("missing", [False, True])
 def test_independent_asr_and_canonical_alignment_use_separate_inputs(
     monkeypatch: pytest.MonkeyPatch,
+    missing: bool,
 ) -> None:
     import sys
+    from contextlib import nullcontext
 
     monkeypatch.setattr("tovitunes.music.analysis._prepare_alignment_resources", lambda *args: None)
+    monkeypatch.setattr(
+        "tovitunes.music.analysis.tokenizer_environment", lambda *args: nullcontext()
+    )
+    monkeypatch.setattr("tovitunes.music.analysis.ffmpeg_status", lambda: {"status": "found"})
+    monkeypatch.setattr(
+        "tovitunes.music.analysis.require_cache", lambda *args: Path("fixture-cache")
+    )
     spec = plan(
         load_brief(ROOT / "colors_red_v1.yaml"),
         load_lyrics(ROOT / "colors_red_lyrics_v1.yaml"),
@@ -426,6 +442,8 @@ def test_independent_asr_and_canonical_alignment_use_separate_inputs(
             {"word": word, "start": i * 0.3, "end": i * 0.3 + 0.2, "score": 0.9}
             for i, word in enumerate(normalized_words(text))
         ]
+        if missing and len(calls) == 2:
+            words[0].pop("start")
         return {"segments": [{"words": words}]}
 
     monkeypatch.setitem(
@@ -453,17 +471,22 @@ def test_independent_asr_and_canonical_alignment_use_separate_inputs(
         ),
     )
     transcript, alignment, _, _ = transcribe_and_align(
-        Path("fixture.mp3"), spec, 30, AnalysisConfig(device="cpu", allow_model_download=True)
+        Path("fixture.mp3"), spec, 30, AnalysisConfig(device="cpu")
     )
     assert calls == [recognized_text, spec.lyrics.text()]
     assert transcript.recognized_text == recognized_text
     assert transcript.mean_word_score == pytest.approx(0.9)
-    assert alignment.aligned_line_count == 7
+    assert alignment.aligned_line_count == (6 if missing else 7)
+    assert alignment.aligned_word_count == (35 if missing else 36)
+    assert alignment.missing_words == (("red",) if missing else ())
     comparison = compare_lyrics(spec.lyrics.text(), transcript.recognized_text, complete=True)
     assert comparison.substitutions == 1
     rhythm = RhythmEvidence(
         status="unavailable", beat_count=0, target_bpm=112, allowed_bpm_range=(100, 124)
     )
     timing = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison)
-    assert len(timing.words) == 36 and len(timing.lyric_lines) == 7
+    if missing:
+        assert timing.words == timing.lyric_lines == ()
+    else:
+        assert len(timing.words) == 36 and len(timing.lyric_lines) == 7
     assert timing.downbeat_seconds == timing.phonemes == ()

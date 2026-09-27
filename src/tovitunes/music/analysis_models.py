@@ -139,6 +139,7 @@ class AlignmentEvidence(AnalysisModel):
     lyric_lines: tuple[TimedText, ...] = ()
     aligned_word_count: int = Field(ge=0)
     aligned_line_count: int = Field(ge=0)
+    missing_words: tuple[str, ...] = ()
     failure_reason: str | None = None
 
     @model_validator(mode="after")
@@ -146,7 +147,10 @@ class AlignmentEvidence(AnalysisModel):
         if (
             self.aligned_word_count != len(self.canonical_words)
             or self.aligned_line_count != len(self.lyric_lines)
-            or (self.status == "complete" and (not self.canonical_words or not self.lyric_lines))
+            or (
+                self.status == "complete"
+                and (not self.canonical_words or not self.lyric_lines or self.missing_words)
+            )
         ):
             raise ValueError("alignment counts or complete evidence are inconsistent")
         return self

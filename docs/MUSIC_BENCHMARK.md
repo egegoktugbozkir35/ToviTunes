@@ -90,3 +90,32 @@ Rights JSON requires `provider`, `model`, `tier`, `account_id`, `terms_version`,
 Manual commands remain: `review-export`, `review --scorecard`, `review-report`, `lyric-decision`, `decision` and `timing-decision`. They append evidence or intervention decisions; they are not prerequisites.
 
 The intended full pipeline is **creative planner → lyrics policy → music generation → music QA → timing → visual planning → animation → final QA → release policy**. The current `music_approval` gate approves only an audio candidate. Full episode release policy, real sung-word analysis, authenticated rights configuration and visual/render integration remain future work.
+
+## Operational ASR runtime (Windows / Python 3.11)
+
+Install the optional groups from the unchanged lock, then use `--no-sync` so subsequent commands do not remove the extras:
+
+```powershell
+uv sync --python 3.11 --locked --extra dev --extra audio-analysis --extra audio-asr
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analysis-doctor --device cpu
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analysis-models prepare --asr-model small.en --device cpu --allow-model-download
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analysis-doctor --device cpu
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark analyze-audio --blind-id <ID> --analysis-version <UNUSED_VERSION> --asr-model small.en --device cpu
+uv run --no-sync python -m tovitunes.cli --config <CONFIG> music-benchmark policy-evaluate --type timing --blind-id <ID> --version <UNUSED_VERSION>
+```
+
+Doctor emits JSON for Python/platform, package versions, FFmpeg status/path/version, CPU/CUDA/device, project cache presence and offline readiness. It does not open or migrate SQLite, create analysis artifacts, download models, or contact providers. Readiness is a preflight; inference validates model integrity. FFmpeg must work on PATH; unavailable or failed executables produce an explicit diagnosis. No FFmpeg binary is bundled.
+
+Preparation is the explicit networked phase and requires `--allow-model-download`. It obtains only `small.en`, English `WAV2VEC2_ASR_BASE_960H`, and NLTK `punkt_tab`; it also inventories WhisperX's bundled pyannote voice-activity model. No diarization or auth token is required. There is no automatic retry with a larger model. CPU is the required baseline. CUDA is an explicit optional choice on compatible installations, never an automatic retry.
+
+Caches are under `<data_root>/music-benchmark/.analysis-models`: `asr` holds the Systran HF snapshot/ref, `alignment` holds English TorchAudio weights, and `nltk` holds tokenizer resources. `hf` and `torch` isolate auxiliary library roots. Global user caches are not authoritative. `inventory.json` records timestamp, source families, logical model names, resolved ASR revision, package versions, paths, sizes and file SHA-256 hashes. Unknown revisions remain null. Repeating preparation reports reuse and validates cache-only loading; unchanged inventoried files are not repeatedly hashed. Analysis never rehashes large alignment weights.
+
+After preparation, omit `--allow-model-download` for offline analysis. HF/Transformers offline flags are set; faster-whisper receives the cached snapshot path and `local_files_only`; English alignment is preflighted and loaded cache-only; NLTK searches only the project resources. An outbound socket guard also closes TorchAudio's downloader path, which does not honor WhisperX's cache-only flag for its bundle. Guards/settings are scoped and restored. Run the CLI in its own process rather than concurrently with unrelated networking. Missing/incomplete assets fail closed. Bounded stage-specific diagnostics omit arbitrary exception messages, signed URLs and credentials.
+
+Independent ASR answers what the model heard, preserving the exact text for deterministic WER, coverage and phrase checks. Separate canonical forced alignment answers where expected lyrics align, and cannot prove that those lyrics were sung correctly. No timestamp interpolation is used. Missing canonical timestamps remain absent and are listed in `missing_words`; only observed words and fully aligned lines survive, and timing admission fails. Word scores are CTC alignment scores, not recognition confidence.
+
+Choose an unused analysis version: historical evidence is immutable and changed code/configuration needs a new version. Timing policy runs separately. Downbeats remain unavailable, never synthesized as every fourth beat, so successful ASR can still fail timing. All duration, WER, coverage and score thresholds remain unchanged. Analysis/preparation cannot approve music or change rights.
+
+The real CPU validation on 2026-09-27 used Python 3.11.9, WhisperX 3.8.6, faster-whisper 1.2.1, CTranslate2 4.8.2, torch/torchaudio 2.8.0, torchvision 0.23.0, transformers 4.57.6, huggingface-hub 0.36.2, NLTK 3.10.3, librosa 0.11.0 and numpy 2.4.6. The original lock required no dependency changes. FFmpeg 8.1 decoded the MP3. Pyannote's optional TorchCodec decoder warns about unavailable DLLs; WhisperX uses FFmpeg and passes in-memory waveforms, and actual CPU inference/alignment succeeded without that decoder.
+
+The authoritative database already contained incomplete versions 1 and 2. With operator authorization, the successful offline run was persisted as version 3. It recognized 54 words against 36 expected words (30 matches, 0 substitutions, 24 insertions, 6 deletions; WER/coverage both 0.8333333333333334). Canonical alignment produced 36 words and 7 lines, minimum score 0.294. Timing admission correctly rejected WER, coverage and score; downbeats also remain missing. QA failed and the 58.01795918367347-second duration still exceeds 45 seconds. Rights remain unknown and approval pending. No generation or provider-resume calls occurred. CI mocks model loaders and downloads no models; the minimal development install also passes the regression suite.

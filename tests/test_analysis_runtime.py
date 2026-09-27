@@ -1,0 +1,240 @@
+"""All model and device loaders are mocked; CI never obtains model assets."""
+
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from tovitunes.music import analysis_runtime as runtime
+from tovitunes.music.analysis import AnalysisConfig, transcribe_and_align
+from tovitunes.music.benchmark import MusicBenchmark, plan
+from tovitunes.music.models import load_brief, load_lyrics
+from tovitunes.music.providers import FakeMusicProvider
+
+
+@pytest.fixture(autouse=True)
+def isolated(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("no external calls in runtime tests")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(FakeMusicProvider, "generate", forbidden)
+    monkeypatch.setattr(MusicBenchmark, "provider_resume", forbidden)
+    monkeypatch.setattr("tovitunes.music.vertex_lyria.VertexLyriaProvider.generate", forbidden)
+    monkeypatch.setattr(
+        "tovitunes.music.vertex_lyria.VertexLyriaProvider.generate_with_identity", forbidden
+    )
+    monkeypatch.setattr(runtime, "vad_asset", lambda: Path(__file__))
+    monkeypatch.setitem(sys.modules, "nltk", SimpleNamespace(data=SimpleNamespace(path=[])))
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)),
+    )
+    monkeypatch.setitem(sys.modules, "whisperx.asr", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "whisperx.alignment", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace())
+
+
+def fill_cache(root):
+    snapshot = root / "asr/models--Systran--faster-whisper-small.en/snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    reference = snapshot.parent.parent / "refs/main"
+    reference.parent.mkdir()
+    reference.write_text("a" * 40)
+    for name in runtime.ASR_FILES:
+        (snapshot / name).write_bytes(b"fixture")
+    alignment = root / "alignment" / runtime.ALIGNMENT_FILE
+    alignment.parent.mkdir()
+    alignment.write_bytes(b"fixture")
+    tokenizer = root / "nltk/tokenizers/punkt_tab/english"
+    tokenizer.mkdir(parents=True)
+    for name in runtime.TOKENIZER_FILES:
+        (tokenizer / name).write_bytes(b"fixture")
+    return snapshot
+
+
+@pytest.mark.parametrize("status", ["found", "not_found", "failed"])
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("cuda", [False, True])
+def test_doctor(tmp_path, monkeypatch, status, cached, cuda):
+    if cached:
+        fill_cache(tmp_path)
+    monkeypatch.setattr(runtime, "ffmpeg_status", lambda: {"status": status})
+    monkeypatch.setattr(runtime, "package_versions", lambda: {"whisperx": "fixture"})
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            cuda=SimpleNamespace(
+                is_available=lambda: cuda,
+                device_count=lambda: int(cuda),
+                get_device_name=lambda index: "fixture GPU",
+            )
+        ),
+    )
+    files_before = list(tmp_path.rglob("*"))
+    report = runtime.runtime_doctor(tmp_path, device="auto")
+    assert report["selected_device"] == ("cuda" if cuda else "cpu")
+    assert report["offline_ready"] == (cached and status == "found")
+    assert report["cuda_device_count"] == int(cuda)
+    assert report["gpu_name"] == ("fixture GPU" if cuda else None)
+    assert list(tmp_path.rglob("*")) == files_before
+
+
+def test_doctor_absent_whisperx(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "whisperx.asr", None)
+    monkeypatch.setattr(runtime, "package_versions", lambda: {"whisperx": None})
+    report = runtime.runtime_doctor(tmp_path)
+    assert not report["whisperx_installed"] and not report["offline_ready"]
+    assert "optional_dependency_missing_or_broken" in report["failures"][0]
+
+
+@pytest.mark.parametrize("found,code", [(False, 0), (True, 0), (True, 1)])
+def test_ffmpeg_preflight(monkeypatch, found, code):
+    monkeypatch.setattr(runtime.shutil, "which", lambda name: "ffmpeg.exe" if found else None)
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=code, stdout="ffmpeg fixture\nrest"),
+    )
+    result = runtime.ffmpeg_status()
+    assert result["status"] == ("not_found" if not found else "found" if code == 0 else "failed")
+
+
+@pytest.mark.parametrize("asset", ["asr", "alignment", "nltk"])
+def test_offline_absent_asset_fails_before_loader(tmp_path, monkeypatch, asset):
+    snapshot = fill_cache(tmp_path)
+    paths = {
+        "asr": snapshot / "tokenizer.json",
+        "alignment": tmp_path / "alignment" / runtime.ALIGNMENT_FILE,
+        "nltk": tmp_path / "nltk/tokenizers/punkt_tab/english" / runtime.TOKENIZER_FILES[0],
+    }
+    paths[asset].unlink()
+    monkeypatch.setattr("tovitunes.music.analysis.ffmpeg_status", lambda: {"status": "found"})
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("loader should not be reached")
+
+    monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace(load_model=forbidden))
+    brief_root = Path(__file__).resolve().parents[1] / "benchmarks/music"
+    spec = plan(
+        load_brief(brief_root / "colors_red_v1.yaml"),
+        load_lyrics(brief_root / "colors_red_lyrics_v1.yaml"),
+        [FakeMusicProvider()],
+        attempt=1,
+    )[0].canonical_spec
+    # Audio parent determines the deterministic cache root.
+    monkeypatch.setattr(
+        "tovitunes.music.analysis.require_cache",
+        lambda root, model: runtime.require_cache(tmp_path, model),
+    )
+    transcript, alignment, _, _ = transcribe_and_align(
+        tmp_path / "fixture.mp3", spec, 30, AnalysisConfig(device="cpu")
+    )
+    assert transcript.status == "incomplete" and not transcript.recognized_text
+    assert asset in transcript.failure_reason
+    assert alignment.status == "unavailable"
+
+
+def test_offline_guard_restores_environment_and_blocks_network(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "fixture")
+    connect = socket.socket.connect
+    for name in ("create_connection", "connect", "connect_ex"):
+        with runtime.model_environment(tmp_path, False):
+            assert os.environ["HF_HUB_OFFLINE"] == os.environ["TRANSFORMERS_OFFLINE"] == "1"
+            with pytest.raises(runtime.RuntimeFailure, match="offline_network_blocked"):
+                # Look up patched method instead of using the saved original.
+                if name == "create_connection":
+                    socket.create_connection(("example.invalid", 443))
+                else:
+                    with socket.socket() as client:
+                        getattr(client, name)(("example.invalid", 443))
+        assert socket.socket.connect is connect
+        assert os.environ["HF_HUB_OFFLINE"] == "fixture"
+
+
+def test_permission_required_before_any_provisioning(tmp_path):
+    with pytest.raises(runtime.RuntimeFailure, match="explicit_download_permission_required"):
+        runtime.prepare_models(tmp_path)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("cached", [True, False])
+def test_preparation_and_reuse(tmp_path, monkeypatch, cached):
+    if cached:
+        fill_cache(tmp_path)
+    calls = []
+
+    def download(*args, **kwargs):
+        assert not cached
+        calls.append("download")
+        fill_cache(tmp_path)
+
+    def load_model(*args, **kwargs):
+        assert kwargs["local_files_only"] is True
+        assert Path(args[0]).is_dir()
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        calls.append("validate")
+
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper.utils", SimpleNamespace(download_model=download)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "whisperx",
+        SimpleNamespace(
+            load_model=load_model, load_align_model=lambda **kwargs: calls.append("align")
+        ),
+    )
+    result = runtime.prepare_models(tmp_path, allow_download=True)
+    assert result["status"] == "prepared", result
+    assert all(
+        a["action"] == ("reused" if cached else "downloaded")
+        for a in result["assets"]
+        if a["asset"] != "vad"
+    )
+    assert result["assets"][0]["revision"] == "a" * 40
+    assert result["assets"][1]["revision"] is None
+    assert calls == (["align", "validate"] if cached else ["download", "align", "validate"])
+    monkeypatch.setattr(runtime, "_hash_file", lambda *args: pytest.fail("repeat hashing"))
+    assert runtime.prepare_models(tmp_path, allow_download=True)["status"] == "prepared"
+
+
+def test_failed_preparation_does_not_expose_exception(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("Authorization: secret https://signed.invalid/?token=secret")
+
+    monkeypatch.setitem(sys.modules, "faster_whisper.utils", SimpleNamespace(download_model=fail))
+    result = runtime.prepare_models(tmp_path, allow_download=True)
+    assert result["status"] == "failed"
+    assert "asr_model_download_failed" in result["failure_reason"]
+    assert "secret" not in json.dumps(result) and "https" not in json.dumps(result)
+
+
+def test_nltk_never_downloads_when_offline(tmp_path, monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "nltk",
+        SimpleNamespace(download=lambda *a, **k: pytest.fail("offline download")),
+    )
+    with pytest.raises(runtime.RuntimeFailure, match="nltk_resource_missing"):
+        runtime.prepare_tokenizer(tmp_path, False)
+
+
+def test_cli_doctor_and_prepare_bypass_database(tmp_path, monkeypatch, capsys):
+    from tovitunes.cli import main
+
+    config = tmp_path / "config.yaml"
+    config.write_text("database_path: absent.db\ndata_root: data\nbrand_root: brands\n")
+    monkeypatch.setattr("tovitunes.cli.Database", lambda *a: pytest.fail("database access"))
+    monkeypatch.setattr("tovitunes.cli.runtime_doctor", lambda *a: {"offline_ready": False})
+    monkeypatch.setattr("tovitunes.cli.prepare_models", lambda *a, **k: {"status": "prepared"})
+    for command in (["analysis-doctor"], ["analysis-models", "prepare", "--allow-model-download"]):
+        assert main(["--config", str(config), "music-benchmark", *command]) == 0
+        json.loads(capsys.readouterr().out)
+    assert not (tmp_path / "absent.db").exists()
