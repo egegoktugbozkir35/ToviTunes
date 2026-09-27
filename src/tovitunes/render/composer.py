@@ -30,7 +30,12 @@ def prop_position(t: float, prop: dict[str, Any], canvas_width: int) -> tuple[fl
             raise ValueError("rolling prop must be grounded")
         if abs(bbox[3] - prop["ground_plane_y"]) > 1:
             raise ValueError("rolling target is off the ground plane")
-        return ball_position(t, bbox, canvas_width)
+        # Enter from the target's nearest edge, avoiding the character on the opposite side.
+        start_x = (
+            canvas_width if (bbox[0] + bbox[2]) / 2 >= canvas_width / 2 else -(bbox[2] - bbox[0])
+        )
+        u = min(1.0, max(0.0, t / 0.95))
+        return start_x + (bbox[0] - start_x) * (1 - (1 - u) ** 3), float(bbox[1])
     return float(bbox[0]), float(bbox[1])
 
 

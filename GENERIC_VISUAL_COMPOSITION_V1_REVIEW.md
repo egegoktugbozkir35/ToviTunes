@@ -82,7 +82,9 @@ Ground plane is normalized y=0.92, rounded y=1766 at 1080x1920. The rolling obje
 enters horizontally from x=1080 toward x=702 over 0.95 seconds. Its square target
 bbox is [702,1442,1026,1766]; its bottom stays on that plane at every sampled time.
 The generic position function uses motion class/grounded metadata and the resolved
-bbox; it does not inspect a ball or curriculum name. Ball rotation is not added.
+bbox; it does not inspect a ball or curriculum name. The nearest frame edge avoids
+crossing Tovi, and an existing grounded target does not repeat its entrance.
+Ball rotation is not added.
 The single presented apple also rests on this plane. Recall/sing are explicit
 pedagogical display arrangements, not rolling/floating motion.
 
@@ -108,7 +110,7 @@ idempotent reuse remain intact. V1 is reproducible from commit
 
 ## Episode-agnostic tests
 
-26 added cases use generic primary/secondary/abstract/rolling metadata, both gesture
+28 added cases use generic primary/secondary/abstract/rolling metadata, both gesture
 directions, synthetic recall/sing/micro/outro states, explicit resets/new targets,
 repeat diagnostics, several grounded timestamps, real animation boundary continuity,
 shared high-resolution prop edges, and shading-seam prevention. Layout tests do not
@@ -204,7 +206,7 @@ Decoded PCM SHA (both versions):
 
 ## Test count
 
-`uv run pytest -q`: 430 passed (404 original + 26 new cases).
+`uv run pytest -q`: 432 passed (404 original + 28 new cases).
 `uv run ruff check .`, `uv run mypy src` (54 source files), and
 `git diff --check`: passed. Tovi character lock: 48 artifacts, valid.
 Fresh minimal installation without MoviePy: passed. Render-extra import/version and

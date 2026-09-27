@@ -251,6 +251,10 @@ def resolve_composition(
         # objects otherwise share the meadow ground, including a single presented object.
         display = not definition.grounded or count > 1 or request.action in {"question", "sing"}
         rolling = definition.motion_class == "roll" and not display and count == 1
+        if previous and any(
+            p.type == kind and p.placement_mode == "ground" for p in previous.props
+        ):
+            rolling = False  # A resting persistent object does not repeat its entrance.
         if not display:
             center = (0.80 if char_slot == "lower_left" else 0.20, GROUND_PLANE_Y)
             slot = f"lower_{side}"

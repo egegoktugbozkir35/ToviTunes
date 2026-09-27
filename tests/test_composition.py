@@ -254,3 +254,27 @@ def test_shared_shading_has_no_horizontal_band_at_lower_third():
     surface = sphere_shading(Image.new("L", (600, 600), 255), "#E53935")
     values = [surface.getpixel((480, y))[:3] for y in range(375, 411)]
     assert all(max(abs(x - y) for x, y in zip(a, b)) <= 2 for a, b in zip(values, values[1:]))
+
+
+def test_persistent_grounded_object_does_not_reenter_on_consecutive_point():
+    first_request = CompositionRequest("a", 0, 4, "point", ("generic_rolling_object",))
+    first = resolve(first_request)
+    second = resolve(replace(first_request, scene_id="b", start=4, end=8), first)
+    assert first.props[0].motion == "roll_in"
+    assert second.props[0].motion == "static"
+    assert first.props[0].center == second.props[0].center
+    assert first.visual_state_id == second.visual_state_id
+
+
+def test_left_facing_roll_enters_from_left_without_crossing_character_region():
+    request = CompositionRequest("a", 0, 4, "point", ("generic_rolling_object",))
+    plan = resolve(request, action_metadata=ActionMetadata("sprite/pointing", "left"))
+    prop = plan.props[0]
+    bbox = prop.bbox((1080, 1920), GROUND_PLANE_Y)
+    metadata = {**prop.model_dump(), "bbox": bbox, "ground_plane_y": round(1920 * GROUND_PLANE_Y)}
+    samples = [prop_position(t / 30, metadata, 1080) for t in range(31)]
+    width = bbox[2] - bbox[0]
+    assert samples[0][0] + width == 0
+    assert samples[-1] == tuple(bbox[:2])
+    char_left = 1080 * (SLOTS[plan.character_slot][0] - plan.character_width / 2)
+    assert all(x + width < char_left for x, _ in samples)
