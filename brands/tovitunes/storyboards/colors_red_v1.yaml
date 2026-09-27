@@ -1,0 +1,48 @@
+schema_version: 1
+template_id: colors_red_v1
+concept_id: red
+objective_id: colors.red.identify
+intro:
+  visual_focus: Tovi greets in a clean playful setting.
+  required_props: []
+  tovi_action: enter
+lyrics:
+  - lyric_text: "Red, red, look ahead!"
+    visual_focus: Tovi directs attention toward the clearly red lesson swatch.
+    required_props: [red_swatch]
+    lesson_target: red
+    tovi_action: point
+  - lyric_text: "Red is a color, yes, red!"
+    visual_focus: A clear red swatch makes the lesson color unambiguous.
+    required_props: [red_swatch]
+    lesson_target: red
+    tovi_action: present
+  - lyric_text: "A red apple, round and bright."
+    visual_focus: Exactly one clearly red apple is shown prominently.
+    required_props: [red_apple]
+    lesson_target: red
+    tovi_action: present
+  - lyric_text: "A red ball rolls into sight."
+    visual_focus: Exactly one clearly red ball rolls into view.
+    required_props: [red_ball]
+    lesson_target: red
+    tovi_action: point
+  - lyric_text: "Red, red, what do you see?"
+    visual_focus: Tovi gestures toward the previously introduced red apple and red ball.
+    required_props: [red_apple, red_ball]
+    lesson_target: red
+    tovi_action: question
+  - lyric_text: "Red is a color, sing with me!"
+    visual_focus: Tovi sings with the red swatch and familiar red objects visible.
+    required_props: [red_swatch, red_apple, red_ball]
+    lesson_target: red
+    tovi_action: sing
+  - lyric_text: "Red!"
+    visual_focus: Tovi celebrates with simple emphasis on the red swatch.
+    required_props: [red_swatch]
+    lesson_target: red
+    tovi_action: celebrate
+outro:
+  visual_focus: Tovi celebrates and settles; no new educational claim or spoken content.
+  required_props: []
+  tovi_action: celebrate

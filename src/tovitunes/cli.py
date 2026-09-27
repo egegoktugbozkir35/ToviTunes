@@ -41,12 +41,21 @@ from tovitunes.music.timing_runtime import prepare_timing
 from tovitunes.music.vertex_lyria import VertexLyriaProvider
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.planner import Goal, load_snapshot, plan, requirements
+from tovitunes.pipeline.production import ProductionHandoff, plan_handoff
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tovitunes")
     parser.add_argument("--config", type=Path, required=True)
     subcommands = parser.add_subparsers(dest="command", required=True)
+    production = subcommands.add_parser("production")
+    production_commands = production.add_subparsers(dest="production_command", required=True)
+    storyboard = production_commands.add_parser("prepare-storyboard")
+    storyboard.add_argument("--concept", required=True)
+    storyboard.add_argument("--episode-key", required=True)
+    storyboard.add_argument("--music-blind-id", required=True)
+    storyboard.add_argument("--analysis-version", type=int, required=True)
+    storyboard.add_argument("--dry-run", action="store_true")
     for command in ("plan", "status"):
         sub = subcommands.add_parser(command)
         sub.add_argument("episode_id")
@@ -164,6 +173,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "production":
+        try:
+            inputs = (args.concept, args.episode_key, args.music_blind_id, args.analysis_version)
+            handoff_result = (
+                plan_handoff(config, *inputs).report()
+                if args.dry_run
+                else ProductionHandoff(config).prepare(*inputs)
+            )
+        except (ValueError, KeyError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(handoff_result, sort_keys=True))
+        return 0
     if args.command == "music-benchmark":
         if args.music_command in {"analysis-doctor", "analysis-models"}:
             cache_root = config.data_root / "music-benchmark" / ".analysis-models"
@@ -501,7 +522,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(asdict(result), sort_keys=True))
     else:
         slots = []
-        for requirement in requirements(goal, snapshot.scene_ids):
+        for requirement in requirements(
+            goal, snapshot.scene_ids, snapshot.production_audio_handoff
+        ):
             fact = snapshot.slots.get((requirement.kind, requirement.slot_key))
             slots.append(
                 {
