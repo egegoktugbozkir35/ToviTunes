@@ -38,7 +38,14 @@ from tovitunes.music.analysis_runtime import (
     tokenizer_environment,
 )
 from tovitunes.music.audio import inspect_audio
-from tovitunes.music.models import CanonicalMusicSpec, StrictModel, TimedText, TimingAnalysis
+from tovitunes.music.models import (
+    CanonicalMusicSpec,
+    StrictModel,
+    TimedText,
+    TimeRange,
+    TimingAnalysis,
+)
+from tovitunes.music.timing_runtime import analyze_rhythm
 
 ANALYZER_VERSION = "real_audio_v1"
 REQUIRED_PHRASES = ("red", "color", "red apple", "red ball", "red is a color")
@@ -63,6 +70,7 @@ def analyzer_configuration(config: AnalysisConfig) -> dict[str, str | bool]:
         "analysis.py",
         "analysis_models.py",
         "analysis_runtime.py",
+        "timing_runtime.py",
         "audio.py",
         "models.py",
         "benchmark.py",
@@ -70,7 +78,7 @@ def analyzer_configuration(config: AnalysisConfig) -> dict[str, str | bool]:
         source.update(name.encode())
         source.update(Path(__file__).with_name(name).read_text(encoding="utf-8").encode())
     configuration["source_code_sha256"] = source.hexdigest()
-    for package in ("miniaudio", "librosa", "whisperx", "torchaudio"):
+    for package in ("miniaudio", "librosa", "whisperx", "torchaudio", "beat-this"):
         configuration[f"{package}_version"] = _version(package)
     return configuration
 
@@ -239,47 +247,6 @@ def _version(package: str) -> str:
         return importlib.metadata.version(package)
     except importlib.metadata.PackageNotFoundError:
         return "unavailable"
-
-
-def analyze_rhythm(decoded: Any, brief: Any) -> RhythmEvidence:
-    try:
-        import librosa
-        import numpy as np
-
-        pcm = np.frombuffer(decoded.samples, dtype=np.float32).reshape(-1, decoded.nchannels)
-        mono = pcm.mean(axis=1)
-        tempo, beat_frames = librosa.beat.beat_track(y=mono, sr=decoded.sample_rate, trim=False)
-        times = tuple(float(t) for t in librosa.frames_to_time(beat_frames, sr=decoded.sample_rate))
-        bpm = float(np.asarray(tempo).reshape(-1)[0])
-        if not math.isfinite(bpm) or bpm <= 0 or len(times) < 2:
-            raise ValueError("beat track contains insufficient beats")
-        if tuple(sorted(times)) != times or any(t < 0 or t > decoded.duration for t in times):
-            raise ValueError("beat track is unordered or out of bounds")
-        intervals = [b - a for a, b in zip(times, times[1:])]
-        mean = statistics.mean(intervals)
-        deviation = statistics.pstdev(intervals)
-        return RhythmEvidence(
-            status="complete",
-            estimated_bpm=bpm,
-            beat_seconds=times,
-            beat_count=len(times),
-            mean_interval_seconds=mean,
-            interval_std_seconds=deviation,
-            interval_cv=deviation / mean,
-            target_bpm=brief.target_bpm,
-            allowed_bpm_range=brief.bpm_range,
-        )
-    except ImportError:
-        reason = "librosa optional dependency is unavailable"
-    except Exception as exc:
-        reason = f"beat analysis failed: {type(exc).__name__}"
-    return RhythmEvidence(
-        status="unavailable",
-        beat_count=0,
-        target_bpm=brief.target_bpm,
-        allowed_bpm_range=brief.bpm_range,
-        failure_reason=reason,
-    )
 
 
 def _aligned_words(segments: list[dict[str, Any]], duration: float) -> tuple[RecognizedWord, ...]:
@@ -568,7 +535,7 @@ def build_timing(
         duration_seconds=duration,
         estimated_bpm=rhythm.estimated_bpm,
         beat_seconds=rhythm.beat_seconds if rhythm.status == "complete" else (),
-        downbeat_seconds=(),
+        downbeat_seconds=rhythm.downbeat_seconds if rhythm.status == "complete" else (),
         sections=tuple(sections),
         lyric_lines=alignment.lyric_lines if reliable else (),
         words=tuple(
@@ -577,6 +544,12 @@ def build_timing(
         if reliable
         else (),
         phonemes=(),
+        intro=TimeRange(start=0, end=alignment.canonical_words[0].start)
+        if reliable and alignment.canonical_words[0].start > 0
+        else None,
+        outro=TimeRange(start=alignment.canonical_words[-1].end, end=duration)
+        if reliable and alignment.canonical_words[-1].end < duration
+        else None,
     )
 
 
@@ -598,7 +571,9 @@ def analyze_audio(
     technical = technical_measurements(decoded)
     if abs(info.duration_seconds - technical.duration_seconds) > 0.001:
         raise ValueError("decoded duration does not match verified receipt")
-    rhythm = analyze_rhythm(decoded, spec.brief)
+    rhythm = analyze_rhythm(
+        decoded, spec.brief, path.parent / ".analysis-models", config.device, sha
+    )
     transcription, alignment, asr_version, device = transcribe_and_align(
         path,
         spec,
@@ -614,10 +589,11 @@ def analyze_audio(
         version, sha, technical.duration_seconds, rhythm, alignment, spec, comparison
     )
     config_sha = configuration_sha(config)
-    warnings = [
-        "downbeat analysis unavailable; no downbeats inferred from beat positions",
-        "intro/outro analysis unavailable; no requested prompt boundaries copied",
-    ]
+    warnings = []
+    if not timing.downbeat_seconds:
+        warnings.append("downbeat evidence unavailable; no downbeats inferred")
+    if not timing.words:
+        warnings.append("canonical timing not admitted; measured lyric edge regions unavailable")
     for evidence in (rhythm, transcription, alignment):
         if evidence.failure_reason:
             warnings.append(evidence.failure_reason)
@@ -642,7 +618,15 @@ def analyze_audio(
         warnings=tuple(warnings),
         analyzer_provenance={
             "technical": _provenance("miniaudio-pcm-measurements", _version("miniaudio"), sha),
-            "rhythm": _provenance("librosa.beat.beat_track", _version("librosa"), sha),
+            "rhythm": rhythm.provenance
+            or _provenance(
+                "Beat This",
+                _version("beat-this"),
+                sha,
+                device=config.device,
+                model="final0",
+                configuration={"float16": config.device == "cuda", "dbn": False},
+            ),
             "transcription": _provenance(
                 "WhisperX independent ASR",
                 asr_version,

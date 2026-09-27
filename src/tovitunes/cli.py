@@ -37,6 +37,7 @@ from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
 from tovitunes.music.models import load_rubric as load_music_rubric
 from tovitunes.music.providers import FakeMusicProvider
+from tovitunes.music.timing_runtime import prepare_timing
 from tovitunes.music.vertex_lyria import VertexLyriaProvider
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.planner import Goal, load_snapshot, plan, requirements
@@ -99,6 +100,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     prepare.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     prepare.add_argument("--allow-model-download", action="store_true", required=True)
+    prepare_timing_parser = model_commands.add_parser("prepare-timing")
+    prepare_timing_parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    prepare_timing_parser.add_argument("--allow-model-download", action="store_true", required=True)
     music_commands.add_parser("status")
     music_commands.add_parser("review-export")
     music_commands.add_parser("review-report")
@@ -166,6 +170,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             with redirect_stdout(sys.stderr):
                 if args.music_command == "analysis-doctor":
                     runtime_result = runtime_doctor(cache_root, args.asr_model, args.device)
+                elif args.model_command == "prepare-timing":
+                    runtime_result = prepare_timing(
+                        cache_root, args.device, allow_download=args.allow_model_download
+                    )
                 else:
                     runtime_result = prepare_models(
                         cache_root,

@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import patch
 
 PACKAGES = (
+    "beat-this",
     "whisperx",
     "faster-whisper",
     "ctranslate2",
@@ -213,6 +214,8 @@ def prepare_tokenizer(root: Path, allow_download: bool) -> None:
 
 
 def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> dict[str, Any]:
+    from tovitunes.music.timing_runtime import timing_doctor
+
     versions = package_versions()
     ffmpeg = ffmpeg_status()
     caches = cache_status(root, model)
@@ -294,6 +297,7 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
         "offline_ready": ready,
         "readiness_kind": "preflight; inference validates model integrity",
         "failures": failures,
+        "timing": timing_doctor(root, selected),
     }
 
 
