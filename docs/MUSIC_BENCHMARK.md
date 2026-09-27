@@ -119,3 +119,23 @@ Choose an unused analysis version: historical evidence is immutable and changed 
 The real CPU validation on 2026-09-27 used Python 3.11.9, WhisperX 3.8.6, faster-whisper 1.2.1, CTranslate2 4.8.2, torch/torchaudio 2.8.0, torchvision 0.23.0, transformers 4.57.6, huggingface-hub 0.36.2, NLTK 3.10.3, librosa 0.11.0 and numpy 2.4.6. The original lock required no dependency changes. FFmpeg 8.1 decoded the MP3. Pyannote's optional TorchCodec decoder warns about unavailable DLLs; WhisperX uses FFmpeg and passes in-memory waveforms, and actual CPU inference/alignment succeeded without that decoder.
 
 The authoritative database already contained incomplete versions 1 and 2. With operator authorization, the successful offline run was persisted as version 3. It recognized 54 words against 36 expected words (30 matches, 0 substitutions, 24 insertions, 6 deletions; WER/coverage both 0.8333333333333334). Canonical alignment produced 36 words and 7 lines, minimum score 0.294. Timing admission correctly rejected WER, coverage and score; downbeats also remain missing. QA failed and the 58.01795918367347-second duration still exceeds 45 seconds. Rights remain unknown and approval pending. No generation or provider-resume calls occurred. CI mocks model loaders and downloads no models; the minimal development install also passes the regression suite.
+
+
+### Windows CUDA verifier
+
+Controlled preparation accepts `small.en`, `medium.en`, and `large-v3` only. The
+`large-v3` cache requires its JSON vocabulary and preprocessor configuration;
+English-only snapshots retain their text vocabulary checks. Inventory reuse also
+requires the exact current asset paths, so switching cached models cannot reuse
+another model's hashes.
+
+`analysis-doctor --device cuda` reports the PyTorch version/CUDA build, cuDNN,
+GPU count/name/VRAM, and CTranslate2 device count and supported compute types.
+These device queries do not prove model inference or successful runtime DLL
+loading. CUDA readiness requires the requested FP16 support from both stacks;
+perform a cache-only model/inference preflight before allocating a new immutable
+analysis version. CPU diagnostics and CI do not require NVIDIA hardware.
+
+See [the large-v3 CUDA verification report](LARGE_V3_CUDA_ASR_FINAL_VERIFICATION.md)
+for the isolated Windows environment, runtime DLL selection, and retained-artifact
+experiment. Do not synchronize the normal project environment onto CUDA wheels.

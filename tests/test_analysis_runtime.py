@@ -33,7 +33,12 @@ def isolated(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "torch",
-        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)),
+        SimpleNamespace(
+            __version__="2.8.0+cpu",
+            version=SimpleNamespace(cuda=None),
+            backends=SimpleNamespace(cudnn=SimpleNamespace(version=lambda: None)),
+            cuda=SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+        ),
     )
     monkeypatch.setitem(sys.modules, "whisperx.asr", SimpleNamespace())
     monkeypatch.setitem(sys.modules, "whisperx.alignment", SimpleNamespace())
@@ -46,7 +51,7 @@ def fill_cache(root, model="small.en"):
     reference = snapshot.parent.parent / "refs/main"
     reference.parent.mkdir()
     reference.write_text("a" * 40)
-    for name in runtime.ASR_FILES:
+    for name in runtime.asr_files(model):
         (snapshot / name).write_bytes(b"fixture")
     alignment = root / "alignment" / runtime.ALIGNMENT_FILE
     alignment.parent.mkdir()
@@ -70,11 +75,23 @@ def test_doctor(tmp_path, monkeypatch, status, cached, cuda):
         sys.modules,
         "torch",
         SimpleNamespace(
+            __version__="2.8.0+cu128" if cuda else "2.8.0+cpu",
+            version=SimpleNamespace(cuda="12.8" if cuda else None),
+            backends=SimpleNamespace(
+                cudnn=SimpleNamespace(version=lambda: 91002 if cuda else None)
+            ),
             cuda=SimpleNamespace(
                 is_available=lambda: cuda,
                 device_count=lambda: int(cuda),
                 get_device_name=lambda index: "fixture GPU",
+                get_device_properties=lambda index: SimpleNamespace(total_memory=8 * 1024**3),
             )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "ctranslate2", SimpleNamespace(
+            get_cuda_device_count=lambda: int(cuda),
+            get_supported_compute_types=lambda device, index: {"float16", "float32"},
         ),
     )
     files_before = list(tmp_path.rglob("*"))
@@ -83,6 +100,10 @@ def test_doctor(tmp_path, monkeypatch, status, cached, cuda):
     assert report["offline_ready"] == (cached and status == "found")
     assert report["cuda_device_count"] == int(cuda)
     assert report["gpu_name"] == ("fixture GPU" if cuda else None)
+    assert report["torch_cuda_build"] == ("12.8" if cuda else None)
+    assert report["cudnn_version"] == (91002 if cuda else None)
+    assert report["gpu_total_memory_bytes"] == (8 * 1024**3 if cuda else None)
+    assert report["cuda_device_queries_ready"] == cuda
     assert list(tmp_path.rglob("*")) == files_before
 
 
@@ -92,6 +113,46 @@ def test_doctor_absent_whisperx(tmp_path, monkeypatch):
     report = runtime.runtime_doctor(tmp_path)
     assert not report["whisperx_installed"] and not report["offline_ready"]
     assert "optional_dependency_missing_or_broken" in report["failures"][0]
+
+
+@pytest.mark.parametrize("failure", ["torch_build", "cudnn", "ct2_count", "fp16", "ct2_dll"])
+def test_cuda_doctor_rejects_incomplete_stack(tmp_path, monkeypatch, failure):
+    fill_cache(tmp_path, "large-v3")
+    monkeypatch.setattr(runtime, "ffmpeg_status", lambda: {"status": "found"})
+    monkeypatch.setattr(runtime, "package_versions", lambda: {"whisperx": "fixture"})
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(
+            __version__="2.8.0+cu128",
+            version=SimpleNamespace(cuda=None if failure == "torch_build" else "12.8"),
+            backends=SimpleNamespace(cudnn=SimpleNamespace(
+                version=lambda: None if failure == "cudnn" else 91002,
+            )),
+            cuda=SimpleNamespace(
+                is_available=lambda: True,
+                device_count=lambda: 1,
+                get_device_name=lambda index: "fixture GPU",
+                get_device_properties=lambda index: SimpleNamespace(total_memory=8 * 1024**3),
+            ),
+        ),
+    )
+
+    def compute_types(*args):
+        if failure == "ct2_dll":
+            raise RuntimeError("private DLL path; token=secret")
+        return {"float32"} if failure == "fp16" else {"float16"}
+
+    monkeypatch.setitem(
+        sys.modules, "ctranslate2", SimpleNamespace(
+            get_cuda_device_count=lambda: 0 if failure == "ct2_count" else 1,
+            get_supported_compute_types=compute_types,
+        ),
+    )
+    report = runtime.runtime_doctor(tmp_path, "large-v3", "cuda")
+    assert not report["offline_ready"] and not report["cuda_device_queries_ready"]
+    assert "secret" not in json.dumps(report)
+    assert report["selected_device"] == "cuda"
+    # CPU diagnostics remain independent of the CUDA runtime.
+    assert runtime.runtime_doctor(tmp_path, "large-v3", "cpu")["offline_ready"]
 
 
 @pytest.mark.parametrize("found,code", [(False, 0), (True, 0), (True, 1)])
@@ -164,7 +225,7 @@ def test_permission_required_before_any_provisioning(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("model", ["small.en", "medium.en"])
+@pytest.mark.parametrize("model", ["small.en", "medium.en", "large-v3"])
 @pytest.mark.parametrize("cached", [True, False])
 def test_preparation_and_reuse(tmp_path, monkeypatch, cached, model):
     if cached:
@@ -219,6 +280,46 @@ def test_failed_preparation_does_not_expose_exception(tmp_path, monkeypatch):
     assert "secret" not in json.dumps(result) and "https" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("missing", ["vocabulary.json", "preprocessor_config.json"])
+def test_large_v3_cache_requires_multilingual_assets(tmp_path, missing):
+    snapshot = fill_cache(tmp_path, "large-v3")
+    assert runtime.asr_snapshot(tmp_path, "large-v3") == snapshot
+    (snapshot / missing).unlink()
+    assert runtime.asr_snapshot(tmp_path, "large-v3") is None
+
+
+@pytest.mark.parametrize("old_path_exists", [True, False])
+def test_cached_large_v3_inventory_does_not_reuse_other_model_hashes(
+    tmp_path, monkeypatch, old_path_exists,
+):
+    snapshot = fill_cache(tmp_path, "large-v3")
+    old_path = Path(__file__) if old_path_exists else tmp_path / "deleted-medium-model.bin"
+    (tmp_path / "inventory.json").write_text(json.dumps({"assets": [{
+        "asset": "asr", "logical_name": "medium.en", "files": [{
+            "path": str(old_path), "size": Path(__file__).stat().st_size,
+            "sha256": "incorrect-other-model-hash",
+        }],
+    }]}))
+    monkeypatch.setitem(
+        sys.modules, "faster_whisper.utils", SimpleNamespace(
+            download_model=lambda *a, **k: pytest.fail("cached model download"),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "whisperx", SimpleNamespace(
+            load_model=lambda *a, **k: None, load_align_model=lambda **k: None,
+        ),
+    )
+    result = runtime.prepare_models(tmp_path, "large-v3", allow_download=True)
+    assert result["status"] == "prepared", result
+    asset = result["assets"][0]
+    assert asset["logical_name"] == "large-v3" and asset["action"] == "reused"
+    assert {record["path"] for record in asset["files"]} == {
+        str(snapshot / name) for name in runtime.asr_files("large-v3")
+    }
+    assert all(record["sha256"] != "incorrect-other-model-hash" for record in asset["files"])
+
+
 def test_nltk_never_downloads_when_offline(tmp_path, monkeypatch):
     monkeypatch.setitem(
         sys.modules,
@@ -243,14 +344,14 @@ def test_cli_doctor_and_prepare_bypass_database(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "absent.db").exists()
 
 
-@pytest.mark.parametrize("model", ["large-v3", "turbo", "medium", "arbitrary"])
+@pytest.mark.parametrize("model", ["large-v2", "distil-large-v3", "turbo", "medium", "arbitrary"])
 def test_preparation_rejects_other_models_before_download(tmp_path, model):
     with pytest.raises(runtime.RuntimeFailure, match="unsupported_preparation_model"):
         runtime.prepare_models(tmp_path, model, allow_download=True)
     assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("model", ["small.en", "medium.en"])
+@pytest.mark.parametrize("model", ["small.en", "medium.en", "large-v3"])
 def test_cli_preparation_explicit_allowlist(tmp_path, monkeypatch, model):
     from tovitunes.cli import main
 
@@ -267,6 +368,6 @@ def test_cli_preparation_explicit_allowlist(tmp_path, monkeypatch, model):
     assert main(args) == 0
     assert calls == [(model, "cpu", {"allow_download": True})]
     with pytest.raises(SystemExit) as exc:
-        main([*args[:7], "large-v3", *args[8:]])
+        main([*args[:7], "arbitrary", *args[8:]])
     assert exc.value.code == 2
     assert len(calls) == 1
