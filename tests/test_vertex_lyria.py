@@ -3,6 +3,7 @@
 import base64
 import json
 import sqlite3
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -13,9 +14,13 @@ import pytest
 from tovitunes.cli import main
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.benchmark import MusicBenchmark, plan
-from tovitunes.music.models import load_brief, load_lyrics
-from tovitunes.music.providers import FakeMusicProvider, MusicResult
-from tovitunes.music.vertex_lyria import VertexLyriaProvider
+from tovitunes.music.models import CanonicalMusicSpec, load_brief, load_lyrics
+from tovitunes.music.providers import FakeMusicProvider, MusicFailure, MusicResult
+from tovitunes.music.vertex_lyria import (
+    LYRIA_PROMPT_CONTRACT,
+    LYRIA_TIMELINE,
+    VertexLyriaProvider,
+)
 from tovitunes.persistence.db import Database
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,10 +130,179 @@ def test_dry_run_has_three_deterministic_plans_without_adc(
     prompt = request["body"]["input"][0]["text"]
     assert request["body"]["input"][0]["type"] == "text"
     assert "approximately 34 seconds" in prompt and "112 BPM" in prompt
-    assert "Lyrics:\n" + lyrics.text() in prompt
-    assert "0:31–0:34 short ending" in prompt
+    assert request["prompt_contract"] == "lyria_exact_lyrics_v2"
+    assert "[00:31] Red!" in prompt
     assert "named artist imitation" in prompt
     assert first[0].capabilities["word_timestamps"] is False
+
+
+def test_exact_lyrics_v2_prompt_contract() -> None:
+    brief, lyrics = inputs()
+    item = plan(brief, lyrics, [VertexLyriaProvider()], attempt=2)[0]
+    prompt = item.translated_request["body"]["input"][0]["text"]
+    assert len(lyrics.lines) == 7
+    for line in lyrics.lines:
+        assert prompt.count(line.text) == 1
+    assert prompt.count("Red is a color, yes, red!") == 1
+    timed_lines = prompt.split("Lyrics:\n")[1].splitlines()
+    assert [line[8:] for line in timed_lines] == [line.text for line in lyrics.lines]
+    assert [line[:7] for line in timed_lines] == [
+        "[00:03]", "[00:07]", "[00:11]", "[00:16]", "[00:21]", "[00:25]", "[00:31]"
+    ]
+    assert "[00:00] Instrumental intro only; no vocal words." in prompt
+    assert "[00:33] All vocal words must be finished; short instrumental ending only." in prompt
+    assert "[00:34] End the track." in prompt
+    assert LYRIA_TIMELINE.track_end <= brief.maximum_duration_seconds == 45
+    for instruction in (
+        "Perform each supplied lyric line exactly once.",
+        "Preserve the supplied line order.",
+        "Do not repeat a supplied line.",
+        "Do not repeat a chorus or refrain.",
+        "Do not omit a supplied line.",
+        "Do not invent additional sung words.",
+        "Do not add ad-libs containing words.",
+        "Do not restart earlier lyric material.",
+        "After the final lyric, no additional words may be sung.",
+    ):
+        assert instruction in prompt
+    assert item.input_fingerprint != (
+        "066ebae73bc548bf1d66500b17e50b48de13bd42aef07ce9288cfd0a8aca22cb"
+    )
+
+
+@pytest.mark.parametrize("contract", [None, "lyria_exact_lyrics_v1", "unknown", 2])
+def test_stored_contract_rejected_before_adc_or_http(contract: object) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("ADC or HTTP called")
+
+    provider = VertexLyriaProvider(
+        credentials_loader=forbidden,
+        client=httpx.Client(transport=httpx.MockTransport(forbidden)),
+    )
+    brief, lyrics = inputs()
+    spec = CanonicalMusicSpec(brief=brief, lyrics=lyrics, attempt=2)
+    translated = provider.translate(spec)
+    if contract is None:
+        translated.pop("prompt_contract")
+    else:
+        translated["prompt_contract"] = contract
+    with pytest.raises(MusicFailure, match="stored Lyria prompt contract differs"):
+        provider.generate(spec, translated, forbidden)
+    with pytest.raises(MusicFailure, match="stored Lyria prompt contract differs"):
+        provider.retrieve("offline-id", translated)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["count", "section_order", "brief_section_order", "line_order", "spelling", "required_sections",
+     "duration_min", "duration_max", "maximum"],
+)
+def test_canonical_mutation_fails_before_provider(
+    monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    brief, lyrics = inputs()
+    if mutation == "count":
+        lyrics = lyrics.model_copy(update={"lines": lyrics.lines[:-1]})
+    elif mutation == "section_order":
+        lyrics = lyrics.model_copy(update={"lines": (
+            lyrics.lines[0].model_copy(update={"section": "teaching_line"}), *lyrics.lines[1:]
+        )})
+    elif mutation == "line_order":
+        lyrics = lyrics.model_copy(update={"lines": (
+            lyrics.lines[1], lyrics.lines[0], *lyrics.lines[2:]
+        )})
+    elif mutation == "spelling":
+        lyrics = lyrics.model_copy(update={"lines": (
+            lyrics.lines[0].model_copy(update={"text": "Changed spelling!"}), *lyrics.lines[1:]
+        )})
+    elif mutation == "required_sections":
+        brief = brief.model_copy(update={"sections": brief.sections[:-1]})
+    elif mutation == "brief_section_order":
+        brief = brief.model_copy(update={"sections": (
+            brief.sections[1], brief.sections[0], *brief.sections[2:]
+        )})
+    elif mutation == "duration_min":
+        brief = brief.model_copy(update={"preferred_duration_seconds": (35, 40)})
+    elif mutation == "duration_max":
+        brief = brief.model_copy(update={"preferred_duration_seconds": (30, 33)})
+    else:
+        brief = brief.model_copy(update={"maximum_duration_seconds": 33})
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("ADC or HTTP called")
+
+    monkeypatch.setattr("google.auth.default", forbidden)
+    monkeypatch.setattr(httpx.Client, "send", forbidden)
+    with pytest.raises(ValueError):
+        plan(brief, lyrics, [VertexLyriaProvider()], attempt=2)
+
+
+@pytest.mark.parametrize("mutation", ["count", "unordered", "intro", "cutoff", "end"])
+def test_invalid_internal_schedule_fails_locally(
+    monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    timeline = LYRIA_TIMELINE
+    if mutation == "count":
+        timeline = replace(timeline, lines=timeline.lines[:-1])
+    elif mutation == "unordered":
+        timeline = replace(timeline, lines=(
+            replace(timeline.lines[0], seconds=7), *timeline.lines[1:]
+        ))
+    elif mutation == "intro":
+        timeline = replace(timeline, intro_end=4)
+    elif mutation == "cutoff":
+        timeline = replace(timeline, vocal_cutoff=31)
+    else:
+        timeline = replace(timeline, track_end=32)
+    monkeypatch.setattr("tovitunes.music.vertex_lyria.LYRIA_TIMELINE", timeline)
+    brief, lyrics = inputs()
+    with pytest.raises(ValueError):
+        plan(brief, lyrics, [VertexLyriaProvider()], attempt=2)
+
+
+@pytest.mark.parametrize("command", ["plan", "run"])
+def test_attempt_two_cli_isolation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    calls = {"adc": 0, "http": 0}
+
+    def adc(*args: Any, **kwargs: Any) -> Any:
+        calls["adc"] += 1
+        raise AssertionError("ADC called")
+
+    def http(*args: Any, **kwargs: Any) -> Any:
+        calls["http"] += 1
+        raise AssertionError("HTTP called")
+
+    monkeypatch.setattr("google.auth.default", adc)
+    monkeypatch.setattr(httpx.Client, "send", http)
+    config = tmp_path / "config.yaml"
+    db = tmp_path / "absent.sqlite"
+    config.write_text(
+        f"database_path: {db.as_posix()}\n"
+        f"data_root: {(tmp_path / 'absent-data').as_posix()}\n"
+        f"brand_root: {(ROOT / 'brands/tovitunes').as_posix()}\n", encoding="utf-8"
+    )
+    args = ["--config", str(config), "music-benchmark", command,
+            "--provider", "google", "--attempt", "2"]
+    if command == "run":
+        args.append("--dry-run")
+    assert main(args) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert main(args) == 0
+    assert first == json.loads(capsys.readouterr().out)
+    assert calls == {"adc": 0, "http": 0}
+    assert first["live_calls"] == 0 and first["planned_request_count"] == 1
+    item = first["requests"][0]
+    assert item["attempt"] == 2 and item["provider"] == "google"
+    assert item["model"] == "lyria-3-pro-preview"
+    request = item["translated_request"]
+    assert request["prompt_contract"] == LYRIA_PROMPT_CONTRACT
+    assert request["project"] == request["quota_project"] == "tovitunes"
+    assert request["location"] == "global"
+    assert set(request["body"]) == {"model", "input"}
+    assert not db.exists() and not (tmp_path / "absent-data").exists()
 
 
 @pytest.mark.parametrize(
