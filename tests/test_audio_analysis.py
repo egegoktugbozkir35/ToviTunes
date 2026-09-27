@@ -357,19 +357,39 @@ def test_measured_zero_length_edges_absent(edges):
         [FakeMusicProvider()],
         attempt=1,
     )[0].canonical_spec
-    words = (RecognizedWord(start=edges[0], end=edges[1], text="fixture", score=0.9),)
+    tokens = normalized_words(spec.lyrics.text())
+    step = (edges[1] - edges[0]) / len(tokens)
+    words = tuple(
+        RecognizedWord(
+            start=edges[0] + i * step,
+            end=edges[0] + (i + 1) * step,
+            text=token,
+            score=0.9,
+        )
+        for i, token in enumerate(tokens)
+    )
+    lines, offset = [], 0
+    for line in spec.lyrics.lines:
+        count = len(normalized_words(line.text))
+        lines.append(
+            TimedText(start=words[offset].start, end=words[offset + count - 1].end, text=line.text)
+        )
+        offset += count
     alignment = AlignmentEvidence(
         status="complete",
         canonical_words=words,
-        lyric_lines=(TimedText(start=edges[0], end=edges[1], text="fixture"),),
-        aligned_word_count=1,
-        aligned_line_count=1,
+        lyric_lines=tuple(lines),
+        aligned_word_count=len(words),
+        aligned_line_count=len(lines),
     )
     rhythm = RhythmEvidence(
         status="unavailable", beat_count=0, target_bpm=112, allowed_bpm_range=(100, 124)
     )
     comparison = compare_lyrics(spec.lyrics.text(), spec.lyrics.text(), complete=True)
-    result = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison)
+    transcript = TranscriptionEvidence(
+        status="complete", recognized_text=spec.lyrics.text(), words=words, mean_word_score=0.9
+    )
+    result = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison, transcript)
     if edges == (0, 30):
         assert result.intro is result.outro is None
     else:
@@ -377,14 +397,15 @@ def test_measured_zero_length_edges_absent(edges):
         assert (result.outro.start, result.outro.end) == (29, 30)
 
 
-def test_low_scored_generic_word_blocks_edges(case, monkeypatch):
+@pytest.mark.parametrize("weak_index", [3, 26, 35])
+def test_isolated_weak_word_admitted_without_word_exception(case, monkeypatch, weak_index):
     production_fixture(monkeypatch)
     from tovitunes.music.analysis import transcribe_and_align as aligned
 
     def low_score(*args):
         transcript, alignment, version, device = aligned(*args)
         words = list(alignment.canonical_words)
-        words[3] = words[3].model_copy(update={"score": 0.421})
+        words[weak_index] = words[weak_index].model_copy(update={"score": 0.421})
         return (
             transcript,
             alignment.model_copy(update={"canonical_words": tuple(words)}),
@@ -395,9 +416,17 @@ def test_low_scored_generic_word_blocks_edges(case, monkeypatch):
     monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", low_score)
     store, blind_id, _ = case
     report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig())
-    assert report.timing.words == ()
-    assert report.timing.intro is report.timing.outro is None
-    assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
+    assert len(report.timing.words) == 36
+    assert report.timing.intro is not None and report.timing.outro is not None
+    assert store.evaluate_timing(blind_id, 1)["status"] == "pass"
+    qa = store.evaluate_analysis_qa(blind_id, 1)
+    assert qa["status"] == "pass"
+    evidence = json.loads(qa["evidence_json"])["timing_admission"]
+    assert evidence["admitted"] is True
+    assert evidence["canonical_low_score_count"] == 1
+    assert evidence["canonical_minimum_word_score"] == 0.421
+    assert evidence["canonical_mean_word_score"] == pytest.approx((35 * 0.9 + 0.421) / 36)
+    assert evidence["independent_mean_word_score"] == 0.9
 
 
 def test_pcm_measurements_and_invalid_samples() -> None:
@@ -477,7 +506,10 @@ def test_forced_alignment_cannot_prove_lyric_adherence() -> None:
         status="unavailable", beat_count=0, target_bpm=112, allowed_bpm_range=(100, 124)
     )
     comparison = compare_lyrics(spec.lyrics.text(), "blue sky", complete=True)
-    timing = build_timing(1, "a" * 64, 30, rhythm, aligned, spec, comparison)
+    transcript = TranscriptionEvidence(
+        status="complete", recognized_text="blue sky", words=words[:2], mean_word_score=0.9
+    )
+    timing = build_timing(1, "a" * 64, 30, rhythm, aligned, spec, comparison, transcript)
     assert comparison.wer > 0.25
     assert timing.words == timing.lyric_lines == timing.downbeat_seconds == ()
 
@@ -630,9 +662,123 @@ def test_independent_asr_and_canonical_alignment_use_separate_inputs(
     rhythm = RhythmEvidence(
         status="unavailable", beat_count=0, target_bpm=112, allowed_bpm_range=(100, 124)
     )
-    timing = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison)
+    timing = build_timing(1, "a" * 64, 30, rhythm, alignment, spec, comparison, transcript)
     if missing:
         assert timing.words == timing.lyric_lines == ()
     else:
         assert len(timing.words) == 36 and len(timing.lyric_lines) == 7
     assert timing.downbeat_seconds == timing.phonemes == ()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "weak_canonical_mean",
+        "missing_score",
+        "missing_timestamp",
+        "missing_line",
+        "wrong_word",
+        "wrong_line",
+        "unordered",
+        "out_of_bounds",
+        "incomplete_alignment",
+        "incomplete_transcription",
+        "missing_independent_mean",
+        "weak_independent_mean",
+        "high_wer",
+        "low_coverage",
+    ],
+)
+def test_admission_fails_closed(case, monkeypatch, damage):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as aligned
+
+    def damaged(*args):
+        transcript, alignment, version, device = aligned(*args)
+        words = list(alignment.canonical_words)
+        lines = list(alignment.lyric_lines)
+        if damage == "weak_canonical_mean":
+            words = [w.model_copy(update={"score": 0.49}) for w in words]
+        elif damage == "missing_score":
+            words[3] = words[3].model_copy(update={"score": None})
+        elif damage == "missing_timestamp":
+            words.pop()
+            lines.pop()
+            alignment = alignment.model_copy(
+                update={"status": "incomplete", "missing_words": ("red",)}
+            )
+        elif damage == "missing_line":
+            lines.pop()
+        elif damage == "wrong_word":
+            words[3] = words[3].model_copy(update={"text": "different"})
+        elif damage == "wrong_line":
+            lines[0] = lines[0].model_copy(update={"text": "different"})
+        elif damage == "unordered":
+            words[3] = words[3].model_copy(update={"start": 0.5, "end": 0.8})
+        elif damage == "out_of_bounds":
+            words[-1] = words[-1].model_copy(update={"end": 100})
+        elif damage == "incomplete_alignment":
+            alignment = alignment.model_copy(update={"status": "incomplete"})
+        elif damage == "incomplete_transcription":
+            transcript = transcript.model_copy(update={"status": "incomplete"})
+        elif damage == "missing_independent_mean":
+            transcript = transcript.model_copy(update={"mean_word_score": None})
+        elif damage == "weak_independent_mean":
+            transcript = transcript.model_copy(update={"mean_word_score": 0.49})
+        elif damage in ("high_wer", "low_coverage"):
+            # Actual independent transcript disagreement derives the WER/coverage.
+            tokens = transcript.recognized_text.split()
+            if damage == "high_wer":
+                text = " ".join(tokens + ["extra"] * 10)
+            else:
+                text = " ".join(tokens[:30])  # 6/36 deletions; WER passes, coverage fails.
+            transcript = transcript.model_copy(update={"recognized_text": text})
+        alignment = alignment.model_copy(
+            update={
+                "canonical_words": tuple(words),
+                "aligned_word_count": len(words),
+                "lyric_lines": tuple(lines),
+                "aligned_line_count": len(lines),
+            }
+        )
+        return transcript, alignment, version, device
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", damaged)
+    store, blind_id, _ = case
+    if damage in ("unordered", "out_of_bounds"):
+        # Invalid observations cannot even be persisted.
+        with pytest.raises(ValueError, match="ordered and bounded"):
+            store.analyze_audio(blind_id, 1, AnalysisConfig())
+        return
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig())
+    assert report.timing.words == report.timing.lyric_lines == report.timing.sections == ()
+    assert report.timing.intro is report.timing.outro is None
+    assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
+    qa = store.evaluate_analysis_qa(blind_id, 1)
+    assert qa["status"] == "fail"
+    evidence = json.loads(qa["evidence_json"])["timing_admission"]
+    assert evidence["eligible"] is evidence["admitted"] is False
+    assert not all(evidence["checks"].values())
+
+
+def test_historical_rejected_analysis_deserializes_without_rewrite(case, monkeypatch):
+    store, blind_id, _ = case
+    production_fixture(monkeypatch)
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig())
+    legacy = report.model_dump(mode="json")
+    legacy["alignment"]["canonical_words"][3]["score"] = 0.421
+    for key in ("words", "lyric_lines", "sections"):
+        legacy["timing"][key] = []
+    legacy["timing"]["intro"] = legacy["timing"]["outro"] = None
+    payload = json.dumps(legacy)
+    restored = AudioAnalysis.model_validate_json(payload)
+    assert restored.timing.words == ()  # Parsing never reapplies the new policy.
+    assert restored.alignment.canonical_words[3].score == 0.421
+    assert restored.model_dump(mode="json") == legacy
+    with store.database.connect() as db:
+        before = db.execute("SELECT analysis_json FROM music_audio_analysis").fetchone()[0]
+    store.analyze_audio(blind_id, 2, AnalysisConfig())
+    with store.database.connect() as db:
+        assert db.execute(
+            "SELECT analysis_json FROM music_audio_analysis WHERE version=1"
+        ).fetchone()[0] == before
