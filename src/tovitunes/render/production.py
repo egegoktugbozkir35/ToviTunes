@@ -25,7 +25,13 @@ from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedStory
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.leases import Lease, LeaseStore
 from tovitunes.render import VERSION
-from tovitunes.render.character import ACTION_ROLES, animation_plan, validate_layout
+from tovitunes.render.character import ACTION_ROLES, animation_plan, position, validate_layout
+from tovitunes.render.composition import (
+    CompositionRequest,
+    SceneComposition,
+    resolve_composition,
+    validate_composition,
+)
 from tovitunes.render.ffmpeg import (
     ENCODE_TIMEOUT,
     MUX_TIMEOUT,
@@ -239,17 +245,47 @@ class ProductionRenderer:
             scene_refs: list[SceneRender] = []
             worker_scenes: list[dict[str, Any]] = []
             deterministic: list[dict[str, Any]] = []
+            previous: SceneComposition | None = None
+            last_lyric_end = max(s.lyric_end for s in storyboard.scenes if s.lyric_end is not None)
+            tail_seconds = storyboard.duration_seconds - last_lyric_end
             for scene in storyboard.scenes:
-                image, metadata = scene_art(scene, inputs.pack.palette, self.canvas, sid)
+                composition_request = CompositionRequest(
+                    scene.scene_id,
+                    scene.start,
+                    scene.end,
+                    scene.tovi_action,
+                    scene.required_props,
+                    scene.kind,
+                )
+                composition = resolve_composition(
+                    composition_request,
+                    previous,
+                    post_lyric_tail_seconds=tail_seconds if scene.kind == "outro" else 0,
+                    measured_downbeats=inputs.beats.downbeat_seconds,
+                )
+                validate_composition(composition_request, composition, previous)
+                image, metadata = scene_art(
+                    scene,
+                    inputs.pack.palette,
+                    self.canvas,
+                    sid,
+                    composition,
+                )
                 png = stage / f"{scene.scene_id}.png"
                 image.save(png, pnginfo=png_info(metadata))
                 background = ensure("scene_image", scene.scene_id, png, (sid,))
-                role = ACTION_ROLES[scene.tovi_action]
+                role = composition.sprite_role
                 sprite_id = inputs.pack.asset_artifact_ids[role]
                 sprite_path = store.path_for(sprite_id)
                 with Image.open(sprite_path) as sprite:
                     animation = animation_plan(
-                        scene, sprite, sprite_id, inputs.beats, self.canvas, sid
+                        scene,
+                        sprite,
+                        sprite_id,
+                        inputs.beats,
+                        self.canvas,
+                        sid,
+                        composition,
                     )
                 validate_layout(animation, self.canvas)
                 plan_path = stage / f"{scene.scene_id}.json"
@@ -266,6 +302,12 @@ class ProductionRenderer:
                     if stored.size != self.canvas or stored_metadata != metadata:
                         raise ValueError("scene image metadata mismatch")
                 validate_props(scene, metadata, animation, self.canvas)
+                if animation.long_scene_activity:
+                    samples = {
+                        position(animation, (scene.end - scene.start) * i / 60) for i in range(61)
+                    }
+                    if len(samples) < 2:
+                        raise ValueError("long character scene has no movement")
                 deterministic.append(
                     {
                         "scene_id": scene.scene_id,
@@ -277,6 +319,10 @@ class ProductionRenderer:
                             animation.end_position[1] + animation.size[1],
                         ],
                         "character_layout_passed": True,
+                        "composition": composition.model_dump(mode="json"),
+                        "composition_qa_passed": True,
+                        "outro_phase_count": len(composition.outro_phases),
+                        "long_scene_activity": animation.long_scene_activity,
                     }
                 )
                 scene_refs.append(
@@ -299,6 +345,7 @@ class ProductionRenderer:
                         "metadata": metadata,
                     }
                 )
+                previous = composition
             deps = tuple(
                 dict.fromkeys(
                     (
@@ -391,6 +438,15 @@ class ProductionRenderer:
                     },
                     "character_layout": {"passed": True},
                     "educational_checks": deterministic,
+                    "composition_qa": {
+                        "passed": True,
+                        "post_lyric_tail_seconds": tail_seconds,
+                        "max_consecutive_identical_composition_count": max(
+                            d["composition"]["consecutive_identical_composition_count"]
+                            for d in deterministic
+                        ),
+                    },
+                    "renderer_version": VERSION,
                     "mouth_animation_supported": False,
                 }
             )
@@ -399,15 +455,18 @@ class ProductionRenderer:
             qa_record = ensure("media_qa", "main", qa_path, (final.identity.artifact_id,))
             output = self.config.brand_root.parent.parent / "outputs"
             output.mkdir(exist_ok=True)
-            export = output / "TOVITUNES_COLORS_RED_PILOT_V1.mp4"
+            episode_key = inputs.store.database.get_episode(owner).external_key
+            export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_V2"
+            export = output / f"{export_stem}.mp4"
             self._export(store.path_for(final.identity.artifact_id), export)
             self._export(
                 store.path_for(qa_record.identity.artifact_id),
-                output / "TOVITUNES_COLORS_RED_PILOT_V1_MEDIA_QA.json",
+                output / f"{export_stem}_MEDIA_QA.json",
             )
-            self._frames(export, storyboard, output / "colors_red_v1_frames")
+            frames = output / f"{episode_key.replace('-', '_')}_v2_frames"
+            self._frames(export, storyboard, frames)
             return {
-                "classification": "PILOT_RENDER_READY_FOR_VISUAL_REVIEW",
+                "classification": "PILOT_V2_READY_FOR_VISUAL_REVIEW",
                 "episode_id": owner,
                 "storyboard_artifact_id": sid,
                 "render_manifest_id": manifest_record.identity.artifact_id,
@@ -416,6 +475,7 @@ class ProductionRenderer:
                 "mp4_sha256": final.sha256,
                 "byte_count": final.byte_count,
                 "output_path": str(export),
+                "frames_path": str(frames),
                 "scene_count": len(scene_refs),
                 "artifact_actions": actions,
                 "media_qa": qa,
@@ -530,3 +590,22 @@ class ProductionRenderer:
                 ],
                 30,
             )
+            if scene.kind == "outro" and scene.end - scene.start > 3:
+                for label, when in (("early", scene.start + 0.5), ("late", scene.end - 0.5)):
+                    run_process(
+                        [
+                            doctor()["ffmpeg_path"],
+                            "-v",
+                            "error",
+                            "-nostdin",
+                            "-y",
+                            "-ss",
+                            str(when),
+                            "-i",
+                            str(video),
+                            "-frames:v",
+                            "1",
+                            str(directory / f"{scene.scene_id}_{label}.png"),
+                        ],
+                        30,
+                    )

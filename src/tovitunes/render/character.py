@@ -5,18 +5,18 @@ import math
 from PIL import Image
 
 from tovitunes.domain.storyboard import BeatAnalysis, TimedScene
+from tovitunes.render.composition import (
+    ACTION_METADATA,
+    LONG_CHARACTER_SCENE_SECONDS,
+    SLOTS,
+    CompositionRequest,
+    SceneComposition,
+    resolve_composition,
+)
 from tovitunes.render.layout import compute_fit_box
 from tovitunes.render.models import CharacterAnimation, Motion, SpriteRole
 
-ACTION_ROLES: dict[str, SpriteRole] = {
-    "enter": "sprite/hello",
-    "point": "sprite/pointing",
-    "question": "sprite/pointing",
-    "present": "sprite/neutral_full_body",
-    "idle": "sprite/neutral_full_body",
-    "sing": "sprite/singing",
-    "celebrate": "sprite/hopping",
-}
+ACTION_ROLES: dict[str, SpriteRole] = {a: m.sprite_role for a, m in ACTION_METADATA.items()}
 
 
 def animation_plan(
@@ -26,10 +26,21 @@ def animation_plan(
     beats: BeatAnalysis,
     canvas: tuple[int, int],
     storyboard_id: str,
+    composition: SceneComposition | None = None,
 ) -> CharacterAnimation:
-    role = ACTION_ROLES.get(scene.tovi_action)
-    if role is None:
+    if scene.tovi_action not in ACTION_ROLES:
         raise ValueError("unsupported Tovi action")
+    composition = composition or resolve_composition(
+        CompositionRequest(
+            scene.scene_id,
+            scene.start,
+            scene.end,
+            scene.tovi_action,
+            scene.required_props,
+            scene.kind,
+        )
+    )
+    role = composition.sprite_role
     if sprite.mode != "RGBA":
         raise ValueError("approved sprite must have alpha")
     alpha = sprite.getchannel("A")
@@ -38,14 +49,21 @@ def animation_plan(
         raise ValueError("sprite has no visible alpha")
     cw, ch = bbox[2] - bbox[0], bbox[3] - bbox[1]
     w, h = canvas
-    box = compute_fit_box((cw, ch), (round(w * 0.75), round(h * 0.40)), mode="contain")
+    box = compute_fit_box(
+        (cw, ch),
+        (round(w * composition.character_width), round(h * composition.character_height)),
+        mode="contain",
+    )
     scale = min(box.out_w / cw, box.out_h / ch)
     size = (round(cw * scale), round(ch * scale))
-    end = ((w - size[0]) / 2, h * 0.92 - size[1])
-    start = (-size[0], end[1] + h * 0.02) if scene.tovi_action == "enter" else end
+    center = SLOTS[composition.character_slot]
+    end = (w * center[0] - size[0] / 2, h * composition.ground_plane_y - size[1])
+    action = composition.resolved_action
+    start = (-size[0], end[1] + h * 0.02) if action == "enter" else end
     b0, b1 = scene.beat_index_range
     d0, d1 = scene.downbeat_index_range
-    motion: Motion = "bob" if scene.tovi_action == "idle" else scene.tovi_action
+    motion: Motion = "bob" if action == "idle" else action  # type: ignore[assignment]
+    origin = composition.visual_origin_start
     return CharacterAnimation(
         storyboard_artifact_id=storyboard_id,
         scene_id=scene.scene_id,
@@ -62,13 +80,73 @@ def animation_plan(
         enter_seconds=min(0.85, scene.end - scene.start),
         beat_indices=(b0, b1),
         downbeat_indices=(d0, d1),
-        beat_seconds=tuple(t - scene.start for t in beats.beat_seconds[b0:b1]),
-        downbeat_seconds=tuple(t - scene.start for t in beats.downbeat_seconds[d0:d1]),
+        beat_seconds=tuple(t - origin for t in beats.beat_seconds if origin <= t < scene.end),
+        downbeat_seconds=tuple(
+            t - origin for t in beats.downbeat_seconds if origin <= t < scene.end
+        ),
+        composition_style=composition.composition_style,
+        character_slot=composition.character_slot,
+        gesture_direction=composition.character_facing,
+        visual_state_id=composition.visual_state_id,
+        inherited_from_scene_id=composition.inherited_from_scene_id,
+        micro_scene=composition.micro_scene,
+        emphasis=composition.emphasis,
+        duration_seconds=scene.end - scene.start,
+        motion_time_offset=scene.start - origin,
+        motion_duration_seconds=composition.visual_origin_duration,
+        motion_has_drift=composition.visual_origin_duration > LONG_CHARACTER_SCENE_SECONDS,
+        outro_phases=tuple((p.name, p.start, p.end) for p in composition.outro_phases),
+        long_scene_activity=scene.end - scene.start > LONG_CHARACTER_SCENE_SECONDS,
     )
 
 
 def position(plan: CharacterAnimation, t: float) -> tuple[float, float]:
+    x, y = _position(plan, t)
+    if plan.emphasis:
+        # Zero at both boundaries; <1% of frame height and no color/background change.
+        u = min(1.0, max(0.0, t / plan.duration_seconds))
+        y -= plan.amplitude * 0.55 * math.sin(math.pi * u) ** 2
+    return x, y
+
+
+def _position(plan: CharacterAnimation, local_t: float) -> tuple[float, float]:
+    t = local_t + plan.motion_time_offset
     x, y = plan.end_position
+    if plan.outro_phases:
+        phase = next(
+            (p for p in plan.outro_phases if p[1] <= local_t < p[2]), plan.outro_phases[-1]
+        )
+        if phase[0] == "settle":
+            # Ease from the final evidence-bound movement to a stable close.
+            at = phase[1]
+            pulse = max(
+                (
+                    math.sin(math.pi * (at - b) / 0.34)
+                    for b in plan.downbeat_seconds
+                    if 0 <= at - b <= 0.34
+                ),
+                default=0.0,
+            )
+            offset = plan.amplitude * 2 * pulse + plan.amplitude * 0.18
+            settle_duration = phase[2] - at
+            moving_seconds = settle_duration - min(1.2, settle_duration * 0.25)
+            u = min(1.0, max(0.0, (local_t - at) / moving_seconds))
+            return x, y - offset * (1 - u) ** 2
+        factor = 2.0 if phase[0] == "celebrate" else 1.0
+        # Smooth amplitude across the internal phase boundary.
+        if phase[0] == "recap":
+            factor += max(0.0, 1 - (local_t - phase[1]) / 0.5)
+        pulse = max(
+            (
+                math.sin(math.pi * (t - b) / 0.34)
+                for b in plan.downbeat_seconds
+                if 0 <= t - b <= 0.34
+            ),
+            default=0.0,
+        )
+        settle_start = plan.outro_phases[-1][1]
+        drift = plan.amplitude * 0.18 * math.sin(math.pi * local_t / (2 * settle_start))
+        return x, y - plan.amplitude * factor * pulse - drift
     if plan.motion_type == "enter":
         u = min(1.0, max(0.0, t / plan.enter_seconds))
         ease = 1 - (1 - u) ** 3
@@ -82,13 +160,23 @@ def position(plan: CharacterAnimation, t: float) -> tuple[float, float]:
             ),
             default=0.0,
         )
-        return x, y - plan.amplitude * 2 * pulse
+        drift = (
+            plan.amplitude * 0.15 * math.sin(math.pi * t / plan.motion_duration_seconds) ** 2
+            if plan.motion_has_drift
+            else 0.0
+        )
+        return x, y - plan.amplitude * 2 * pulse - drift
     if plan.motion_type == "sing":
         pulse = max(
             (math.sin(math.pi * (t - b) / 0.27) for b in plan.beat_seconds if 0 <= t - b <= 0.27),
             default=0.0,
         )
-        return x, y - plan.amplitude * pulse
+        drift = (
+            plan.amplitude * 0.15 * math.sin(math.pi * t / plan.motion_duration_seconds) ** 2
+            if plan.motion_has_drift
+            else 0.0
+        )
+        return x, y - plan.amplitude * pulse - drift
     if plan.motion_type == "question":
         return x + plan.amplitude * 0.7 * math.sin(2 * math.pi * t / 2.0), y
     amplitude = plan.amplitude * 0.5 if plan.motion_type == "present" else plan.amplitude
@@ -102,7 +190,7 @@ def validate_layout(plan: CharacterAnimation, canvas: tuple[int, int]) -> None:
     if not (
         w * 0.04 <= x
         and x + sw <= w * 0.96
-        and h * 0.04 <= y - plan.amplitude * 2
+        and h * 0.04 <= y - plan.amplitude * 3
         and y + sh <= h * 0.96
     ):
         raise ValueError("Tovi resting bounds exceed safe margins")

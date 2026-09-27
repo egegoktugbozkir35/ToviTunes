@@ -1,60 +1,69 @@
-# Colors Red pilot render
+# Production sprite render
 
 Install `uv sync --extra dev --extra video-render` and system FFmpeg/ffprobe.
-MoviePy is pinned to 2.2.1 and is not required for minimal installation.
+MoviePy remains pinned to 2.2.1 and optional for minimal installation.
 
 ```powershell
-uv run python -m tovitunes.cli --config <CONFIG> production render --episode-key colors-red-001
+uv run python -m tovitunes.cli --config <CONFIG> production render --episode-key <EPISODE_KEY>
 ```
 
-The config must point to the existing production database, AssetStore, and the
-matching versioned brand catalog containing the approved pack. PR #26 must be
-merged and its production handoff selected. Rendering reads selected production
-artifacts exclusively; it does not query benchmark tables, regenerate music,
-run analysis, or contact providers.
+The config must point to the production database, AssetStore, and matching approved
+brand catalog. Selected audio, alignment, measured beats, and TimedStoryboard must
+already be admitted. The render command never generates or analyzes music, changes
+storyboard times, modifies the canonical Tovi pack, or contacts providers.
 
-Discovery prefers `TOVITUNES_FFMPEG_BIN` / `TOVITUNES_FFPROBE_BIN` file overrides,
-then each system executable on PATH. A bad explicit override fails clearly.
-Doctor: `uv run python -c "from tovitunes.render.ffmpeg import doctor; print(doctor())"`.
-MoviePy is forced to this resolved FFmpeg before import. The transitive
-imageio-ffmpeg dependency is not used to discover or download a bundled binary.
+The adapter resolves `SceneComposition` before drawing. Nine normalized semantic
+screen slots define character/object regions; the approved pointing pose's renderer
+metadata declares its gesture direction. Directional targets occupy the facing side.
+Presentation alternates sides for new targets and preserves an existing target.
+Recall groups objects together; singing uses a central character with a primary and
+smaller secondary object arc. Objects rest/move on the meadow's ground plane.
+Recall/performance deliberately displays recalled objects above the character; the
+plan records this semantic display exception to grounded placement.
 
-The command ensures immutable `scene_image/<scene_id>` PNGs (composition metadata
-embedded in PNG text), `character_animation/<scene_id>` JSON, `render_manifest/main`,
-`final_render/main`, and `media_qa/main`. Dependencies pin exact IDs and SHA-256s.
-The same unchanged inputs reuse these identities and decisions and do not encode
-again. Changed inputs require new immutable downstream artifacts; old bytes and
-decisions are retained. A rejected/needs-review artifact is not auto-approved.
+Scenes under 0.6 seconds (18 frames at 30 fps) retain an existing arrangement/pose
+when all required targets are already present, continue the original motion clock,
+and add a small vertical pulse with zero displacement at each boundary. New required
+content still appears. A renderer-level explicit reset can opt out; the current
+admitted storyboard schema has no reset field and is not changed by this revision.
+Empty scenes inherit only established visual elements. State IDs, source scenes,
+placements, sprite role, persistence, and emphasis are persisted in PNG metadata.
 
-MoviePy performs image/sprite/rolling-ball composition and direct scene cuts.
-The encode worker has a 1,800-second process-tree deadline. FFmpeg muxes with
-explicit video/audio maps, video stream copy, AAC 192k, and `+faststart` (120-second
-deadline). ffprobe has a 30-second deadline. A temporary mux file must pass stream,
-format, duration, and full decode QA before atomic finalization and registration.
-Failed encode, mux, or QA cannot select a final render.
+Post-lyric tail duration comes from the canonical lyric end and storyboard end.
+Tails longer than three seconds have celebration, recap, and settle phases inside
+the existing scene. Hops use measured downbeats only. Gentle non-rhythmic drift
+provides activity without inventing evidence; settling begins after available
+rhythm and ends in a stable closing hold. Animation JSON records phase boundaries,
+actual measured events, and continued clocks. Mouth animation remains unsupported.
 
-Production output is 1080×1920, 30 fps, libx264 CRF 18/medium, yuv420p, AAC, MP4.
-Container and both stream durations must match selected source duration within
-two frames plus 5 ms: `2/30 + 0.005` seconds. Sample/display aspect ratio is
-checked, as are full scene coverage, safe uniform character layout, visible alpha,
-exact prop counts, lesson red `#E53935`, and clear educational-object bounds.
+Every supported prop shares `preschool_soft_v1`: 4x internal drawing and LANCZOS
+downsampling, soft cast shadow, rounded silhouettes, tonal shading/contour, and
+soft highlight. The supported prop registry supplies lesson colors and grounded/
+rolling semantics. Layout does not inspect curriculum IDs, lesson words or scene IDs.
 
-Motion uses selected Beat This timestamps without changing scene/vocal timing.
-The zero-downbeat final lyric receives no invented hop. Existing mouth components
-have a common component normalization anchor, but no registered anchor/scale
-relative to the singing sprite. V1 records `mouth_animation_supported=false` and
-uses the approved singing pose as-is; no offsets or speech inference are added.
+The renderer identity is `tovitunes_sprite_render_v2`. Immutable scene images,
+animation plans, manifest, final MP4 and media QA pin exact IDs/SHA-256s. Existing
+artifacts/decisions remain; selections may move to passing new versions. Unchanged
+invocations reuse the same 21 artifacts without encoding or database changes.
+V1 remains reproducible using its pinned commit and immutable inputs/outputs.
 
-Determinism means equivalent scene composition, timeline, sprite choices, motion,
-audio input, and codec configuration. MP4 bytes need not be identical across
-FFmpeg builds/machines. Reuse on the same artifact graph is byte-identical.
+The existing architecture is retained: isolated MoviePy video worker, two-stage
+FFmpeg mux with explicit stream maps, deadlines/process-tree cleanup, full probe/
+decode QA, atomic finalization, and AssetStore registration. System binary discovery
+prefers explicit `TOVITUNES_FFMPEG_BIN` / `TOVITUNES_FFPROBE_BIN`, then PATH; invalid
+overrides fail. No bundled binary download or new generation dependency is added.
 
-Exports under the project's `outputs/` include the MP4, media QA JSON, and a PNG
-frame at each scene midpoint. The AssetStore is authoritative. Each export copies
-the registered bytes. `technical_render_v1` means technically suitable for local
-visual review. Music rights remain unknown and publication remains blocked.
-No upload, commercial-rights decision, subtitles, or external generation is run.
+Production media stays 1080x1920, 30 fps, libx264 CRF 18/medium, yuv420p, AAC 192k,
+MP4 faststart. Duration tolerance remains `2/30 + 0.005` seconds. QA checks stream
+format/decode/coverage plus uniform sprite bounds, alpha visibility, prop count,
+separation, directional coherence, ground-plane rolling, micro continuity, long
+scene activity and outro phases. Repetition is diagnostic, not aesthetic scoring.
 
-CI installs the optional extra and system FFmpeg, then runs a 270×480 two-second
-three-scene fixture. The full production pilot is rendered only locally.
-See [donor provenance/license notice](RENDER_DONOR_NOTICE.md).
+Exports derive from episode key: `TOVITUNES_<EPISODE_KEY>_PILOT_V2.mp4`, media QA,
+all scene midpoint frames, and early/late outro frames. The AssetStore is authoritative.
+Technical acceptance means local visual review only. Rights remain unknown and
+publication blocked. No upload or release authorization is inferred.
+
+CI remains provider-free and uses the tiny 270x480, two-second fixture. The full
+pilot runs locally. See [donor provenance/license notice](RENDER_DONOR_NOTICE.md)
+and [composition review](../GENERIC_VISUAL_COMPOSITION_V1_REVIEW.md).

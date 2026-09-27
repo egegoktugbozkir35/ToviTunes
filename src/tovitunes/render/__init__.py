@@ -1,3 +1,3 @@
-"""Local, provider-free Colors Red pilot rendering. MoviePy is optional."""
+"""Local, provider-free sprite rendering. MoviePy is optional."""
 
-VERSION = "colors_red_render_v1"
+VERSION = "tovitunes_sprite_render_v2"
