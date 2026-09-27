@@ -56,6 +56,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     storyboard.add_argument("--music-blind-id", required=True)
     storyboard.add_argument("--analysis-version", type=int, required=True)
     storyboard.add_argument("--dry-run", action="store_true")
+    render = production_commands.add_parser("render")
+    render.add_argument("--episode-key", required=True)
     for command in ("plan", "status"):
         sub = subcommands.add_parser(command)
         sub.add_argument("episode_id")
@@ -175,13 +177,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config(args.config)
     if args.command == "production":
         try:
+            if args.production_command == "render":
+                from tovitunes.render.production import ProductionRenderer
+
+                render_result = ProductionRenderer(config).render(args.episode_key)
+                print(json.dumps(render_result, sort_keys=True))
+                return 0
             inputs = (args.concept, args.episode_key, args.music_blind_id, args.analysis_version)
             handoff_result = (
                 plan_handoff(config, *inputs).report()
                 if args.dry_run
                 else ProductionHandoff(config).prepare(*inputs)
             )
-        except (ValueError, KeyError, OSError) as exc:
+        except (ValueError, KeyError, OSError, RuntimeError, TimeoutError) as exc:
             parser.error(str(exc))
         print(json.dumps(handoff_result, sort_keys=True))
         return 0

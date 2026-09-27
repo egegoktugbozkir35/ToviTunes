@@ -7,6 +7,8 @@ name = "tovitunes"
 version = "0.1.0"
 description = "Durable foundation for ToviTunes educational animation production"
 readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSES/AGPL-3.0-or-later.txt"]
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.10,<3",
@@ -21,6 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.11,<1", "mypy>=1.15,<2"]
+video-render = ["moviepy==2.2.1"]
 audio-analysis = ["librosa>=0.11,<1"]
 audio-timing = ["beat-this==1.1.0"]
 audio-asr = ["whisperx>=3.7,<4; python_version < '3.13'"]
@@ -50,5 +53,5 @@ packages = ["tovitunes"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk", "beat_this.*"]
+module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk", "beat_this.*", "moviepy", "moviepy.*"]
 ignore_missing_imports = true
