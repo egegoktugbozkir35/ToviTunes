@@ -15,6 +15,14 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from tovitunes.music.analysis import (
+    AnalysisConfig,
+    compare_lyrics,
+    configuration_sha,
+    normalized_words,
+)
+from tovitunes.music.analysis import analyze_audio as analyze_local_audio
+from tovitunes.music.analysis_models import AudioAnalysis
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import (
     CanonicalMusicSpec,
@@ -48,9 +56,11 @@ POLICIES = {
     "lyrics": ("colors_red_lyrics", 1, "automated_lyrics_policy_v1"),
     "rights": ("commercial_music_rights", 1, "automated_rights_policy_v1"),
     "qa": ("music_qa", 1, "automated_music_qa_v1"),
-    "approval": ("music_approval", 1, "automated_release_policy_v1"),
+    "qa_analysis": ("music_qa", 2, "automated_music_qa_from_audio_v1"),
+    "approval": ("music_approval", 2, "automated_release_policy_v2"),
     "timing": ("music_timing", 1, "automated_timing_policy_v1"),
 }
+FORBIDDEN_SAFETY_WORDS = ("kill", "gun", "knife", "hate")
 
 
 class PlannedMusicRequest(StrictModel):
@@ -776,7 +786,7 @@ class MusicBenchmark:
                 "INSERT INTO music_decisions "
                 "(decision_id, blind_id, decision_type, status, actor, evidence, created_at, "
                 "actor_type) VALUES (?, ?, 'approval', 'pending', ?, ?, ?, 'machine')",
-                (str(uuid4()), blind_id, "automated_release_policy_v1", reason, now()),
+                (str(uuid4()), blind_id, POLICIES["approval"][2], reason, now()),
             )
 
     def policy_status(self, blind_id: str | None = None) -> list[dict[str, Any]]:
@@ -810,7 +820,7 @@ class MusicBenchmark:
             "max_lines": 8,
             "required_examples": ["apple", "ball"],
             "forbidden_names": ["disney", "taylor swift", "cocomelon"],
-            "forbidden_safety_words": ["kill", "gun", "knife", "hate"],
+            "forbidden_safety_words": list(FORBIDDEN_SAFETY_WORDS),
         }
         checks = {
             "configured_brief": brief.id == thresholds["brief_id"],
@@ -1022,6 +1032,310 @@ class MusicBenchmark:
             db.commit()
         return record
 
+    def analyze_audio(
+        self, blind_id: str, version: int, config: AnalysisConfig
+    ) -> tuple[AudioAnalysis, bool]:
+        """Measure only the authoritative retained bytes and append an immutable version."""
+        if version <= 0:
+            raise ValueError("analysis version must be positive")
+        config_sha = configuration_sha(config)
+        with closing(self.database.connect()) as db:
+            output = self._output(db, blind_id)
+            path = self._audio_path(output["request_id"], output["container"])
+            self._verify_audio(path, output)
+            existing = db.execute(
+                "SELECT * FROM music_audio_analysis WHERE blind_id = ? AND version = ?",
+                (blind_id, version),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["audio_sha256"] != output["sha256"]
+                    or existing["analyzer_config_sha256"] != config_sha
+                ):
+                    raise ValueError(
+                        "analysis version already exists with different audio or configuration"
+                    )
+                return AudioAnalysis.model_validate_json(existing["analysis_json"]), True
+            spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
+            data = path.read_bytes()
+            if (
+                db.execute(
+                    "SELECT 1 FROM music_timing WHERE blind_id = ? AND version = ?",
+                    (blind_id, version),
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError("timing version already exists; choose a new analysis version")
+            request_id = output["request_id"]
+            mime_type = output["mime_type"]
+            expected_sha = output["sha256"]
+        if sha256(data).hexdigest() != expected_sha:
+            raise ValueError("retained audio changed during analysis")
+        report = analyze_local_audio(
+            path, data, mime_type, spec, blind_id, request_id, version, config
+        )
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            self._verify_audio(path, output)
+            if output["sha256"] != report.audio_sha256:
+                raise ValueError("analysis audio identity changed")
+            db.execute(
+                "INSERT INTO music_audio_analysis VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    blind_id,
+                    version,
+                    request_id,
+                    report.audio_sha256,
+                    report.analyzer_config_sha256,
+                    report.model_dump_json(),
+                    now(),
+                ),
+            )
+            db.execute(
+                "INSERT INTO music_timing VALUES (?, ?, ?, ?)",
+                (blind_id, version, report.timing.model_dump_json(), now()),
+            )
+            db.commit()
+        return report, False
+
+    def evaluate_analysis_qa(self, blind_id: str, version: int) -> dict[str, Any]:
+        """QA v2 derives every check from persisted SHA-bound measurements."""
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            output = self._output(db, blind_id)
+            row = db.execute(
+                "SELECT * FROM music_audio_analysis WHERE blind_id = ? AND version = ?",
+                (blind_id, version),
+            ).fetchone()
+            if row is None:
+                raise KeyError((blind_id, version))
+            report = AudioAnalysis.model_validate_json(row["analysis_json"])
+            if (
+                report.audio_sha256 != output["sha256"]
+                or report.request_id != output["request_id"]
+                or report.blind_id != blind_id
+                or row["audio_sha256"] != report.audio_sha256
+            ):
+                raise ValueError("persisted analysis identity differs from output")
+            spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
+            objective: dict[str, bool] = {}
+            try:
+                self._verify_audio(
+                    self._audio_path(output["request_id"], output["container"]), output
+                )
+                objective["decodes_and_matches_receipt"] = True
+            except (OSError, ValueError):
+                objective["decodes_and_matches_receipt"] = False
+            objective["duration_in_scope"] = (
+                0 < report.duration_seconds <= spec.brief.maximum_duration_seconds
+            )
+            metrics = report.technical_metrics
+            transcript = report.transcription
+            comparison = compare_lyrics(
+                spec.lyrics.text(),
+                transcript.recognized_text,
+                complete=bool(transcript.recognized_text),
+            )
+            thresholds = report.thresholds
+            rhythm = report.rhythm
+            asr_ok = transcript.status == "complete" and comparison.status == "complete"
+            adequate_recognition = (
+                asr_ok
+                and transcript.mean_word_score is not None
+                and transcript.mean_word_score >= thresholds.minimum_alignment_score
+            )
+            phrase = comparison.required_phrase_presence
+            recognized = normalized_words(transcript.recognized_text)
+            forbidden = FORBIDDEN_SAFETY_WORDS
+            found_forbidden = sorted(set(recognized).intersection(forbidden))
+            colors = ("blue", "green", "yellow", "orange", "purple", "pink", "black", "white")
+            narrow_contradiction = any(
+                recognized[i : i + 3] in (("red", "is", color), (color, "is", "red"))
+                for color in colors
+                for i in range(max(0, len(recognized) - 2))
+            )
+            insertion_ratio = (
+                comparison.insertions / comparison.recognized_word_count
+                if comparison.recognized_word_count and comparison.insertions is not None
+                else None
+            )
+            technical_defect = (
+                not metrics.decode_integrity
+                or metrics.invalid_pcm_samples > 0
+                or metrics.clipping_ratio > thresholds.maximum_clipping_ratio
+                or metrics.longest_near_silent_span_seconds > thresholds.maximum_dropout_seconds
+                or metrics.near_silence_ratio > thresholds.maximum_silence_ratio
+            )
+            production_condition: bool | None = None
+            if (
+                not objective["duration_in_scope"]
+                or technical_defect
+                or metrics.beginning_silence_seconds > thresholds.maximum_edge_silence_seconds
+                or metrics.ending_silence_seconds > thresholds.maximum_edge_silence_seconds
+            ):
+                production_condition = False
+            elif (
+                rhythm.status == "complete"
+                and report.alignment.status == "complete"
+                and report.timing.intro is not None
+                and report.timing.outro is not None
+                and report.timing.words
+                and report.timing.lyric_lines
+                and report.timing.sections
+            ):
+                production_condition = True
+
+            def check(condition: bool | None, evidence: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "status": "unknown" if condition is None else "pass" if condition else "fail",
+                    "analysis_version": version,
+                    "metrics": evidence,
+                }
+
+            checks = {
+                "lyric_adherence": check(
+                    comparison.wer <= thresholds.maximum_lyric_wer
+                    and comparison.coverage_ratio >= thresholds.minimum_lyric_coverage
+                    if adequate_recognition
+                    and comparison.wer is not None
+                    and comparison.coverage_ratio is not None
+                    else None,
+                    {
+                        "wer": comparison.wer,
+                        "coverage_ratio": comparison.coverage_ratio,
+                        "edit_counts": [
+                            comparison.substitutions,
+                            comparison.insertions,
+                            comparison.deletions,
+                        ],
+                    },
+                ),
+                "educational_correctness": check(
+                    all(phrase.get(p) is True for p in ("red is a color", "red apple", "red ball"))
+                    and not narrow_contradiction
+                    and comparison.wer <= thresholds.maximum_educational_wer
+                    if adequate_recognition and comparison.wer is not None
+                    else None,
+                    {
+                        "required_phrases": phrase,
+                        "narrow_contradiction_detected": narrow_contradiction,
+                        "scope": (
+                            "literal transcript phrases and narrow color contradiction patterns"
+                        ),
+                    },
+                ),
+                "teaching_intelligibility": check(
+                    transcript.mean_word_score >= thresholds.minimum_alignment_score
+                    and comparison.coverage_ratio >= thresholds.minimum_lyric_coverage
+                    and comparison.wer <= thresholds.maximum_intelligibility_wer
+                    and all(
+                        phrase.get(p) is True for p in ("red is a color", "red apple", "red ball")
+                    )
+                    if adequate_recognition
+                    and transcript.mean_word_score is not None
+                    and comparison.coverage_ratio is not None
+                    and comparison.wer is not None
+                    else None,
+                    {
+                        "mean_word_score": transcript.mean_word_score,
+                        "word_score_kind": transcript.word_score_kind,
+                        "recognition_confidence": transcript.recognition_confidence,
+                        "coverage_ratio": comparison.coverage_ratio,
+                        "wer": comparison.wer,
+                    },
+                ),
+                "preschool_safety": check(
+                    not found_forbidden and insertion_ratio <= thresholds.maximum_insertion_ratio
+                    if adequate_recognition and insertion_ratio is not None
+                    else None,
+                    {
+                        "found_forbidden_words": found_forbidden,
+                        "insertion_ratio": insertion_ratio,
+                        "transcript": transcript.recognized_text,
+                        "scope": (
+                            "configured forbidden vocabulary and unexpected transcript words only"
+                        ),
+                    },
+                ),
+                "beat_usable": check(
+                    spec.brief.bpm_range[0] <= rhythm.estimated_bpm <= spec.brief.bpm_range[1]
+                    and rhythm.beat_count >= thresholds.minimum_beats
+                    and rhythm.interval_cv <= thresholds.maximum_beat_interval_cv
+                    if rhythm.status == "complete"
+                    and rhythm.estimated_bpm is not None
+                    and rhythm.interval_cv is not None
+                    else None,
+                    {
+                        "estimated_bpm": rhythm.estimated_bpm,
+                        "beat_count": rhythm.beat_count,
+                        "interval_cv": rhythm.interval_cv,
+                    },
+                ),
+                "production_fit": check(
+                    production_condition,
+                    {
+                        "duration_seconds": report.duration_seconds,
+                        "maximum_duration_seconds": spec.brief.maximum_duration_seconds,
+                        "near_silence_ratio": metrics.near_silence_ratio,
+                        "clipping_ratio": metrics.clipping_ratio,
+                        "alignment_status": report.alignment.status,
+                        "intro_available": report.timing.intro is not None,
+                        "outro_available": report.timing.outro is not None,
+                        "timed_word_count": len(report.timing.words),
+                        "timed_lyric_line_count": len(report.timing.lyric_lines),
+                    },
+                ),
+                "artifact_free": check(
+                    False if technical_defect else None,
+                    {
+                        "decode_integrity": metrics.decode_integrity,
+                        "clipping_ratio": metrics.clipping_ratio,
+                        "longest_near_silent_span_seconds": (
+                            metrics.longest_near_silent_span_seconds
+                        ),
+                        "invalid_pcm_samples": metrics.invalid_pcm_samples,
+                        "scope": (
+                            "objective digital defects only; broad perceptual artifact absence "
+                            "unverified"
+                        ),
+                    },
+                ),
+            }
+            status = (
+                "pass"
+                if all(objective.values()) and all(c["status"] == "pass" for c in checks.values())
+                else "fail"
+            )
+            record = self._record_evaluation(
+                db,
+                "qa_analysis",
+                "audio",
+                blind_id,
+                output["sha256"],
+                status,
+                {
+                    "objective_checks": objective,
+                    "derived_checks": checks,
+                    "analysis_version": version,
+                    "analysis_sha256": sha256(row["analysis_json"].encode()).hexdigest(),
+                    "evaluator_source_sha256": sha256(
+                        Path(__file__).read_text(encoding="utf-8").encode()
+                    ).hexdigest(),
+                    "request_id": output["request_id"],
+                },
+                {
+                    "maximum_duration_seconds": spec.brief.maximum_duration_seconds,
+                    **thresholds.model_dump(mode="json"),
+                    "bpm_range": spec.brief.bpm_range,
+                    "all_required_checks_must_pass": True,
+                },
+            )
+            if status != "pass":
+                self._invalidate(db, blind_id, "real audio QA policy failed")
+            db.commit()
+        return record
+
     def _approval_blockers(
         self, db: sqlite3.Connection, blind_id: str, *, automatic: bool = False
     ) -> list[str]:
@@ -1068,7 +1382,8 @@ class MusicBenchmark:
             blockers.append("automated lyrics policy not passing")
         if manual_lyrics is not None and manual_lyrics["status"] == "rejected":
             blockers.append("manual exact lyrics rejection")
-        qa = self._latest_evaluation(db, "qa", blind_id, output["sha256"])
+        qa_kind = "qa_analysis" if automatic or output["provider"] == "google" else "qa"
+        qa = self._latest_evaluation(db, qa_kind, blind_id, output["sha256"])
         if qa is None or qa["status"] != "pass":
             blockers.append("music QA policy not passing")
         reviews = db.execute(
@@ -1098,7 +1413,12 @@ class MusicBenchmark:
                     db, "lyrics", exact_lyrics.id, lyric_hash(exact_lyrics)
                 ),
                 "rights": self._latest_evaluation(db, "rights", blind_id, output["sha256"]),
-                "qa": self._latest_evaluation(db, "qa", blind_id, output["sha256"]),
+                "qa": self._latest_evaluation(
+                    db,
+                    "qa_analysis",
+                    blind_id,
+                    output["sha256"],
+                ),
             }
             evidence = {
                 "blockers": blockers,

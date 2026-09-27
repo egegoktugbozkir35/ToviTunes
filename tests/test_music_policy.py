@@ -77,11 +77,22 @@ def passing_prerequisites(
     assert benchmark.evaluate_qa(blind_id, qa_evidence())["status"] == "pass"
 
 
-def test_zero_human_reviews_or_decisions_needed(case: tuple) -> None:
+def approve_manual_fixture(benchmark: MusicBenchmark, blind_id: str) -> None:
+    benchmark.decision(
+        blind_id,
+        "approval",
+        "approved",
+        "fixture_operator",
+        "Explicit manual decision for offline test fixture",
+    )
+    assert benchmark.status()[0]["approval_status"] == "approved"
+
+
+def test_legacy_booleans_do_not_unlock_automatic_approval(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, provider = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    assert benchmark.evaluate_approval(blind_id)["status"] == "pass"
-    assert benchmark.status()[0]["approval_status"] == "approved"
+    assert benchmark.evaluate_approval(blind_id)["status"] == "blocked"
+    assert benchmark.status()[0]["approval_status"] == "pending"
     with benchmark.database.connect() as db:
         assert db.execute("SELECT count(*) FROM music_reviews").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM music_lyric_decisions").fetchone()[0] == 0
@@ -122,7 +133,7 @@ def test_rights_configuration_must_match_request_and_snapshot(case: tuple) -> No
 def test_qa_failure_invalidates_and_repass_needs_new_approval(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, _ = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    benchmark.evaluate_approval(blind_id)
+    approve_manual_fixture(benchmark, blind_id)
     failed = qa_evidence()
     failed["teaching_intelligibility"] = {"passed": False, "source": "fixture transcript"}
     assert benchmark.evaluate_qa(blind_id, failed)["status"] == "fail"
@@ -130,7 +141,7 @@ def test_qa_failure_invalidates_and_repass_needs_new_approval(case: tuple) -> No
     assert benchmark.evaluate_approval(blind_id)["status"] == "blocked"
     assert benchmark.evaluate_qa(blind_id, qa_evidence())["status"] == "pass"
     assert benchmark.status()[0]["approval_status"] == "pending"
-    assert benchmark.evaluate_approval(blind_id)["status"] == "pass"
+    approve_manual_fixture(benchmark, blind_id)
     with benchmark.database.connect() as db:
         history = db.execute(
             "SELECT status FROM music_decisions WHERE blind_id = ? "
@@ -143,26 +154,26 @@ def test_qa_failure_invalidates_and_repass_needs_new_approval(case: tuple) -> No
 def test_exact_lyrics_policy_failure_invalidates_and_repass_waits(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, _ = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    benchmark.evaluate_approval(blind_id)
+    approve_manual_fixture(benchmark, blind_id)
     wrong_brief = brief.model_copy(update={"id": "wrong_brief"})
     assert benchmark.evaluate_lyrics(wrong_brief, lyrics)["status"] == "fail"
     assert benchmark.status()[0]["approval_status"] == "pending"
     assert benchmark.evaluate_lyrics(brief, lyrics)["status"] == "pass"
     assert benchmark.status()[0]["approval_status"] == "pending"
-    assert benchmark.evaluate_approval(blind_id)["status"] == "pass"
+    approve_manual_fixture(benchmark, blind_id)
 
 
 def test_rights_revocation_and_repass_wait_for_approval(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, _ = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    benchmark.evaluate_approval(blind_id)
+    approve_manual_fixture(benchmark, blind_id)
     bad = rights_evidence()
     bad["commercial_use_allowed"] = False
     assert benchmark.evaluate_rights(blind_id, bad)["status"] == "blocked"
     assert benchmark.status()[0]["approval_status"] == "pending"
     benchmark.evaluate_rights(blind_id, rights_evidence())
     assert benchmark.status()[0]["approval_status"] == "pending"
-    assert benchmark.evaluate_approval(blind_id)["status"] == "pass"
+    approve_manual_fixture(benchmark, blind_id)
 
 
 def test_timing_machine_approval(case: tuple) -> None:
@@ -222,13 +233,13 @@ def test_manual_rejection_veto_and_optional_review(case: tuple) -> None:
     benchmark.decision(blind_id, "approval", "rejected", "teacher", "heard a concern")
     assert benchmark.evaluate_approval(blind_id)["status"] == "blocked"
     benchmark.decision(blind_id, "approval", "pending", "teacher", "concern resolved")
-    assert benchmark.evaluate_approval(blind_id)["status"] == "pass"
+    approve_manual_fixture(benchmark, blind_id)
 
 
 def test_manual_hard_failure_revokes(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, _ = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    benchmark.evaluate_approval(blind_id)
+    approve_manual_fixture(benchmark, blind_id)
     benchmark.review(
         MusicReview(
             blind_id=blind_id,
@@ -245,7 +256,7 @@ def test_manual_hard_failure_revokes(case: tuple) -> None:
 def test_audio_integrity_change_revokes_on_policy_rerun(case: tuple) -> None:
     benchmark, brief, lyrics, blind_id, _ = case
     passing_prerequisites(benchmark, brief, lyrics, blind_id)
-    benchmark.evaluate_approval(blind_id)
+    approve_manual_fixture(benchmark, blind_id)
     path = benchmark.audio_root / f"{benchmark.status()[0]['request_id']}.wav"
     path.write_bytes(b"tampered")
     assert benchmark.evaluate_approval(blind_id)["status"] == "blocked"

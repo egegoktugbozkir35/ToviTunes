@@ -454,7 +454,7 @@ def test_exact_lyric_rejection_revokes_only_matching_audio(
         ).fetchall()
     assert [(row["status"], row["actor"]) for row in history] == [
         ("approved", "teacher"),
-        ("pending", "automated_release_policy_v1"),
+        ("pending", "automated_release_policy_v2"),
     ]
     assert "exact lyrics rejected" in history[1]["evidence"]
     store.lyric_decision(lyrics, "approved", "editor", "corrected review")
