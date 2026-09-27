@@ -83,6 +83,12 @@ def _files_present(root: Path, names: tuple[str, ...]) -> bool:
     return all((root / name).is_file() and (root / name).stat().st_size > 0 for name in names)
 
 
+def asr_files(model: str) -> tuple[str, ...]:
+    if model == "large-v3":
+        return (*ASR_FILES[:3], "vocabulary.json", "preprocessor_config.json")
+    return ASR_FILES
+
+
 def asr_snapshot(root: Path, model: str) -> Path | None:
     # Resolve the project-owned HF ref without importing HF or allowing a global-cache fallback.
     if not re.fullmatch(r"[a-zA-Z0-9_.-]+", model):
@@ -95,7 +101,7 @@ def asr_snapshot(root: Path, model: str) -> Path | None:
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         return None
     snapshot = repository / "snapshots" / revision
-    return snapshot if _files_present(snapshot, ASR_FILES) else None
+    return snapshot if _files_present(snapshot, asr_files(model)) else None
 
 
 def tokenizer_ready(root: Path) -> bool:
@@ -211,19 +217,41 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
     ffmpeg = ffmpeg_status()
     caches = cache_status(root, model)
     cuda_available, cuda_count, gpu_name = False, 0, None
+    torch_version, torch_cuda_build, cudnn_version, gpu_total_memory = None, None, None, None
+    ct2_count, ct2_compute_types = 0, []
+    ct2_probe_succeeded = False
     failures = []
     try:
         import torch
 
+        torch_version = str(torch.__version__)
+        torch_cuda_build = torch.version.cuda
+        cudnn_version = torch.backends.cudnn.version()
         cuda_available = bool(torch.cuda.is_available())
         cuda_count = int(torch.cuda.device_count())
         if cuda_available and cuda_count:
             gpu_name = str(torch.cuda.get_device_name(0))[:120]
+            gpu_total_memory = int(torch.cuda.get_device_properties(0).total_memory)
     except Exception as exc:
         failures.append(diagnostic("device_probe_failed", exc))
     selected = "cuda" if device == "auto" and cuda_available else device
     if selected == "auto":
         selected = "cpu"
+    if selected == "cuda":
+        try:
+            with model_environment(root, False):
+                import ctranslate2
+
+                ct2_count = int(ctranslate2.get_cuda_device_count())
+                if ct2_count:
+                    ct2_compute_types = sorted(ctranslate2.get_supported_compute_types("cuda", 0))
+                ct2_probe_succeeded = True
+        except Exception as exc:
+            failures.append(diagnostic("ctranslate2_device_probe_failed", exc))
+    cuda_ready = bool(
+        cuda_available and cuda_count and gpu_name and torch_cuda_build and cudnn_version
+        and ct2_probe_succeeded and ct2_count and "float16" in ct2_compute_types
+    )
     # Import public loaders to detect broken DLLs/dependencies without loading models.
     try:
         with model_environment(root, False):
@@ -235,7 +263,7 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
         ffmpeg["status"] == "found"
         and not failures
         and all(item["cached"] for item in caches.values())
-        and (selected != "cuda" or cuda_available)
+        and (selected != "cuda" or cuda_ready)
     )
     return {
         "python_version": platform.python_version(),
@@ -246,8 +274,19 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
         "package_versions": versions,
         "whisperx_installed": versions["whisperx"] is not None,
         "cuda_available": cuda_available,
+        "torch_version": torch_version,
+        "torch_cuda_build": torch_cuda_build,
+        "cudnn_version": cudnn_version,
         "cuda_device_count": cuda_count,
         "gpu_name": gpu_name,
+        "gpu_total_memory_bytes": gpu_total_memory,
+        "cuda_device_queries_ready": cuda_ready,
+        "ctranslate2": {
+            "cuda_device_count": ct2_count,
+            "supported_compute_types": ct2_compute_types,
+            "device_probe_succeeded": ct2_probe_succeeded,
+            "readiness_kind": "device queries only; cached model inference required to verify DLLs",
+        },
         "selected_device": selected,
         "asr_model": model,
         "cache_root": str(root),
@@ -271,9 +310,9 @@ def prepare_models(
 ) -> dict[str, Any]:
     if not allow_download:
         raise RuntimeFailure("explicit_download_permission_required: use --allow-model-download")
-    if model not in {"small.en", "medium.en"}:
+    if model not in {"small.en", "medium.en", "large-v3"}:
         raise RuntimeFailure(
-            "unsupported_preparation_model: select small.en or medium.en"
+            "unsupported_preparation_model: select small.en, medium.en or large-v3"
         )
     before = cache_status(root, model)
     stage = "optional_dependency_missing_or_broken"
@@ -313,7 +352,7 @@ def prepare_models(
         inventory_path = root / "inventory.json"
         previous = json.loads(inventory_path.read_text()) if inventory_path.is_file() else {}
         paths = {
-            "asr": list(snapshot / name for name in ASR_FILES),
+            "asr": list(snapshot / name for name in asr_files(model)),
             "alignment": [root / "alignment" / ALIGNMENT_FILE],
             "punkt_tab": list(
                 root / "nltk/tokenizers/punkt_tab/english" / n for n in TOKENIZER_FILES
@@ -327,8 +366,12 @@ def prepare_models(
             )
             reuse = before[name]["cached"]
             hashes = old.get("files") if reuse else None
-            if not hashes or any(
-                record.get("size") != Path(record["path"]).stat().st_size for record in hashes
+            if (
+                not hashes
+                or {record["path"] for record in hashes} != {str(p) for p in files}
+                or any(
+                    record.get("size") != Path(record["path"]).stat().st_size for record in hashes
+                )
             ):
                 hashes = [
                     {"path": str(p), "size": p.stat().st_size, "sha256": _hash_file(p)}
