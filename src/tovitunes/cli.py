@@ -3,7 +3,9 @@
 import argparse
 import json
 import os
+import sys
 from collections.abc import Sequence
+from contextlib import redirect_stdout
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -29,6 +31,7 @@ from tovitunes.benchmark.runner import (
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
 from tovitunes.music.analysis import AnalysisConfig
+from tovitunes.music.analysis_runtime import prepare_models, runtime_doctor
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
@@ -85,6 +88,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     audio_analysis.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     audio_analysis.add_argument("--asr-model", default="small.en")
     audio_analysis.add_argument("--allow-model-download", action="store_true")
+    doctor = music_commands.add_parser("analysis-doctor")
+    doctor.add_argument("--asr-model", default="small.en")
+    doctor.add_argument("--device", choices=("auto", "cpu", "cuda"), default="cpu")
+    models = music_commands.add_parser("analysis-models")
+    model_commands = models.add_subparsers(dest="model_command", required=True)
+    prepare = model_commands.add_parser("prepare")
+    prepare.add_argument("--asr-model", choices=("small.en",), default="small.en")
+    prepare.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    prepare.add_argument("--allow-model-download", action="store_true", required=True)
     music_commands.add_parser("status")
     music_commands.add_parser("review-export")
     music_commands.add_parser("review-report")
@@ -147,6 +159,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = load_config(args.config)
     if args.command == "music-benchmark":
+        if args.music_command in {"analysis-doctor", "analysis-models"}:
+            cache_root = config.data_root / "music-benchmark" / ".analysis-models"
+            with redirect_stdout(sys.stderr):
+                if args.music_command == "analysis-doctor":
+                    runtime_result = runtime_doctor(cache_root, args.asr_model, args.device)
+                else:
+                    runtime_result = prepare_models(
+                        cache_root,
+                        args.asr_model,
+                        args.device,
+                        allow_download=args.allow_model_download,
+                    )
+            print(json.dumps(runtime_result, sort_keys=True))
+            return 1 if runtime_result.get("status") == "failed" else 0
         root = config.brand_root.parent.parent
         if args.music_command in {"plan", "run"}:
             brief = load_brief(root / "benchmarks/music/colors_red_v1.yaml")

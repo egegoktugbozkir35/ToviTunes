@@ -49,5 +49,5 @@ packages = ["tovitunes"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "nltk"]
+module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "nltk"]
 ignore_missing_imports = true

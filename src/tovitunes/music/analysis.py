@@ -5,11 +5,8 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import math
-import os
 import re
 import statistics
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -29,6 +26,16 @@ from tovitunes.music.analysis_models import (
     RhythmEvidence,
     TechnicalMetrics,
     TranscriptionEvidence,
+)
+from tovitunes.music.analysis_runtime import (
+    ALIGNMENT_MODEL,
+    RuntimeFailure,
+    diagnostic,
+    ffmpeg_status,
+    model_environment,
+    prepare_tokenizer,
+    require_cache,
+    tokenizer_environment,
 )
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import CanonicalMusicSpec, StrictModel, TimedText, TimingAnalysis
@@ -52,7 +59,14 @@ def configuration_sha(config: AnalysisConfig) -> str:
 def analyzer_configuration(config: AnalysisConfig) -> dict[str, str | bool]:
     configuration: dict[str, str | bool] = config.model_dump(mode="json")
     source = sha256()
-    for name in ("analysis.py", "analysis_models.py", "audio.py", "models.py", "benchmark.py"):
+    for name in (
+        "analysis.py",
+        "analysis_models.py",
+        "analysis_runtime.py",
+        "audio.py",
+        "models.py",
+        "benchmark.py",
+    ):
         source.update(name.encode())
         source.update(Path(__file__).with_name(name).read_text(encoding="utf-8").encode())
     configuration["source_code_sha256"] = source.hexdigest()
@@ -292,17 +306,7 @@ def _aligned_words(segments: list[dict[str, Any]], duration: float) -> tuple[Rec
 
 
 def _prepare_alignment_resources(root: Path, allow_download: bool) -> None:
-    import nltk
-
-    nltk_root = root / "nltk"
-    if str(nltk_root) not in nltk.data.path:
-        nltk.data.path.insert(0, str(nltk_root))
-    try:
-        nltk.data.find("tokenizers/punkt_tab/english/")
-    except LookupError:
-        if not allow_download:
-            raise FileNotFoundError("English sentence tokenizer is not cached") from None
-        nltk.download("punkt_tab", download_dir=str(nltk_root), quiet=True, raise_on_error=True)
+    prepare_tokenizer(root, allow_download)
 
 
 def _asr_revision(path: Path, model_name: str) -> str | None:
@@ -324,30 +328,13 @@ def _asr_revision(path: Path, model_name: str) -> str | None:
 
 
 def _alignment_revision(path: Path) -> str | None:
-    weight = (
-        path.parent
-        / ".analysis-models"
-        / "alignment"
-        / ("wav2vec2_fairseq_base_ls960_asr_ls960.pth")
-    )
-    return "sha256:" + sha256(weight.read_bytes()).hexdigest() if weight.is_file() else None
-
-
-@contextmanager
-def _model_cache_environment(root: Path, allow_download: bool) -> Iterator[None]:
-    values = {"HF_HOME": str(root / "hf"), "TORCH_HOME": str(root / "torch")}
-    if not allow_download:
-        values.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
-    previous = {name: os.environ.get(name) for name in values}
-    os.environ.update(values)
-    try:
-        yield
-    finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+    inventory = path.parent / ".analysis-models" / "inventory.json"
+    if inventory.is_file():
+        data = json.loads(inventory.read_text(encoding="utf-8"))
+        for asset in data.get("assets", []):
+            if asset.get("asset") == "alignment" and asset.get("files"):
+                return "sha256:" + str(asset["files"][0]["sha256"])
+    return None
 
 
 def transcribe_and_align(
@@ -356,7 +343,7 @@ def transcribe_and_align(
     duration: float,
     config: AnalysisConfig,
 ) -> tuple[TranscriptionEvidence, AlignmentEvidence, str, str]:
-    with _model_cache_environment(path.parent / ".analysis-models", config.allow_model_download):
+    with model_environment(path.parent / ".analysis-models", config.allow_model_download):
         return _transcribe_and_align_impl(path, spec, duration, config)
 
 
@@ -389,16 +376,29 @@ def _transcribe_and_align_impl(
     if device == "auto":
         device = "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
+    stage = "ffmpeg_unavailable"
+    root = path.parent / ".analysis-models"
     try:
+        if ffmpeg_status()["status"] != "found":
+            raise RuntimeFailure("ffmpeg_unavailable: install a working ffmpeg executable on PATH")
+        stage = "device_failed"
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeFailure("cuda_unavailable: select --device cpu")
+        stage = "asr_model_missing_or_incomplete"
+        snapshot = None if config.allow_model_download else require_cache(root, config.asr_model)
+        stage = "audio_decode_failed"
         audio = whisperx.load_audio(str(path))
+        stage = "asr_model_load_failed"
         model = whisperx.load_model(
-            config.asr_model,
+            str(snapshot) if snapshot else config.asr_model,
             device,
             compute_type=compute_type,
             language="en",
             download_root=str(path.parent / ".analysis-models" / "asr"),
             local_files_only=not config.allow_model_download,
+            use_auth_token=False,
         )
+        stage = "asr_inference_failed"
         recognized = model.transcribe(audio, batch_size=4)
         segments = recognized.get("segments", [])
         text = " ".join(str(s.get("text", "")).strip() for s in segments).strip()
@@ -406,41 +406,41 @@ def _transcribe_and_align_impl(
             raise ValueError("ASR returned no recognized words")
     except Exception as exc:
         return (
-            TranscriptionEvidence(
-                status="incomplete", failure_reason=f"independent ASR failed: {type(exc).__name__}"
-            ),
+            TranscriptionEvidence(status="incomplete", failure_reason=diagnostic(stage, exc)),
             empty_alignment,
             _version("whisperx"),
             device,
         )
     try:
-        import torchaudio
-
-        _prepare_alignment_resources(path.parent / ".analysis-models", config.allow_model_download)
-        alignment_cache = path.parent / ".analysis-models" / "alignment"
-        bundle = torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H
-        if (
-            not config.allow_model_download
-            and not (alignment_cache / Path(bundle._path).name).is_file()
-        ):
-            raise FileNotFoundError("alignment model is not cached")
+        stage = "nltk_resource_missing"
+        _prepare_alignment_resources(root, config.allow_model_download)
+        stage = "alignment_model_load_failed"
+        if not config.allow_model_download:
+            require_cache(root, config.asr_model)
         model_a, metadata = whisperx.load_align_model(
             language_code="en",
             device=device,
-            model_name="WAV2VEC2_ASR_BASE_960H",
-            model_dir=str(alignment_cache),
+            model_name=ALIGNMENT_MODEL,
+            model_dir=str(root / "alignment"),
             model_cache_only=not config.allow_model_download,
         )
-        recognized_alignment = whisperx.align(
-            segments,
-            model_a,
-            metadata,
-            audio,
-            device,
-            return_char_alignments=False,
-            interpolate_method="ignore",
-        )
+        stage = "alignment_inference_failed"
+        with tokenizer_environment(root):
+            recognized_alignment = whisperx.align(
+                segments,
+                model_a,
+                metadata,
+                audio,
+                device,
+                return_char_alignments=False,
+                interpolate_method="ignore",
+            )
+        stage = "invalid_timestamp_output"
         recognized_words = _aligned_words(recognized_alignment.get("segments", []), duration)
+        if tuple(token for word in recognized_words for token in normalized_words(word.text)) != (
+            normalized_words(text)
+        ):
+            raise RuntimeFailure("independent_alignment_missing_words: transcript preserved")
         scores = [w.score for w in recognized_words if w.score is not None]
         transcription = TranscriptionEvidence(
             status="complete",
@@ -453,49 +453,72 @@ def _transcribe_and_align_impl(
             TranscriptionEvidence(
                 status="incomplete",
                 recognized_text=text,
-                failure_reason=f"independent word alignment failed: {type(exc).__name__}",
+                failure_reason=diagnostic(stage, exc),
             ),
             empty_alignment,
             _version("whisperx"),
             device,
         )
     try:
-        canonical = whisperx.align(
-            [{"start": 0.0, "end": duration, "text": spec.lyrics.text()}],
-            model_a,
-            metadata,
-            audio,
-            device,
-            return_char_alignments=False,
-            interpolate_method="ignore",
-        )
-        words = _aligned_words(canonical.get("segments", []), duration)
-        if tuple(
-            token for word in words for token in normalized_words(word.text)
-        ) != normalized_words(spec.lyrics.text()):
-            raise ValueError("canonical alignment omitted or changed words")
+        stage = "canonical_alignment_inference_failed"
+        with tokenizer_environment(root):
+            canonical = whisperx.align(
+                [{"start": 0.0, "end": duration, "text": spec.lyrics.text()}],
+                model_a,
+                metadata,
+                audio,
+                device,
+                return_char_alignments=False,
+                interpolate_method="ignore",
+            )
+        stage = "invalid_canonical_timestamp_output"
+        raw_words = [
+            w for segment in canonical.get("segments", []) for w in segment.get("words", [])
+        ]
+        expected = normalized_words(spec.lyrics.text())
+        if (
+            tuple(
+                token for word in raw_words for token in normalized_words(str(word.get("word", "")))
+            )
+            != expected
+        ):
+            raise RuntimeFailure("canonical_alignment_omitted_or_changed_words")
+        # Keep trustworthy observations, leaving missing timestamps absent. No interpolation.
+        indexed: list[RecognizedWord | None] = []
+        missing = []
+        for raw in raw_words:
+            if raw.get("start") is None or raw.get("end") is None:
+                indexed.append(None)
+                missing.append(str(raw.get("word", "")))
+            else:
+                indexed.append(_aligned_words([{"words": [raw]}], duration)[0])
+        words = tuple(word for word in indexed if word is not None)
+        if any(a.end > b.start for a, b in zip(words, words[1:])):
+            raise RuntimeFailure("invalid_canonical_timestamp_output: overlapping words")
         lines = []
         offset = 0
         for line in spec.lyrics.lines:
             count = len(normalized_words(line.text))
-            group = words[offset : offset + count]
-            if len(group) != count:
-                raise ValueError("canonical alignment omitted a lyric line")
-            lines.append(TimedText(start=group[0].start, end=group[-1].end, text=line.text))
+            group = indexed[offset : offset + count]
+            if len(group) == count and all(word is not None for word in group):
+                present = [word for word in group if word is not None]
+                lines.append(TimedText(start=present[0].start, end=present[-1].end, text=line.text))
             offset += count
         alignment = AlignmentEvidence(
-            status="complete",
+            status="incomplete" if missing else "complete",
             canonical_words=words,
             lyric_lines=tuple(lines),
             aligned_word_count=len(words),
             aligned_line_count=len(lines),
+            missing_words=tuple(missing),
+            failure_reason="canonical_alignment_missing_word_timestamps" if missing else None,
         )
     except Exception as exc:
         alignment = AlignmentEvidence(
             status="incomplete",
             aligned_word_count=0,
             aligned_line_count=0,
-            failure_reason=f"canonical forced alignment failed: {type(exc).__name__}",
+            failure_reason=diagnostic(stage, exc),
         )
     return transcription, alignment, _version("whisperx"), device
 
