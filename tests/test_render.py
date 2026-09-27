@@ -434,7 +434,7 @@ def render_fixture(tmp_path, catalog, monkeypatch):
     sprite_path = tmp_path / "sprite.png"
     sprite.save(sprite_path)
     references = {}
-    for i, role in enumerate(set(ACTION_ROLES[s.tovi_action] for s in scenes)):
+    for i, role in enumerate(sorted(set(ACTION_ROLES.values()))):
         references[role] = ingest("character_sprite", f"sprite_{i}", sprite_path, scope="brand")
     pack = catalog.packs[0].model_copy(update={"asset_artifact_ids": references})
     monkeypatch.setattr(production, "load_brand", lambda root: replace(catalog, packs=(pack,)))
@@ -471,6 +471,29 @@ def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
     assert first["mp4_sha256"] == second["mp4_sha256"]
     assert rows_snapshot(config.database_path) == before
     manifest = RenderManifest.model_validate(store.read_json(first["render_manifest_id"]))
+    for scene in manifest.scenes:
+        assert scene.scene_motion_artifact_id in manifest.dependency_sha256
+        animation_json = store.read_json(scene.character_animation_artifact_id)
+        assert animation_json["scene_motion_artifact_id"] == scene.scene_motion_artifact_id
+        assert all(
+            pose["sprite_artifact_id"] in manifest.dependency_sha256
+            for pose in animation_json["pose_sequence"]
+        )
+        with closing(store.database.connect()) as db:
+            deps = {
+                row[0]
+                for row in db.execute(
+                    "SELECT input_artifact_id FROM artifact_dependencies "
+                    "WHERE consumer_artifact_id=?",
+                    (scene.scene_motion_artifact_id,),
+                )
+            }
+        assert {
+            manifest.timed_storyboard_artifact_id,
+            manifest.audio_alignment_artifact_id,
+            manifest.beat_analysis_artifact_id,
+            scene.scene_image_artifact_id,
+        } <= deps
     validate_manifest(store, manifest, storyboard)
     altered = manifest.model_copy(
         update={"dependency_sha256": {k: "b" * 64 for k in manifest.dependency_sha256}}

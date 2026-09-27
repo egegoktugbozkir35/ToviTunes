@@ -14,9 +14,59 @@ from tovitunes.render.composition import (
     resolve_composition,
 )
 from tovitunes.render.layout import compute_fit_box
-from tovitunes.render.models import CharacterAnimation, Motion, SpriteRole
+from tovitunes.render.models import CharacterAnimation, Motion, PoseKeyframe, SpriteRole
+from tovitunes.render.motion import PoseCue
 
 ACTION_ROLES: dict[str, SpriteRole] = {a: m.sprite_role for a, m in ACTION_METADATA.items()}
+
+
+def pose_keyframe(
+    cue: PoseCue, image: Image.Image, artifact_id: str, perceived_height: int
+) -> PoseKeyframe:
+    if image.mode != "RGBA" or (bbox := image.getchannel("A").getbbox()) is None:
+        raise ValueError("pose requires approved visible alpha sprite")
+    scale = perceived_height / (bbox[3] - bbox[1])
+    return PoseKeyframe(
+        time=cue.time,
+        sprite_role=cue.sprite_role,
+        sprite_artifact_id=artifact_id,
+        crop_bbox=bbox,
+        scale=scale,
+        size=(round((bbox[2] - bbox[0]) * scale), perceived_height),
+        transition="cut" if cue.time == 0 else "short_crossfade",
+    )
+
+
+def pose_position(
+    animation: CharacterAnimation, pose: PoseKeyframe, t: float
+) -> tuple[float, float]:
+    x, y = position(animation, t)
+    # Visible alpha crops are normalized to one perceived height and a bottom-center base.
+    return x + (animation.size[0] - pose.size[0]) / 2, y + animation.size[1] - pose.size[1]
+
+
+def attach_poses(
+    animation: CharacterAnimation, poses: tuple[PoseKeyframe, ...], canvas: tuple[int, int]
+) -> CharacterAnimation:
+    animation = CharacterAnimation.model_validate(
+        {
+            **animation.model_dump(),
+            "pose_sequence": poses,
+        }
+    )
+    # The widest approved alpha crop controls one shared bottom-center anchor.
+    half_width = max(p.size[0] for p in poses) / 2
+    center_x = animation.end_position[0] + animation.size[0] / 2
+    safe_center = min(canvas[0] * 0.95 - half_width, max(canvas[0] * 0.05 + half_width, center_x))
+    shift = safe_center - center_x
+    return animation.model_copy(
+        update={
+            "end_position": (animation.end_position[0] + shift, animation.end_position[1]),
+            "start_position": animation.start_position
+            if animation.motion_type == "enter"
+            else (animation.start_position[0] + shift, animation.start_position[1]),
+        }
+    )
 
 
 def animation_plan(
@@ -27,6 +77,8 @@ def animation_plan(
     canvas: tuple[int, int],
     storyboard_id: str,
     composition: SceneComposition | None = None,
+    *,
+    height_limit: float = 0.40,
 ) -> CharacterAnimation:
     if scene.tovi_action not in ACTION_ROLES:
         raise ValueError("unsupported Tovi action")
@@ -51,7 +103,10 @@ def animation_plan(
     w, h = canvas
     box = compute_fit_box(
         (cw, ch),
-        (round(w * composition.character_width), round(h * composition.character_height)),
+        (
+            round(w * composition.character_width),
+            round(h * min(height_limit, composition.character_height)),
+        ),
         mode="contain",
     )
     scale = min(box.out_w / cw, box.out_h / ch)
