@@ -40,8 +40,8 @@ def isolated(monkeypatch):
     monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace())
 
 
-def fill_cache(root):
-    snapshot = root / "asr/models--Systran--faster-whisper-small.en/snapshots" / ("a" * 40)
+def fill_cache(root, model="small.en"):
+    snapshot = root / f"asr/models--Systran--faster-whisper-{model}/snapshots" / ("a" * 40)
     snapshot.mkdir(parents=True)
     reference = snapshot.parent.parent / "refs/main"
     reference.parent.mkdir()
@@ -164,16 +164,18 @@ def test_permission_required_before_any_provisioning(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("model", ["small.en", "medium.en"])
 @pytest.mark.parametrize("cached", [True, False])
-def test_preparation_and_reuse(tmp_path, monkeypatch, cached):
+def test_preparation_and_reuse(tmp_path, monkeypatch, cached, model):
     if cached:
-        fill_cache(tmp_path)
+        fill_cache(tmp_path, model)
     calls = []
 
     def download(*args, **kwargs):
         assert not cached
+        assert args == (model,)
         calls.append("download")
-        fill_cache(tmp_path)
+        fill_cache(tmp_path, model)
 
     def load_model(*args, **kwargs):
         assert kwargs["local_files_only"] is True
@@ -191,7 +193,7 @@ def test_preparation_and_reuse(tmp_path, monkeypatch, cached):
             load_model=load_model, load_align_model=lambda **kwargs: calls.append("align")
         ),
     )
-    result = runtime.prepare_models(tmp_path, allow_download=True)
+    result = runtime.prepare_models(tmp_path, model, allow_download=True)
     assert result["status"] == "prepared", result
     assert all(
         a["action"] == ("reused" if cached else "downloaded")
@@ -202,7 +204,8 @@ def test_preparation_and_reuse(tmp_path, monkeypatch, cached):
     assert result["assets"][1]["revision"] is None
     assert calls == (["align", "validate"] if cached else ["download", "align", "validate"])
     monkeypatch.setattr(runtime, "_hash_file", lambda *args: pytest.fail("repeat hashing"))
-    assert runtime.prepare_models(tmp_path, allow_download=True)["status"] == "prepared"
+    assert result["assets"][0]["logical_name"] == model
+    assert runtime.prepare_models(tmp_path, model, allow_download=True)["status"] == "prepared"
 
 
 def test_failed_preparation_does_not_expose_exception(tmp_path, monkeypatch):
@@ -238,3 +241,32 @@ def test_cli_doctor_and_prepare_bypass_database(tmp_path, monkeypatch, capsys):
         assert main(["--config", str(config), "music-benchmark", *command]) == 0
         json.loads(capsys.readouterr().out)
     assert not (tmp_path / "absent.db").exists()
+
+
+@pytest.mark.parametrize("model", ["large-v3", "turbo", "medium", "arbitrary"])
+def test_preparation_rejects_other_models_before_download(tmp_path, model):
+    with pytest.raises(runtime.RuntimeFailure, match="unsupported_preparation_model"):
+        runtime.prepare_models(tmp_path, model, allow_download=True)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("model", ["small.en", "medium.en"])
+def test_cli_preparation_explicit_allowlist(tmp_path, monkeypatch, model):
+    from tovitunes.cli import main
+
+    config = tmp_path / "config.yaml"
+    config.write_text("database_path: absent.db\ndata_root: data\nbrand_root: brands\n")
+    calls = []
+    monkeypatch.setattr("tovitunes.cli.Database", lambda *a: pytest.fail("database access"))
+    monkeypatch.setattr(
+        "tovitunes.cli.prepare_models",
+        lambda root, selected, device, **kw: calls.append((selected, device, kw)) or {},
+    )
+    args = ["--config", str(config), "music-benchmark", "analysis-models", "prepare",
+            "--asr-model", model, "--device", "cpu", "--allow-model-download"]
+    assert main(args) == 0
+    assert calls == [(model, "cpu", {"allow_download": True})]
+    with pytest.raises(SystemExit) as exc:
+        main([*args[:7], "large-v3", *args[8:]])
+    assert exc.value.code == 2
+    assert len(calls) == 1

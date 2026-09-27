@@ -271,9 +271,9 @@ def prepare_models(
 ) -> dict[str, Any]:
     if not allow_download:
         raise RuntimeFailure("explicit_download_permission_required: use --allow-model-download")
-    if model != "small.en":
+    if model not in {"small.en", "medium.en"}:
         raise RuntimeFailure(
-            "unsupported_preparation_model: this runtime baseline selects small.en"
+            "unsupported_preparation_model: select small.en or medium.en"
         )
     before = cache_status(root, model)
     stage = "optional_dependency_missing_or_broken"
