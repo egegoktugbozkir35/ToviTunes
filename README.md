@@ -1,5 +1,9 @@
 # ToviTunes
 
+The first Colors Red pilot can be rendered locally from the selected production
+artifact graph. See [production rendering](docs/PRODUCTION_RENDER.md) for the
+MoviePy extra, system FFmpeg requirements, CLI, deterministic QA, and review exports.
+
 Production handoff and renderer-facing storyboard contracts:
 [Production storyboard V1](docs/PRODUCTION_STORYBOARD.md).
 

@@ -15,7 +15,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync --python 3.11 --locked --extra dev
+      - run: choco install ffmpeg --no-progress -y
+      - run: uv sync --python 3.11 --locked --extra dev --extra video-render
       - run: uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
       - run: uv run ruff check .
       - run: uv run mypy src
