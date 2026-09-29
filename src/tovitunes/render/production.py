@@ -25,7 +25,14 @@ from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedStory
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.leases import Lease, LeaseStore
 from tovitunes.render import VERSION
-from tovitunes.render.character import ACTION_ROLES, animation_plan, position, validate_layout
+from tovitunes.render.character import (
+    ACTION_ROLES,
+    animation_plan,
+    attach_poses,
+    pose_keyframe,
+    position,
+    validate_layout,
+)
 from tovitunes.render.composition import (
     CompositionRequest,
     SceneComposition,
@@ -41,6 +48,7 @@ from tovitunes.render.ffmpeg import (
     run_process,
 )
 from tovitunes.render.models import RenderManifest, SceneRender
+from tovitunes.render.motion import SceneMotionPlan, plan_motion, validate_motion
 from tovitunes.render.props import png_info, scene_art, validate_props
 from tovitunes.render.qa import media_qa
 
@@ -56,6 +64,8 @@ class RenderInputs:
     storyboard: TimedStoryboard
     beats: BeatAnalysis
     pack: CharacterAssetPack
+    alignment: AudioAlignment
+    target_vocabulary: tuple[str, ...]
 
 
 def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
@@ -135,7 +145,9 @@ def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
     )
     if pack is None or pack.readiness != "approved" or pack.pack_id != "tovi-pack-v1":
         raise ValueError("selected approved tovi-pack-v1 is unavailable")
-    for role in {ACTION_ROLES[s.tovi_action] for s in storyboard.scenes}:
+    for role in set(ACTION_ROLES.values()):
+        if role not in pack.asset_artifact_ids:
+            raise ValueError(f"missing approved full-body sprite: {role}")
         sprite = store.get(pack.asset_artifact_ids[role])
         selected = store.selected(
             sprite.identity.owner_scope,
@@ -145,7 +157,9 @@ def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
         )
         if selected is None or selected.identity != sprite.identity:
             raise ValueError("approved sprite is no longer selected")
-    return RenderInputs(store, record, storyboard, beats, pack)
+    return RenderInputs(
+        store, record, storyboard, beats, pack, alignment, episode.target_vocabulary
+    )
 
 
 def validate_manifest(
@@ -246,6 +260,8 @@ class ProductionRenderer:
             worker_scenes: list[dict[str, Any]] = []
             deterministic: list[dict[str, Any]] = []
             previous: SceneComposition | None = None
+            previous_motion: SceneMotionPlan | None = None
+            previous_motion_id: str | None = None
             last_lyric_end = max(s.lyric_end for s in storyboard.scenes if s.lyric_end is not None)
             tail_seconds = storyboard.duration_seconds - last_lyric_end
             for scene in storyboard.scenes:
@@ -264,12 +280,26 @@ class ProductionRenderer:
                     measured_downbeats=inputs.beats.downbeat_seconds,
                 )
                 validate_composition(composition_request, composition, previous)
+                motion = plan_motion(
+                    composition,
+                    scene.start,
+                    scene.end - scene.start,
+                    sid,
+                    inputs.beats,
+                    inputs.alignment,
+                    inputs.target_vocabulary,
+                    previous=previous_motion,
+                    previous_artifact_id=previous_motion_id,
+                    canvas=self.canvas,
+                )
                 image, metadata = scene_art(
                     scene,
                     inputs.pack.palette,
                     self.canvas,
                     sid,
                     composition,
+                    background_only=True,
+                    background_variant=motion.background_variant,
                 )
                 png = stage / f"{scene.scene_id}.png"
                 image.save(png, pnginfo=png_info(metadata))
@@ -286,15 +316,58 @@ class ProductionRenderer:
                         self.canvas,
                         sid,
                         composition,
+                        height_limit=0.38,
                     )
                 validate_layout(animation, self.canvas)
+                poses = []
+                sprite_paths = {}
+                for cue in motion.character_pose_sequence:
+                    pose_id = inputs.pack.asset_artifact_ids[cue.sprite_role]
+                    pose_path = store.path_for(pose_id)
+                    with Image.open(pose_path) as pose_sprite:
+                        poses.append(pose_keyframe(cue, pose_sprite, pose_id, animation.size[1]))
+                    sprite_paths[pose_id] = str(pose_path)
+                animation = attach_poses(animation, tuple(poses), self.canvas)
+                motion_qa = validate_motion(
+                    motion, inputs.alignment, inputs.target_vocabulary, animation, self.canvas
+                )
+                motion_path = stage / f"{scene.scene_id}.motion.json"
+                motion_path.write_bytes(canonical(motion.model_dump(mode="json")))
+                motion_deps = tuple(
+                    dict.fromkeys(
+                        (
+                            sid,
+                            storyboard.beat_analysis_artifact_id,
+                            storyboard.audio_alignment_artifact_id,
+                            background.identity.artifact_id,
+                            *sprite_paths,
+                            *((previous_motion_id,) if motion.inherited_motion_artifact_id else ()),
+                        )
+                    )
+                )
+                motion_record = ensure("scene_motion", scene.scene_id, motion_path, motion_deps)
+                animation = animation.model_copy(
+                    update={
+                        "scene_motion_artifact_id": motion_record.identity.artifact_id,
+                    }
+                )
                 plan_path = stage / f"{scene.scene_id}.json"
                 plan_path.write_bytes(canonical(animation.model_dump(mode="json")))
                 plan_record = ensure(
                     "character_animation",
                     scene.scene_id,
                     plan_path,
-                    (sid, storyboard.beat_analysis_artifact_id, sprite_id),
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                sid,
+                                storyboard.beat_analysis_artifact_id,
+                                sprite_id,
+                                *sprite_paths,
+                                motion_record.identity.artifact_id,
+                            )
+                        )
+                    ),
                 )
                 # QA inspects the stored image metadata, not just the generator's temporary output.
                 with Image.open(store.path_for(background.identity.artifact_id)) as stored:
@@ -323,6 +396,7 @@ class ProductionRenderer:
                         "composition_qa_passed": True,
                         "outro_phase_count": len(composition.outro_phases),
                         "long_scene_activity": animation.long_scene_activity,
+                        "motion_diagnostics": motion_qa,
                     }
                 )
                 scene_refs.append(
@@ -332,6 +406,7 @@ class ProductionRenderer:
                         end=scene.end,
                         scene_image_artifact_id=background.identity.artifact_id,
                         character_animation_artifact_id=plan_record.identity.artifact_id,
+                        scene_motion_artifact_id=motion_record.identity.artifact_id,
                     )
                 )
                 worker_scenes.append(
@@ -343,9 +418,13 @@ class ProductionRenderer:
                         "sprite_path": str(sprite_path),
                         "animation": animation.model_dump(mode="json"),
                         "metadata": metadata,
+                        "motion": motion.model_dump(mode="json"),
+                        "sprite_paths": sprite_paths,
                     }
                 )
                 previous = composition
+                previous_motion = motion
+                previous_motion_id = motion_record.identity.artifact_id
             deps = tuple(
                 dict.fromkeys(
                     (
@@ -355,7 +434,13 @@ class ProductionRenderer:
                         storyboard.beat_analysis_artifact_id,
                         *(s.scene_image_artifact_id for s in scene_refs),
                         *(s.character_animation_artifact_id for s in scene_refs),
+                        *(
+                            s.scene_motion_artifact_id
+                            for s in scene_refs
+                            if s.scene_motion_artifact_id
+                        ),
                         *(s["animation"]["sprite_artifact_id"] for s in worker_scenes),
+                        *(key for s in worker_scenes for key in s["sprite_paths"]),
                     )
                 )
             )
@@ -447,6 +532,8 @@ class ProductionRenderer:
                         ),
                     },
                     "renderer_version": VERSION,
+                    "dynamic_motion_qa": {"passed": True, "major_motion_budget": 3},
+                    "visual_activity_diagnostics": [d["motion_diagnostics"] for d in deterministic],
                     "mouth_animation_supported": False,
                 }
             )
@@ -456,17 +543,17 @@ class ProductionRenderer:
             output = self.config.brand_root.parent.parent / "outputs"
             output.mkdir(exist_ok=True)
             episode_key = inputs.store.database.get_episode(owner).external_key
-            export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_V2"
+            export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_V3"
             export = output / f"{export_stem}.mp4"
             self._export(store.path_for(final.identity.artifact_id), export)
             self._export(
                 store.path_for(qa_record.identity.artifact_id),
                 output / f"{export_stem}_MEDIA_QA.json",
             )
-            frames = output / f"{episode_key.replace('-', '_')}_v2_frames"
+            frames = output / f"{episode_key.replace('-', '_')}_v3_frames"
             self._frames(export, storyboard, frames)
             return {
-                "classification": "PILOT_V2_READY_FOR_VISUAL_REVIEW",
+                "classification": "PILOT_V3_READY_FOR_CHILD_ENGAGEMENT_REVIEW",
                 "episode_id": owner,
                 "storyboard_artifact_id": sid,
                 "render_manifest_id": manifest_record.identity.artifact_id,

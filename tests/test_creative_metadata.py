@@ -105,6 +105,7 @@ def finished(workflow):
         for s in scenes
     )
     manifest = RenderManifest(
+        renderer_version="tovitunes_sprite_render_v2",  # Retained pre-motion render facts.
         episode_id=episode.episode_id,
         audio_master_artifact_id="audio-fixture",
         audio_alignment_artifact_id="alignment-fixture",

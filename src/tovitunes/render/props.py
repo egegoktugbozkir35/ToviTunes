@@ -164,6 +164,9 @@ def scene_art(
     canvas: tuple[int, int],
     storyboard_id: str,
     composition: SceneComposition | None = None,
+    *,
+    background_only: bool = False,
+    background_variant: str = "wide",
 ) -> tuple[Image.Image, dict[str, Any]]:
     composition = composition or resolve_composition(
         CompositionRequest(
@@ -214,7 +217,7 @@ def scene_art(
                 "prop_style_version": PROP_STYLE_VERSION,
             }
         )
-        if placement.motion == "static":
+        if placement.motion == "static" and not background_only:
             prop = prop_image(placement.type, bbox[2] - bbox[0])
             image.paste(prop, (bbox[0], bbox[1]), prop)
     metadata = {
@@ -230,6 +233,18 @@ def scene_art(
         "prop_style_contract": PROP_STYLE_CONTRACT,
         "supersample": SUPERSAMPLE,
     }
+    if background_only:
+        from tovitunes.render.environment import LAYERS, THEME, background_plate
+
+        image = background_plate(canvas, background_variant)
+        metadata.update(
+            {
+                "background_only": True,
+                "environmental_theme": THEME,
+                "background_variant": background_variant,
+                "environment_layers": list(LAYERS),
+            }
+        )
     return image, metadata
 
 

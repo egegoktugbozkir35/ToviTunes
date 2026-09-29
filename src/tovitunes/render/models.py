@@ -17,9 +17,31 @@ SpriteRole = Literal[
 Motion = Literal["enter", "bob", "point", "present", "question", "sing", "celebrate"]
 
 
+class PoseKeyframe(ProductionModel):
+    time: float = Field(ge=0)
+    sprite_role: SpriteRole
+    sprite_artifact_id: str
+    crop_bbox: tuple[int, int, int, int]
+    scale: float = Field(gt=0)
+    size: tuple[int, int]
+    transition: Literal["cut", "short_crossfade"] = "short_crossfade"
+    transition_seconds: float = Field(default=0.12, ge=0.08, le=0.16)
+
+    @model_validator(mode="after")
+    def uniform(self) -> "PoseKeyframe":
+        x0, y0, x1, y1 = self.crop_bbox
+        if min(x1 - x0, y1 - y0) <= 0 or self.size != (
+            round((x1 - x0) * self.scale),
+            round((y1 - y0) * self.scale),
+        ):
+            raise ValueError("pose requires positive bounds and uniform scale")
+        return self
+
+
 class CharacterAnimation(ProductionModel):
     renderer_version: str = VERSION
     storyboard_artifact_id: str
+    scene_motion_artifact_id: str | None = None
     scene_id: str
     sprite_role: SpriteRole
     sprite_artifact_id: str
@@ -52,6 +74,7 @@ class CharacterAnimation(ProductionModel):
     mouth_animation_supported: Literal[False] = False
     mouth_mode: Literal["approved_sprite_as_is"] = "approved_sprite_as_is"
     mouth_reason: str = "Component normalization has no registered singing-pose mouth anchor."
+    pose_sequence: tuple[PoseKeyframe, ...] = ()
 
     @model_validator(mode="after")
     def uniform(self) -> "CharacterAnimation":
@@ -59,6 +82,12 @@ class CharacterAnimation(ProductionModel):
         expected = (round((x1 - x0) * self.scale), round((y1 - y0) * self.scale))
         if min(self.size) <= 0 or self.size != expected:
             raise ValueError("character size must preserve uniform scale and positive alpha bounds")
+        if self.pose_sequence and (
+            self.pose_sequence[0].time != 0
+            or any(a.time >= b.time for a, b in zip(self.pose_sequence, self.pose_sequence[1:]))
+            or any(p.size[1] != self.size[1] for p in self.pose_sequence)
+        ):
+            raise ValueError("pose sequence must increase from zero with stable perceived height")
         return self
 
 
@@ -68,11 +97,16 @@ class SceneRender(ProductionModel):
     end: float
     scene_image_artifact_id: str
     character_animation_artifact_id: str
+    scene_motion_artifact_id: str | None = None
 
 
 class RenderManifest(ProductionModel):
     schema_version: Literal[1] = 1
     renderer_version: str = VERSION
+    camera_policy_version: str = "gentle_camera_v1"
+    motion_grammar_version: str = "preschool_motion_v1"
+    keyword_emphasis_policy: str = "canonical_target_words_v1"
+    environmental_theme: str = "playful_meadow_v2"
     episode_id: str
     audio_master_artifact_id: str
     audio_alignment_artifact_id: str
@@ -116,7 +150,12 @@ class RenderManifest(ProductionModel):
             self.beat_analysis_artifact_id,
             *(s.scene_image_artifact_id for s in self.scenes),
             *(s.character_animation_artifact_id for s in self.scenes),
+            *(s.scene_motion_artifact_id for s in self.scenes if s.scene_motion_artifact_id),
         }
+        if self.renderer_version.startswith("tovitunes_dynamic_render_v1") and any(
+            s.scene_motion_artifact_id is None for s in self.scenes
+        ):
+            raise ValueError("dynamic manifest requires scene motion pins")
         if not required.issubset(self.dependency_sha256):
             raise ValueError("manifest is missing pinned dependencies")
         return self
