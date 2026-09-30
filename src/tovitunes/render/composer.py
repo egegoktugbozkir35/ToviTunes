@@ -153,6 +153,27 @@ def build_dynamic_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
             return w * x - frame.shape[1] / 2, h * bottom - frame.shape[0]
 
         clip = clip.with_position(prop_place)
+        reveal_events = tuple(e for e in track.events if e.motion == "reveal")
+        if reveal_events:
+            reveal_size = round(size * 1.45)
+            reveal_halo = clip_for(halo_sprite(reveal_size)).with_position(
+                lambda t, p=track, s=reveal_size, prop_size=size: (
+                    prop_state(p, motion, t)[0] * w - s / 2,
+                    prop_state(p, motion, t)[1] * h - prop_size / 2 - s / 2,
+                )
+            )
+
+            def reveal_gain(t: float, events: Any = reveal_events) -> float:
+                return max(
+                    (
+                        0.75 * math.sin(math.pi * (t - e.start) / (e.end - e.start)) ** 2
+                        for e in events
+                        if e.start <= t <= e.end
+                    ),
+                    default=0.0,
+                )
+
+            layers.append(opacity(reveal_halo, reveal_gain))
         keyword_events = tuple(
             k for k in motion.keyword_emphasis_events if k.prop_key == track.prop_key
         )

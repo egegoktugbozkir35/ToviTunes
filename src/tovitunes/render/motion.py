@@ -13,15 +13,28 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, ProductionModel
-from tovitunes.render import VERSION
+from tovitunes.render import VERSION, VISUAL_STORY_VERSION
 from tovitunes.render.composition import SceneComposition
 from tovitunes.render.models import CharacterAnimation, SpriteRole
+from tovitunes.render.story import VisualStoryPlan
 
 MAX_MAJOR_SIMULTANEOUS_MOTIONS = 3
 CameraBehavior = Literal[
     "static", "slow_push_in", "slow_pull_out", "gentle_pan_left", "gentle_pan_right", "focus_push"
 ]
-PropMotion = Literal["pop_in", "gentle_bounce", "pulse", "wiggle", "roll_in", "float_in", "settle"]
+PropMotion = Literal[
+    "pop_in",
+    "gentle_bounce",
+    "pulse",
+    "wiggle",
+    "roll_in",
+    "float_in",
+    "settle",
+    "fall_in",
+    "bounce_settle",
+    "slide_to_focus",
+    "reveal",
+]
 
 
 def smooth(u: float) -> float:
@@ -37,8 +50,8 @@ def canonical_word(text: str) -> str:
 class CameraTrack(ProductionModel):
     behavior: CameraBehavior = "static"
     duration: float = Field(gt=0)
-    zoom_start: float = Field(default=1.02, ge=1, le=1.06)
-    zoom_end: float = Field(default=1.02, ge=1, le=1.06)
+    zoom_start: float = Field(default=1.02, ge=1, le=1.07)
+    zoom_end: float = Field(default=1.02, ge=1, le=1.07)
     pan_start: tuple[float, float] = (0, 0)
     pan_end: tuple[float, float] = (0, 0)
     hold_from: float | None = Field(default=None, ge=0)
@@ -88,6 +101,7 @@ class MotionEvent(ProductionModel):
     end: float = Field(gt=0)
     motion: PropMotion
     timing_source: Literal["scene_entry", "measured_downbeat", "scene_fraction", "recap_phase"]
+    origin: tuple[float, float] | None = None
 
     @model_validator(mode="after")
     def positive(self) -> "MotionEvent":
@@ -139,6 +153,9 @@ class SceneMotionPlan(ProductionModel):
     motion_grammar_version: str = "preschool_motion_v1"
     keyword_emphasis_policy: str = "canonical_target_words_v1"
     environmental_theme: str = "playful_meadow_v2"
+    visual_story_plan_artifact_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scene_id: str
     scene_start: float = Field(ge=0)
     duration: float = Field(gt=0)
@@ -241,6 +258,8 @@ def plan_motion(
     previous: SceneMotionPlan | None = None,
     previous_artifact_id: str | None = None,
     canvas: tuple[int, int] = (1080, 1920),
+    story: VisualStoryPlan | None = None,
+    continuity_positions: dict[str, tuple[float, float]] | None = None,
 ) -> SceneMotionPlan:
     action = composition.resolved_action
     seed = hashlib.sha256(f"{storyboard_id}:{composition.scene_id}:{VERSION}".encode()).hexdigest()
@@ -278,6 +297,19 @@ def plan_motion(
                 roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
     phases = tuple((p.name, p.start, p.end) for p in composition.outro_phases)
     settle = phases[-1][1] if phases else None
+    if story and story.story_action == "drop_and_settle":
+        camera = CameraTrack(behavior="focus_push", duration=duration, zoom_end=1.055)
+    elif story and story.story_action == "roll_through":
+        camera = CameraTrack(
+            behavior="gentle_pan_right",
+            duration=duration,
+            zoom_start=1.04,
+            zoom_end=1.04,
+            pan_start=(-0.012, 0),
+            pan_end=(0.012, 0),
+        )
+    elif story and story.story_action == "performance":
+        camera = CameraTrack(behavior="slow_push_in", duration=duration, zoom_end=1.065)
     if settle is not None:
         roles = [p for p in roles if p.time < settle]
         roles.append(
@@ -321,7 +353,50 @@ def plan_motion(
         bbox = (pixels[0] / w, pixels[1] / h, pixels[2] / w, pixels[3] / h)
         events: list[MotionEvent] = []
         new = composition.visual_state_persistence == "replace"
-        if new and not composition.micro_scene:
+        if story and story.story_action == "drop_and_settle" and prop.primary:
+            contact = min(duration * 0.62, max(0.55, story.action_phase.end))
+            events.append(
+                MotionEvent(start=0, end=contact, motion="fall_in", timing_source="scene_entry")
+            )
+            if contact + 0.28 < duration:
+                events.append(
+                    MotionEvent(
+                        start=contact,
+                        end=contact + 0.28,
+                        motion="bounce_settle",
+                        timing_source="scene_fraction",
+                    )
+                )
+        elif story and story.story_action == "reveal" and prop.primary:
+            events.append(
+                MotionEvent(
+                    start=0,
+                    end=min(duration * 0.48, 0.75),
+                    motion="reveal",
+                    timing_source="scene_entry",
+                )
+            )
+        elif story and story.story_action in {"compare", "performance"}:
+            target = ((bbox[0] + bbox[2]) / 2, bbox[3])
+            prior = (continuity_positions or {}).get(prop.type)
+            visible_last_scene = previous is not None and any(
+                p.prop_key == prop.type for p in previous.prop_tracks
+            )
+            if not visible_last_scene:
+                prior = ((-0.15 if target[0] < 0.5 else 1.15), target[1])
+                if story.story_action == "performance" and prop.primary:
+                    prior = (target[0], -0.12)
+            if prior is not None and abs(prior[0] - target[0]) + abs(prior[1] - target[1]) > 0.005:
+                events.append(
+                    MotionEvent(
+                        start=0,
+                        end=min(duration * 0.34, 0.9),
+                        motion="slide_to_focus",
+                        timing_source="scene_entry",
+                        origin=prior,
+                    )
+                )
+        elif new and not composition.micro_scene:
             entry: PropMotion = "roll_in" if prop.motion == "roll_in" else "pop_in"
             events.append(
                 MotionEvent(
@@ -414,6 +489,8 @@ def plan_motion(
                 opacity=0.5,
             ),
         )
+    if story is not None:
+        ambient = tuple(a for a in ambient if a.kind != "flower")
     offset = 0.0
     if composition.micro_scene and previous:
         roles = list(previous.character_pose_sequence)
@@ -461,9 +538,11 @@ def plan_motion(
                         end=event.end,
                         channel="lesson",
                         reason=f"{track.prop_key}:{event.motion}",
-                        motion_group="lesson_entry"
-                        if event.timing_source == "scene_entry"
-                        else f"prop:{track.prop_key}",
+                        motion_group=(
+                            f"prop:{track.prop_key}"
+                            if story is not None or event.timing_source != "scene_entry"
+                            else "lesson_entry"
+                        ),
                     )
                 )
     for keyword in keywords:
@@ -477,10 +556,15 @@ def plan_motion(
             )
         )
     return SceneMotionPlan(
+        renderer_version=VISUAL_STORY_VERSION if story else VERSION,
+        camera_policy_version="story_camera_v1" if story else "gentle_camera_v1",
+        motion_grammar_version="visual_story_motion_v1" if story else "preschool_motion_v1",
+        environmental_theme="selected_environment_set_v1" if story else "playful_meadow_v2",
         scene_id=composition.scene_id,
         scene_start=scene_start,
         duration=duration,
         seed=seed,
+        visual_story_plan_artifact_id=None,
         background_variant=variant,
         camera_track=camera,
         character_pose_sequence=tuple(roles),
@@ -540,6 +624,17 @@ def prop_state(
                     bottom -= 0.02 * (1 - smooth(u))
             elif event.motion == "settle":
                 scale += 0.04 * (1 - smooth(u))
+            elif event.motion == "fall_in":
+                # Pseudo-gravity: most distance is covered late, with no ground penetration.
+                bottom -= (y1 + 0.15) * (1 - u * u)
+            elif event.motion == "bounce_settle":
+                bottom -= 0.018 * math.sin(math.pi * u) ** 2 * (1 - u)
+            elif event.motion == "slide_to_focus" and event.origin is not None:
+                x = event.origin[0] + (x - event.origin[0]) * smooth(u)
+                bottom = event.origin[1] + (bottom - event.origin[1]) * smooth(u)
+            elif event.motion == "reveal":
+                scale = 0.12 + 0.88 * smooth(u)
+                bottom -= 0.025 * (1 - smooth(u))
     for keyword in plan.keyword_emphasis_events:
         if keyword.prop_key == track.prop_key:
             start, end = keyword.word_start - plan.scene_start, keyword.word_end - plan.scene_start
@@ -661,7 +756,7 @@ def validate_motion(
             box = (x - rw / 2, bottom - rh, x + rw / 2, bottom)
             transformed = camera_box(box, plan.camera_track, clock)
             intentional_arrival = any(
-                e.motion == "roll_in" and e.start == 0 and e.end <= 0.95 and t < e.end
+                e.motion in {"roll_in", "fall_in", "slide_to_focus"} and e.start == 0 and t < e.end
                 for e in prop.events
             )
             if not intentional_arrival and not (

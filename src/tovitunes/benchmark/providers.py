@@ -412,13 +412,8 @@ class GeminiImageProvider:
             supplied_reference_artifact_ids=ids,
         )
 
-    def generate(
-        self,
-        spec: CanonicalImageSpec,
-        reference_paths: tuple[Path, ...],
-        *,
-        on_remote_start: Callable[[], None] | None = None,
-    ) -> ProviderResult:
+    def preflight(self) -> tuple[str, Credentials]:
+        """Validate Vertex configuration before durable request preparation."""
         project = self._project or os.environ.get("GOOGLE_CLOUD_PROJECT")
         if not project or not project.strip():
             raise ProviderFailure(
@@ -434,6 +429,16 @@ class GeminiImageProvider:
                 outcome="terminal_failure",
             )
         credentials = self._credentials_loader()
+        return project.strip(), credentials
+
+    def generate(
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
+    ) -> ProviderResult:
+        project, credentials = self.preflight()
         references = _load_reference_bytes(spec, reference_paths)
         contents = types.Content(
             role="user",
@@ -484,22 +489,30 @@ class GeminiImageProvider:
                 provider_request_id=response.response_id or boundary_transport.response_request_id,
                 usage=(
                     response.usage_metadata.model_dump(mode="json", exclude_none=True)
-                    if response.usage_metadata else None
+                    if response.usage_metadata
+                    else None
                 ),
                 response_metadata={
-                    "backend": "Vertex AI", "location": self.location, "project": project.strip(),
-                    "image_output_count": len(images), "model_version": response.model_version,
+                    "backend": "Vertex AI",
+                    "location": self.location,
+                    "project": project.strip(),
+                    "image_output_count": len(images),
+                    "model_version": response.model_version,
                 },
             )
         except errors.APIError as exc:
             status = exc.code
             outcome: Literal["retryable_failure", "terminal_failure", "ambiguous"] = (
-                "retryable_failure" if status == 429 else "ambiguous"
-                if status == 408 or status >= 500 else "terminal_failure"
+                "retryable_failure"
+                if status == 429
+                else "ambiguous"
+                if status == 408 or status >= 500
+                else "terminal_failure"
             )
             headers = exc.response.headers if exc.response is not None else {}
             raise ProviderFailure(
-                f"Vertex AI returned HTTP {status}", outcome=outcome,
+                f"Vertex AI returned HTTP {status}",
+                outcome=outcome,
                 provider_request_id=headers.get("x-request-id"),
             ) from exc
         except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -508,13 +521,15 @@ class GeminiImageProvider:
             ) from exc
         except (ValueError, TypeError, AttributeError) as exc:
             raise ProviderFailure(
-                "malformed Vertex AI image response" if boundary_transport.started
+                "malformed Vertex AI image response"
+                if boundary_transport.started
                 else "invalid Vertex AI request preparation",
                 outcome="ambiguous" if boundary_transport.started else "terminal_failure",
             ) from exc
         except Exception as exc:
             raise ProviderFailure(
-                "Vertex AI generation outcome is uncertain" if boundary_transport.started
+                "Vertex AI generation outcome is uncertain"
+                if boundary_transport.started
                 else "Vertex AI request preparation failed",
                 outcome="ambiguous" if boundary_transport.started else "terminal_failure",
             ) from exc

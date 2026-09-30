@@ -93,6 +93,11 @@ class CanonicalImageSpec(BaseModel):
     identity_rules: tuple[str, ...]
     forbidden_changes: tuple[str, ...]
     aspect_ratio: Literal["9:16"] = "9:16"
+    composition_brief: str = "One 9:16 portrait image for a preschool educational Short."
+    reference_instructions: str = (
+        "Treat all supplied views as the same canonical Tovi character. "
+        "Preserve identity; use the view that best supports the scene."
+    )
     negative_constraints: tuple[str, ...] = (
         "No text, captions, logos, watermarks, or signatures.",
         "No named artist, franchise, or copyrighted-character imitation.",
@@ -101,7 +106,13 @@ class CanonicalImageSpec(BaseModel):
     )
 
     def canonical_json(self) -> str:
-        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        payload = self.model_dump(mode="json")
+        # Preserve fingerprints of already prepared benchmark requests. Production
+        # environment requests record their explicit overrides in the canonical spec.
+        for field in ("composition_brief", "reference_instructions"):
+            if getattr(self, field) == type(self).model_fields[field].default:
+                payload.pop(field)
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def fingerprint(self) -> str:
         return sha256(self.canonical_json().encode("utf-8")).hexdigest()
@@ -114,12 +125,8 @@ class CanonicalImageSpec(BaseModel):
             ("COMMON BRIEF", self.common_brief),
             ("SCENE", self.scene_brief),
             ("TEACHING CHECK", self.teaching_check),
-            ("COMPOSITION", "One 9:16 portrait image for a preschool educational Short."),
-            (
-                "REFERENCE INSTRUCTIONS",
-                "Treat all supplied views as the same canonical Tovi character. "
-                "Preserve identity; use the view that best supports the scene.",
-            ),
+            ("COMPOSITION", self.composition_brief),
+            ("REFERENCE INSTRUCTIONS", self.reference_instructions),
             ("PALETTE", palette),
             ("IDENTITY RULES", " | ".join(self.identity_rules)),
             ("FORBIDDEN CHANGES", " | ".join(self.forbidden_changes)),

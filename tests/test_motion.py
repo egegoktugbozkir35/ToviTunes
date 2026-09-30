@@ -123,6 +123,7 @@ def animation():
 
 def test_plan_deterministic_and_json_roundtrip(evidence):
     first, second = motion(evidence), motion(evidence)
+    assert "visual_story_plan_artifact_id" not in first.model_dump(mode="json")
     assert first == second and first.stable_hash() == second.stable_hash()
     assert SceneMotionPlan.model_validate_json(first.model_dump_json()) == first
     changed = plan_motion(

@@ -21,7 +21,12 @@ from tovitunes.artifacts.character_pack import approve_pack_manifest, assess_pac
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.benchmark.models import load_benchmark, load_rubric, load_scorecard
 from tovitunes.benchmark.persistence import BenchmarkStore
-from tovitunes.benchmark.providers import GeminiImageProvider, ImageProvider, OpenAIImageProvider
+from tovitunes.benchmark.providers import (
+    GeminiImageProvider,
+    ImageProvider,
+    OpenAIImageProvider,
+    ProviderFailure,
+)
 from tovitunes.benchmark.runner import (
     BenchmarkRunner,
     aggregate,
@@ -77,6 +82,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     storyboard.add_argument("--dry-run", action="store_true")
     render = production_commands.add_parser("render")
     render.add_argument("--episode-key", required=True)
+    render_v4 = production_commands.add_parser("render-v4")
+    render_v4.add_argument("--episode-key", required=True)
+    environment = subcommands.add_parser("environment")
+    environment_commands = environment.add_subparsers(dest="environment_command", required=True)
+    env_plan = environment_commands.add_parser("plan")
+    env_plan.add_argument("--theme", default="preschool-world-v1")
+    env_plan.add_argument("--attempt", type=int, default=1)
+    env_generate = environment_commands.add_parser("generate-set")
+    env_generate.add_argument("--theme", default="preschool-world-v1")
+    env_generate.add_argument("--attempt", type=int, default=1)
+    env_generate.add_argument("--confirm-provider-generation", action="store_true")
+    for command in ("inspect", "approve", "reject", "select"):
+        sub = environment_commands.add_parser(command)
+        sub.add_argument("--set-artifact-id", required=True)
+        if command in {"approve", "reject"}:
+            sub.add_argument("--actor", required=True)
+            sub.add_argument("--reason", required=True)
     for command in ("plan", "status"):
         sub = subcommands.add_parser(command)
         sub.add_argument("episode_id")
@@ -194,6 +216,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "environment":
+        from tovitunes.render.environment_sets import (
+            decide_set,
+            generate_set,
+            inspect_set,
+            select_set,
+        )
+        from tovitunes.render.environment_sets import (
+            plan as plan_environment,
+        )
+
+        try:
+            if args.environment_command == "plan":
+                environment_result = plan_environment(
+                    config, theme=args.theme, attempt=args.attempt
+                )
+            elif args.environment_command == "generate-set":
+                environment_result = generate_set(
+                    config,
+                    confirmed=args.confirm_provider_generation,
+                    theme=args.theme,
+                    attempt=args.attempt,
+                )
+            elif args.environment_command == "inspect":
+                environment_result = inspect_set(config, args.set_artifact_id)
+            elif args.environment_command in {"approve", "reject"}:
+                environment_result = decide_set(
+                    config,
+                    args.set_artifact_id,
+                    actor=args.actor,
+                    reason=args.reason,
+                    status="approved" if args.environment_command == "approve" else "rejected",
+                )
+            else:
+                environment_result = select_set(config, args.set_artifact_id)
+        except (ValueError, KeyError, OSError, RuntimeError, ProviderFailure) as exc:
+            parser.error(str(exc))
+        print(json.dumps(environment_result, sort_keys=True))
+        return 0
     if args.command == "creative":
         database = Database(config.database_path)
         database.migrate()
@@ -251,10 +312,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "production":
         try:
-            if args.production_command == "render":
+            if args.production_command in {"render", "render-v4"}:
                 from tovitunes.render.production import ProductionRenderer
 
-                render_result = ProductionRenderer(config).render(args.episode_key)
+                render_result = ProductionRenderer(config).render(
+                    args.episode_key, visual_story=args.production_command == "render-v4"
+                )
                 print(json.dumps(render_result, sort_keys=True))
                 return 0
             inputs = (args.concept, args.episode_key, args.music_blind_id, args.analysis_version)

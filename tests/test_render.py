@@ -471,6 +471,8 @@ def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
     assert first["mp4_sha256"] == second["mp4_sha256"]
     assert rows_snapshot(config.database_path) == before
     manifest = RenderManifest.model_validate(store.read_json(first["render_manifest_id"]))
+    assert "environment_set_artifact_id" not in manifest.model_dump(mode="json")
+    assert "visual_story_plan_artifact_id" not in manifest.model_dump(mode="json")
     for scene in manifest.scenes:
         assert scene.scene_motion_artifact_id in manifest.dependency_sha256
         animation_json = store.read_json(scene.character_animation_artifact_id)
@@ -508,6 +510,79 @@ def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
         canonical(manifest.model_dump(mode="json"))
         == store.path_for(first["render_manifest_id"]).read_bytes()
     )
+
+
+def test_tiny_v4_render_uses_reviewed_fixture_environment(render_fixture, monkeypatch):
+    from io import BytesIO
+
+    from tovitunes.benchmark.providers import ProviderResult
+    from tovitunes.render.environment_sets import decide_set, generate_set, select_set
+
+    config, store, _ = render_fixture
+    plate = Image.new("RGB", (900, 1600), "#afe3f3")
+    ImageDraw.Draw(plate).ellipse((-200, 800, 1100, 1850), fill="#88c876")
+    buffer = BytesIO()
+    plate.save(buffer, format="PNG")
+
+    class FixtureProvider:
+        provider = "fixture"
+        model = "fixture-world"
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            self.calls += 1
+            assert not reference_paths if self.calls == 1 else len(reference_paths) == 1
+            on_remote_start()
+            return ProviderResult(
+                image_bytes=buffer.getvalue(),
+                mime_type="image/png",
+                provider_request_id=f"fixture-{self.calls}",
+            )
+
+    provider = FixtureProvider()
+    generated = generate_set(config, confirmed=True, provider=provider)
+    decide_set(
+        config,
+        generated["manifest_artifact_id"],
+        actor="human:fixture",
+        reason="fixture plate inspected",
+        status="approved",
+    )
+    select_set(config, generated["manifest_artifact_id"])
+    renderer = ProductionRenderer(config, canvas=(270, 480))
+    first = renderer.render("colors-red-001", visual_story=True)
+    assert first["classification"] == "PILOT_V4_READY_FOR_VISUAL_STORY_REVIEW"
+    assert first["media_qa"]["passed"] and provider.calls == 4
+    assert first["environment_set_artifact_id"] == generated["manifest_artifact_id"]
+    assert "PILOT_V4" in first["output_path"]
+    assert all(
+        scene["dead_space_warning"] is None
+        for scene in first["media_qa"]["visual_story_diagnostics"]
+    )
+    before = rows_snapshot(config.database_path)
+    original_run = production.run_process
+
+    def no_encode(argv, timeout):
+        assert "tovitunes.render.composer" not in argv
+        return original_run(argv, timeout)
+
+    monkeypatch.setattr(production, "run_process", no_encode)
+    second = renderer.render("colors-red-001", visual_story=True)
+    assert second["mp4_sha256"] == first["mp4_sha256"]
+    assert all(action == "reuse" for action in second["artifact_actions"].values())
+    assert rows_snapshot(config.database_path) == before
+    assert provider.calls == 4
+    manifest = RenderManifest.model_validate(store.read_json(first["render_manifest_id"]))
+    assert manifest.environment_set_artifact_id == generated["manifest_artifact_id"]
+    assert manifest.visual_story_plan_artifact_id == first["visual_story_plan_artifact_id"]
+
+
+def test_v4_render_requires_selected_environment(render_fixture):
+    config, _, _ = render_fixture
+    with pytest.raises(ValueError, match="no selected approved environment set"):
+        ProductionRenderer(config, canvas=(270, 480)).render("colors-red-001", visual_story=True)
 
 
 @pytest.mark.parametrize("failure_stage", ["encode", "mux", "qa"])
