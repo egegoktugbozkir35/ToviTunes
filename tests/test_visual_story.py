@@ -17,7 +17,10 @@ from tovitunes.render.character import animation_plan, attach_poses, pose_keyfra
 from tovitunes.render.composer import build_scene, encode_worker
 from tovitunes.render.composition import CompositionRequest, PropDefinition, resolve_composition
 from tovitunes.render.environment_sets import (
+    CANVAS,
+    MIN_SOURCE_SIZE,
     ROLES,
+    _validate_image,
     decide_set,
     generate_set,
     inspect_set,
@@ -39,13 +42,19 @@ def runtime(tmp_path, brand_root):
     )
 
 
-def picture() -> bytes:
-    image = Image.new("RGB", (900, 1600), "#a5def0")
+def picture(size=MIN_SOURCE_SIZE) -> bytes:
+    image = Image.new("RGB", size, "#a5def0")
     draw = ImageDraw.Draw(image)
-    draw.ellipse((-100, 900, 1000, 1900), fill="#7ac977")
+    draw.ellipse((-100, size[1] // 2, size[0] + 100, size[1] + 100), fill="#7ac977")
     output = io.BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
+
+
+def test_documented_vertex_1k_portrait_is_accepted_and_normalized():
+    assert _validate_image(picture()).size == CANVAS
+    with pytest.raises(ValueError, match="too small"):
+        _validate_image(picture((MIN_SOURCE_SIZE[0] - 1, MIN_SOURCE_SIZE[1])))
 
 
 class FakeProvider:

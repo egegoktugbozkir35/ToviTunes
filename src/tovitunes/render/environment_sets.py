@@ -47,6 +47,8 @@ ROLE_BRIEFS = {
     ),
 }
 CANVAS = (1080, 1920)
+# Documented Gemini 3.1 Flash Image output for 1K portrait 9:16.
+MIN_SOURCE_SIZE = (768, 1376)
 
 
 class EnvironmentPlate(ProductionModel):
@@ -182,7 +184,7 @@ def _validate_image(data: bytes) -> Image.Image:
     with Image.open(io.BytesIO(data)) as opened:
         opened.load()
         image = ImageOps.exif_transpose(opened)
-        if image.width < 900 or image.height < 1600:
+        if image.width < MIN_SOURCE_SIZE[0] or image.height < MIN_SOURCE_SIZE[1]:
             raise ValueError("provider image is too small for a 1080x1920 plate")
         if abs(image.width / image.height - 9 / 16) > 0.025:
             raise ValueError("provider image is not portrait 9:16")

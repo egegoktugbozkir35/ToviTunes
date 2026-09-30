@@ -86,15 +86,15 @@ explicit attempt is required after failure or rejection.
 
 Planned production provider: Vertex AI Gemini Image (`google`,
 `gemini-3.1-flash-image`, 1K portrait 9:16). Returned images must be at least
-900×1600 before controlled normalization to 1080×1920. This model was not
-called in this PR run.
+768×1376 before controlled normalization to 1080×1920. This model was not
+called during the initial implementation phase; see the live-attempt report below.
 
 ## Provider call count
 
-Actual calls in this task: prepared **0**, remote_started **0**, succeeded **0**,
-failed **0**, ambiguous **0**. Planned first set: at most **4** calls, only after
-the explicit flag. NVIDIA Kimi **0**, Lyria **0**, video generation **0**,
-YouTube **0**. Fake provider invocations in tests are offline and excluded.
+Actual calls during the initial implementation phase: prepared **0**,
+remote_started **0**, succeeded **0**, failed **0**, ambiguous **0**. The later
+live Attempt 1 is audited below. NVIDIA Kimi **0**, Lyria **0**, video generation
+**0**, YouTube **0**. Fake provider invocations in tests are offline and excluded.
 
 ## Environment artifact IDs
 
@@ -198,10 +198,10 @@ claimed**.
 
 ## V4 render ID
 
-None. A real approved environment set and authoritative production AssetStore
-were not present in this checkout, and no live generation was explicitly
-confirmed. The code exports `outputs/TOVITUNES_COLORS_RED_001_PILOT_V4.mp4`
-only after a successful real render. Existing V3 render ID in the V3 report:
+None. A real approved environment set is unavailable because live Attempt 1
+failed technical validation before any plate artifact was persisted. The code
+exports `outputs/TOVITUNES_COLORS_RED_001_PILOT_V4.mp4` only after a successful
+real render. Existing V3 render ID in the V3 report:
 `6fe77b2c-e285-42b4-90e4-fd8769d9c7fc`.
 
 ## V4 SHA
@@ -258,39 +258,57 @@ Music rights remain **unknown**. Generated environment rights will be
 Storyboard schema and deterministic prop drawing remain Red-pilot-specific;
 their generalization is still required before autonomous multi-concept
 production. Human review is needed to reject accidental characters, target
-objects or inconsistent art. No real plates, real V4 MP4, audio-equivalence
-comparison or artistic approval were produced without the explicit provider
-generation step and the retained production database/assets. No retention or
+objects or inconsistent art. Live Attempt 1 did not produce a plate artifact,
+real V4 MP4, audio-equivalence comparison or artistic approval. No retention or
 engagement improvement is inferred.
 
 ## Live Environment Generation — Attempt 1
 
-Date: 2026-09-30. The provider-free plan completed successfully with provider
-`google`, model `gemini-3.1-flash-image`, four prepared plan entries and zero
-provider calls. `meadow_wide` had no reference; `lesson_garden`, `play_path` and
-`celebration_meadow` each referenced `meadow_wide`. Every planned prompt forbade
-Tovi, birds, people, other characters, text, logos, watermarks and prominent
-apples, balls, swatches or other lesson objects.
+Date: 2026-09-30. `GOOGLE_CLOUD_LOCATION` resolved to `global`,
+`GOOGLE_CLOUD_PROJECT` was present, and Vertex ADC preflight succeeded without
+printing credentials or tokens. The provider-free plan completed successfully
+with provider `google`, model `gemini-3.1-flash-image`, four planned requests and
+zero provider calls. `meadow_wide` had no reference; `lesson_garden`, `play_path`
+and `celebration_meadow` each referenced `meadow_wide`. Every planned prompt
+forbade Tovi, birds, people, other characters, text, logos, watermarks and
+prominent apples, balls, swatches or other lesson objects.
 
-The live attempt was explicitly authorized, but Vertex preflight stopped before
-durable request preparation or network generation because the configured
-`GOOGLE_CLOUD_LOCATION=us-central1` is not supported by this implementation for
-`gemini-3.1-flash-image`; the admitted locations are `global`, `us` and `eu`.
-`GOOGLE_CLOUD_PROJECT` was present. ADC validity was not evaluated because the
-location check failed first. The tracked example configuration contains only an
-environment-variable name for its unrelated creative-provider API key; no
-credential or secret was added to the repository during this attempt.
+The explicitly authorized live command made one request for `meadow_wide`.
+Vertex returned one `image/png`, but local technical validation rejected it as
+too small because the implementation required 900×1600. The official
+`gemini-3.1-flash-image` 1K 9:16 contract is 768×1376, so this was an
+implementation defect rather than evidence that the provider violated its size
+contract. The durable request record is:
 
-No environment set or plate artifacts were created, so there are no artifact
-IDs, SHA-256 hashes, source/output dimensions, generation timestamps, provider
-request IDs, technical image-validation results or contact-sheet path to report.
-There is likewise no pending review record to approve or select. The exact image
-request audit is: prepared **0**, remote_started **0**, succeeded **0**,
-terminal_failure **0**, retryable_failure **0**, ambiguous **0**; actual live
-image-provider requests **0**. NVIDIA Kimi **0**, Lyria **0**, video-generation
-provider **0**, YouTube **0**. No provider usage or billing metadata was returned.
+- role: `meadow_wide`
+- local request ID: `2f33f3cb-c5fe-4d1e-b198-8fb1a979fa56`
+- provider request ID: `pS69aqv_GfLnusEP5bapsAg`
+- status: `terminal_failure`
+- response MIME: `image/png`
+- response byte count: `1039245`
+- response SHA-256: `28bad4330d129e3202f9478cf8eb4a389ccbb30e15d62a25351e2f7c89a1b4d8`
+- response metadata: backend `Vertex AI`, location `global`, model version
+  `gemini-3.1-flash-image`, image output count `1`
+- technical validation: failed the incorrect pre-fix minimum-size gate
 
-No implementation code changed during live execution. Attempt 2 was not started,
-and no environment approval, selection or Pilot V4 render was performed.
+The failed response bytes were not retained after validation, so the actual
+source dimensions and any returned usage metadata cannot be recovered or
+invented. No normalized output, plate artifact, reference relationship,
+environment-set artifact, pending review record, individual review plate or
+contact sheet exists. Accordingly, `environment inspect` was not applicable.
 
-ENVIRONMENT_PROVIDER_PREFLIGHT_BLOCKED
+The exact image-request audit is: prepared **1**, remote_started **1**,
+succeeded **0**, terminal_failure **1**, retryable_failure **0**, ambiguous
+**0**; actual live image-provider requests **1**. NVIDIA Kimi **0**, Lyria **0**,
+video-generation provider **0**, YouTube **0**. No cost metadata is available;
+Google Cloud billing remains authoritative.
+
+The validator was corrected to accept the documented 768×1376 minimum and still
+normalize valid inputs to 1080×1920. Regression coverage proves the documented
+size succeeds and a one-pixel-under-width image fails. Focused tests pass
+(`7 passed, 1 skipped`), strict mypy passes for all 69 source files, and Ruff
+passes for the changed files. Attempt 1 was not resent, Attempt 2 was not
+started, and no environment approval, rejection, selection or Pilot V4 render
+was performed.
+
+ENVIRONMENT_GENERATION_INCOMPLETE
