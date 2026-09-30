@@ -263,4 +263,34 @@ comparison or artistic approval were produced without the explicit provider
 generation step and the retained production database/assets. No retention or
 engagement improvement is inferred.
 
-VISUAL_STORYTELLING_READY_FOR_ENVIRONMENT_GENERATION
+## Live Environment Generation — Attempt 1
+
+Date: 2026-09-30. The provider-free plan completed successfully with provider
+`google`, model `gemini-3.1-flash-image`, four prepared plan entries and zero
+provider calls. `meadow_wide` had no reference; `lesson_garden`, `play_path` and
+`celebration_meadow` each referenced `meadow_wide`. Every planned prompt forbade
+Tovi, birds, people, other characters, text, logos, watermarks and prominent
+apples, balls, swatches or other lesson objects.
+
+The live attempt was explicitly authorized, but Vertex preflight stopped before
+durable request preparation or network generation because the configured
+`GOOGLE_CLOUD_LOCATION=us-central1` is not supported by this implementation for
+`gemini-3.1-flash-image`; the admitted locations are `global`, `us` and `eu`.
+`GOOGLE_CLOUD_PROJECT` was present. ADC validity was not evaluated because the
+location check failed first. The tracked example configuration contains only an
+environment-variable name for its unrelated creative-provider API key; no
+credential or secret was added to the repository during this attempt.
+
+No environment set or plate artifacts were created, so there are no artifact
+IDs, SHA-256 hashes, source/output dimensions, generation timestamps, provider
+request IDs, technical image-validation results or contact-sheet path to report.
+There is likewise no pending review record to approve or select. The exact image
+request audit is: prepared **0**, remote_started **0**, succeeded **0**,
+terminal_failure **0**, retryable_failure **0**, ambiguous **0**; actual live
+image-provider requests **0**. NVIDIA Kimi **0**, Lyria **0**, video-generation
+provider **0**, YouTube **0**. No provider usage or billing metadata was returned.
+
+No implementation code changed during live execution. Attempt 2 was not started,
+and no environment approval, selection or Pilot V4 render was performed.
+
+ENVIRONMENT_PROVIDER_PREFLIGHT_BLOCKED
