@@ -76,11 +76,26 @@ is the only command that can call the image provider, and it requires the explic
 flag. It produces four plates and a contact sheet; inspect that sheet before
 approving. `reject` uses the same arguments as `approve` if a plate contains a
 character, lesson object, text, inconsistent art or other unsuitable content.
+Production environment generation is selected by strict runtime configuration;
+the admitted premium contract is:
+
+```yaml
+environment_generation:
+  provider: google
+  model: gemini-3-pro-image
+  location: global
+  image_size: 2K
+```
+
+The environment plan reports this identity, its generation fingerprint and the
+master-reference graph without loading credentials or making a provider call.
 
 ```powershell
 uv run python -m tovitunes.cli --config <CONFIG> environment plan
 uv run python -m tovitunes.cli --config <CONFIG> environment generate-set --confirm-provider-generation
 uv run python -m tovitunes.cli --config <CONFIG> environment inspect --set-artifact-id <SET_ID>
+uv run python -m tovitunes.cli --config <CONFIG> environment contact-sheet --set-artifact-id <SET_ID> --output outputs/PILOT_V4_ENVIRONMENT_PRO_CONTACT_SHEET.png
+uv run python -m tovitunes.cli --config <CONFIG> environment compare --flash-set-artifact-id <FLASH_ID> --pro-set-artifact-id <PRO_ID> --output outputs/PILOT_V4_FLASH_VS_PRO_ENVIRONMENT_COMPARISON.png
 uv run python -m tovitunes.cli --config <CONFIG> environment approve --set-artifact-id <SET_ID> --actor <REVIEWER> --reason "Reviewed contact sheet"
 uv run python -m tovitunes.cli --config <CONFIG> environment select --set-artifact-id <SET_ID>
 uv run python -m tovitunes.cli --config <CONFIG> production render-v4 --episode-key colors-red-001

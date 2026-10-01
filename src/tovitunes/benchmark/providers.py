@@ -357,9 +357,13 @@ class GeminiImageProvider:
         credentials_loader: Callable[[], Credentials] = _vertex_credentials,
         project: str | None = None,
         location: str | None = None,
+        image_size: Literal["1K", "2K", "4K"] = "1K",
         timeout_seconds: float = 180,
     ) -> None:
+        if image_size not in {"1K", "2K", "4K"}:
+            raise ValueError("unsupported Gemini image size")
         self.model = model
+        self.image_size = image_size
         self._transport = transport
         self._credentials_loader = credentials_loader
         self._project = project
@@ -372,7 +376,7 @@ class GeminiImageProvider:
             reference_images=True,
             maximum_reference_images=14,
             portrait_9_16=True,
-            requested_size="1K, 9:16",
+            requested_size=f"{self.image_size}, 9:16",
             grounding_enabled=False,
             api_contract="Vertex AI Gemini generateContent via google-genai",
         )
@@ -406,7 +410,10 @@ class GeminiImageProvider:
                     ],
                 ],
                 "response_modalities": ["TEXT", "IMAGE"],
-                "image_config": {"aspect_ratio": "9:16", "image_size": "1K"},
+                "image_config": {
+                    "aspect_ratio": "9:16",
+                    "image_size": self.image_size,
+                },
                 "tools": [],
             },
             supplied_reference_artifact_ids=ids,
@@ -426,6 +433,11 @@ class GeminiImageProvider:
         if self.model == "gemini-3.1-flash-image" and self.location not in {"global", "us", "eu"}:
             raise ProviderFailure(
                 "GOOGLE_CLOUD_LOCATION is unavailable for gemini-3.1-flash-image",
+                outcome="terminal_failure",
+            )
+        if self.model == "gemini-3-pro-image" and self.location != "global":
+            raise ProviderFailure(
+                "gemini-3-pro-image is available only at the global location",
                 outcome="terminal_failure",
             )
         credentials = self._credentials_loader()
@@ -449,7 +461,9 @@ class GeminiImageProvider:
         )
         config = types.GenerateContentConfig(
             response_modalities=[types.Modality.TEXT, types.Modality.IMAGE],
-            image_config=types.ImageConfig(aspect_ratio="9:16", image_size="1K"),
+            image_config=types.ImageConfig(
+                aspect_ratio="9:16", image_size=self.image_size
+            ),
             tools=[],
         )
         delegate = self._transport or httpx.HTTPTransport()
@@ -496,6 +510,7 @@ class GeminiImageProvider:
                     "backend": "Vertex AI",
                     "location": self.location,
                     "project": project.strip(),
+                    "requested_image_size": self.image_size,
                     "image_output_count": len(images),
                     "model_version": response.model_version,
                 },

@@ -93,6 +93,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     env_generate.add_argument("--theme", default="preschool-world-v1")
     env_generate.add_argument("--attempt", type=int, default=1)
     env_generate.add_argument("--confirm-provider-generation", action="store_true")
+    env_contact = environment_commands.add_parser("contact-sheet")
+    env_contact.add_argument("--set-artifact-id", required=True)
+    env_contact.add_argument("--output", type=Path, required=True)
+    env_compare = environment_commands.add_parser("compare")
+    env_compare.add_argument("--flash-set-artifact-id", required=True)
+    env_compare.add_argument("--pro-set-artifact-id", required=True)
+    env_compare.add_argument("--output", type=Path, required=True)
     for command in ("inspect", "approve", "reject", "select"):
         sub = environment_commands.add_parser(command)
         sub.add_argument("--set-artifact-id", required=True)
@@ -218,7 +225,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config(args.config)
     if args.command == "environment":
         from tovitunes.render.environment_sets import (
+            comparison_sheet,
             decide_set,
+            export_contact_sheet,
             generate_set,
             inspect_set,
             select_set,
@@ -241,6 +250,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             elif args.environment_command == "inspect":
                 environment_result = inspect_set(config, args.set_artifact_id)
+            elif args.environment_command == "contact-sheet":
+                environment_result = {
+                    "contact_sheet": str(
+                        export_contact_sheet(config, args.set_artifact_id, args.output)
+                    )
+                }
+            elif args.environment_command == "compare":
+                environment_result = {
+                    "comparison_sheet": str(
+                        comparison_sheet(
+                            config,
+                            args.flash_set_artifact_id,
+                            args.pro_set_artifact_id,
+                            args.output,
+                        )
+                    )
+                }
             elif args.environment_command in {"approve", "reject"}:
                 environment_result = decide_set(
                     config,
