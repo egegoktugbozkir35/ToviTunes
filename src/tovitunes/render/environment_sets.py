@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from PIL import Image, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageStat
 from pydantic import Field
 
 from tovitunes.artifacts.store import AssetStore, InputDependency
@@ -198,6 +198,20 @@ def _validate_image(data: bytes) -> Image.Image:
         return rgb.resize(CANVAS, Image.Resampling.LANCZOS)
 
 
+def _response_metadata(result: ProviderResult) -> dict[str, object]:
+    """Retain safe response evidence before technical validation can fail."""
+    metadata: dict[str, object] = dict(result.response_metadata)
+    if result.usage is not None:
+        metadata["usage_metadata"] = result.usage
+    try:
+        with Image.open(io.BytesIO(result.image_bytes)) as opened:
+            metadata["source_dimensions"] = [opened.width, opened.height]
+    except (OSError, ValueError):
+        # The validator remains authoritative for corruption failures.
+        pass
+    return metadata
+
+
 def _transition(
     db: Database,
     request_id: str,
@@ -341,6 +355,7 @@ def generate_set(
                         raise ValueError(f"request {request_id} is {status}; no automatic resend")
             started = False
             received_result: ProviderResult | None = None
+            response_metadata: dict[str, object] | None = None
 
             def remote_start() -> None:
                 nonlocal started
@@ -357,9 +372,12 @@ def generate_set(
                     on_remote_start=remote_start,
                 )
                 received_result = result
+                response_metadata = _response_metadata(result)
                 if not started:
                     raise ValueError("provider returned without remote-start receipt")
                 image = _validate_image(result.image_bytes)
+                response_metadata["normalized_dimensions"] = list(image.size)
+                response_metadata["technical_validation"] = "passed"
                 path = stage / f"{role}.png"
                 image.save(path, format="PNG")
                 provenance = Provenance(
@@ -392,7 +410,7 @@ def generate_set(
                     artifact_id=record.identity.artifact_id,
                     response_bytes=result.image_bytes,
                     response_mime=result.mime_type,
-                    response_metadata=result.response_metadata,
+                    response_metadata=response_metadata,
                 )
                 counts["succeeded"] += 1
                 plates.append(
@@ -423,6 +441,8 @@ def generate_set(
                     if received_result is not None or not started
                     else "ambiguous"
                 )
+                if response_metadata is not None:
+                    response_metadata.setdefault("technical_validation", "failed")
                 _transition(
                     db,
                     request_id,
@@ -430,9 +450,7 @@ def generate_set(
                     provider_id=received_result.provider_request_id if received_result else None,
                     response_bytes=received_result.image_bytes if received_result else None,
                     response_mime=received_result.mime_type if received_result else None,
-                    response_metadata=received_result.response_metadata
-                    if received_result
-                    else None,
+                    response_metadata=response_metadata,
                     error=str(exc),
                 )
                 counts["ambiguous" if status == "ambiguous" else "failed"] += 1
@@ -481,11 +499,19 @@ def generate_set(
 
 
 def contact_sheet(store: AssetStore, environment: EnvironmentSet, output: Path) -> Path:
-    sheet = Image.new("RGB", (960, 1708), "white")
+    sheet = Image.new("RGB", (960, 1760), "white")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default(size=18)
     for index, plate in enumerate(environment.plates):
+        cell_x = (index % 2) * 480
+        cell_y = (index // 2) * 880
         with Image.open(store.path_for(plate.artifact_id)) as source:
-            thumb = source.convert("RGB").resize((464, 824), Image.Resampling.LANCZOS)
-            sheet.paste(thumb, ((index % 2) * 480 + 8, (index // 2) * 854 + 8))
+            thumb = source.convert("RGB").resize((464, 825), Image.Resampling.LANCZOS)
+            sheet.paste(thumb, (cell_x + 8, cell_y + 8))
+        draw.rectangle(
+            (cell_x + 8, cell_y + 833, cell_x + 472, cell_y + 872), fill="#1d3557"
+        )
+        draw.text((cell_x + 18, cell_y + 841), plate.role, fill="white", font=font)
     output.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output)
     return output

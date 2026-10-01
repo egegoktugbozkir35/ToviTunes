@@ -76,6 +76,8 @@ class FakeProvider:
             image_bytes=picture(),
             mime_type="image/png",
             provider_request_id=f"fixture-{self.calls}",
+            usage={"prompt_token_count": 7},
+            response_metadata={"backend": "fixture"},
         )
 
 
@@ -98,6 +100,13 @@ def test_environment_requires_confirmation_and_is_reviewed(runtime):
     }
     assert inspect_set(runtime, result["manifest_artifact_id"])["review_status"] == "pending"
     assert result["contact_sheet"] and __import__("pathlib").Path(result["contact_sheet"]).is_file()
+    with Image.open(result["contact_sheet"]) as sheet:
+        assert sheet.size == (960, 1760)
+        for index in range(4):
+            cell_x = (index % 2) * 480
+            cell_y = (index // 2) * 880
+            label = sheet.crop((cell_x + 8, cell_y + 833, cell_x + 473, cell_y + 873))
+            assert sum(max(pixel) > 240 for pixel in label.getdata()) > 10
     with pytest.raises(ValueError, match="approval"):
         select_set(runtime, result["manifest_artifact_id"])
     decide_set(
@@ -123,7 +132,19 @@ def test_environment_requires_confirmation_and_is_reviewed(runtime):
             rights = conn.execute(
                 "SELECT status FROM rights_decisions WHERE artifact_id=?", (plate.artifact_id,)
             ).fetchone()
+            request = conn.execute(
+                "SELECT response_metadata_json FROM environment_requests WHERE request_id=?",
+                (plate.local_request_id,),
+            ).fetchone()
         assert rights[0] == "unknown"
+        metadata = json.loads(request["response_metadata_json"])
+        assert metadata == {
+            "backend": "fixture",
+            "normalized_dimensions": [1080, 1920],
+            "source_dimensions": [768, 1376],
+            "technical_validation": "passed",
+            "usage_metadata": {"prompt_token_count": 7},
+        }
     repeated = generate_set(runtime, confirmed=True, provider=provider)
     assert repeated["manifest_artifact_id"] == selected_id and provider.calls == 4
     assert repeated["review_status"] == "approved"
@@ -138,6 +159,33 @@ def test_ambiguous_environment_request_never_resends(runtime):
     with pytest.raises(ValueError, match="no automatic resend"):
         generate_set(runtime, confirmed=True, provider=provider)
     assert provider.calls == 1
+
+
+def test_source_dimensions_survive_technical_validation_failure(runtime):
+    class TooSmallProvider(FakeProvider):
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            self.calls += 1
+            if on_remote_start:
+                on_remote_start()
+            return ProviderResult(
+                image_bytes=picture((MIN_SOURCE_SIZE[0] - 1, MIN_SOURCE_SIZE[1])),
+                mime_type="image/png",
+                provider_request_id="fixture-too-small",
+                usage={"prompt_token_count": 3},
+            )
+
+    with pytest.raises(ValueError, match="too small"):
+        generate_set(runtime, confirmed=True, provider=TooSmallProvider())
+    with Database(runtime.database_path).connect() as conn:
+        row = conn.execute(
+            "SELECT status,response_metadata_json FROM environment_requests"
+        ).fetchone()
+    assert row["status"] == "terminal_failure"
+    assert json.loads(row["response_metadata_json"]) == {
+        "source_dimensions": [767, 1376],
+        "technical_validation": "failed",
+        "usage_metadata": {"prompt_token_count": 3},
+    }
 
 
 def test_character_like_plate_can_be_rejected_by_human(runtime):
