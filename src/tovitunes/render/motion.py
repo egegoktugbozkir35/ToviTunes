@@ -291,12 +291,24 @@ def plan_motion(
             "idle": ("sprite/hello", "sprite/neutral_full_body"),
         }
         sequence = sequences[action]
+        if action == "celebrate" and composition.outro_phases:
+            sequence = ("sprite/neutral_full_body", "sprite/hopping")
         for i, role in enumerate(sequence):
             t, source = cue((i + 1) / (len(sequence) + 1))
             if t > roles[-1].time + 0.3 and role != roles[-1].sprite_role:
                 roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
     phases = tuple((p.name, p.start, p.end) for p in composition.outro_phases)
     settle = phases[-1][1] if phases else None
+    if settle is not None:
+        roles = [p for p in roles if p.time < settle]
+        roles.append(
+            PoseCue(
+                time=settle, sprite_role="sprite/neutral_full_body", timing_source="settle_phase"
+            )
+        )
+
+    primary = next((p for p in composition.props if p.primary), None)
+    camera = _camera(action, duration, primary.center if primary else (0.5, 0.6))
     if story and story.story_action == "drop_and_settle":
         camera = CameraTrack(behavior="focus_push", duration=duration, zoom_end=1.055)
     elif story and story.story_action == "roll_through":
@@ -310,16 +322,6 @@ def plan_motion(
         )
     elif story and story.story_action == "performance":
         camera = CameraTrack(behavior="slow_push_in", duration=duration, zoom_end=1.065)
-    if settle is not None:
-        roles = [p for p in roles if p.time < settle]
-        roles.append(
-            PoseCue(
-                time=settle, sprite_role="sprite/neutral_full_body", timing_source="settle_phase"
-            )
-        )
-
-    primary = next((p for p in composition.props if p.primary), None)
-    camera = _camera(action, duration, primary.center if primary else (0.5, 0.6))
     if settle is not None:
         camera = camera.model_copy(update={"hold_from": settle})
     variant: Literal["wide", "lesson_focus", "performance", "celebration"] = (
@@ -379,10 +381,18 @@ def plan_motion(
         elif story and story.story_action in {"compare", "performance"}:
             target = ((bbox[0] + bbox[2]) / 2, bbox[3])
             prior = (continuity_positions or {}).get(prop.type)
+            if story.story_action == "compare":
+                # A centered question pose changes the safe lanes. Bring both choices
+                # in from their outside edges instead of crossing Tovi from ground state.
+                prior = ((-0.15 if target[0] < 0.5 else 1.15), target[1])
+            elif story.story_action == "performance" and prior is not None and not prop.primary:
+                # Keep the side objects in their new outer lanes while they move into
+                # the performance arc; their prior inner x positions graze singing Tovi.
+                prior = (target[0], prior[1])
             visible_last_scene = previous is not None and any(
                 p.prop_key == prop.type for p in previous.prop_tracks
             )
-            if not visible_last_scene:
+            if story.story_action != "compare" and not visible_last_scene:
                 prior = ((-0.15 if target[0] < 0.5 else 1.15), target[1])
                 if story.story_action == "performance" and prop.primary:
                     prior = (target[0], -0.12)
@@ -481,7 +491,7 @@ def plan_motion(
             AmbientTrack(
                 kind="note" if action == "sing" else "sparkle",
                 plane="mid_background",
-                center=(0.91, 0.47),
+                center=(0.86, 0.16),
                 width=0.045,
                 drift=0.018,
                 period=5,
@@ -490,7 +500,9 @@ def plan_motion(
             ),
         )
     if story is not None:
-        ambient = tuple(a for a in ambient if a.kind != "flower")
+        # Reviewed provider plates already contain the environmental sky/edge detail.
+        # Only story-directed performance accents should be composited over them.
+        ambient = tuple(a for a in ambient if a.kind in {"note", "sparkle"})
     offset = 0.0
     if composition.micro_scene and previous:
         roles = list(previous.character_pose_sequence)
@@ -539,7 +551,11 @@ def plan_motion(
                         channel="lesson",
                         reason=f"{track.prop_key}:{event.motion}",
                         motion_group=(
-                            f"prop:{track.prop_key}"
+                            "performance_staging"
+                            if story is not None
+                            and story.story_action == "performance"
+                            and event.motion == "slide_to_focus"
+                            else f"prop:{track.prop_key}"
                             if story is not None or event.timing_source != "scene_entry"
                             else "lesson_entry"
                         ),

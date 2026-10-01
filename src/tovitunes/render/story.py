@@ -159,6 +159,11 @@ def plan_story(
 def stage_composition(composition: SceneComposition, story: VisualStoryPlan) -> SceneComposition:
     """Arrange props spatially for comparison and performance without changing curriculum."""
     composition = composition.model_copy(update={"ground_plane_y": 0.86, "character_height": 0.48})
+    if story.story_action == "drop_and_settle" and len(composition.props) == 1:
+        prop = composition.props[0].model_copy(
+            update={"width": min(composition.props[0].width, 0.25)}
+        )
+        return composition.model_copy(update={"props": (prop,)})
     if story.story_action == "roll_through" and len(composition.props) == 1:
         prop = composition.props[0].model_copy(
             update={
@@ -191,12 +196,12 @@ def stage_composition(composition: SceneComposition, story: VisualStoryPlan) -> 
             }
         )
     if story.story_action == "performance" and len(composition.props) >= 3:
-        points = ((0.50, 0.27), (0.15, 0.62), (0.85, 0.62))
+        points = ((0.50, 0.27), (0.115, 0.62), (0.885, 0.62))
         props = tuple(
             p.model_copy(
                 update={
                     "center": points[i],
-                    "width": (0.26, 0.18, 0.18)[i],
+                    "width": (0.26, 0.12, 0.12)[i],
                     "placement_mode": "display",
                     "motion": "static",
                 }

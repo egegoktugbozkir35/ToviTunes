@@ -15,7 +15,12 @@ from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedScene
 from tovitunes.persistence.db import Database
 from tovitunes.render.character import animation_plan, attach_poses, pose_keyframe
 from tovitunes.render.composer import build_scene, encode_worker
-from tovitunes.render.composition import CompositionRequest, PropDefinition, resolve_composition
+from tovitunes.render.composition import (
+    PROP_DEFINITIONS,
+    CompositionRequest,
+    PropDefinition,
+    resolve_composition,
+)
 from tovitunes.render.environment_sets import (
     CANVAS,
     MIN_SOURCE_SIZE,
@@ -28,8 +33,8 @@ from tovitunes.render.environment_sets import (
     select_set,
     selected_set,
 )
-from tovitunes.render.motion import plan_motion, prop_state
-from tovitunes.render.props import scene_art
+from tovitunes.render.motion import activity_diagnostics, plan_motion, prop_state, validate_motion
+from tovitunes.render.props import scene_art, validate_props
 from tovitunes.render.story import occupancy, plan_story, stage_composition
 
 
@@ -255,7 +260,10 @@ def test_generic_drop_roll_compare_and_occupancy():
     )
     drop_story = plan_story(drop, 3, definitions, set())
     assert drop_story.story_action == "drop_and_settle"
+    drop = stage_composition(drop, drop_story)
+    assert drop.props[0].width == 0.25
     drop_motion = plan_motion(drop, 0, 3, "story", beats, align, (), story=drop_story)
+    assert drop_motion.ambient_tracks == ()
     drop_track = drop_motion.prop_tracks[0]
     assert [e.motion for e in drop_track.events[:2]] == ["fall_in", "bounce_settle"]
     assert prop_state(drop_track, drop_motion, 0)[1] < drop_track.bbox[1]
@@ -263,6 +271,33 @@ def test_generic_drop_roll_compare_and_occupancy():
     assert all(
         prop_state(drop_track, drop_motion, i / 10)[1] <= drop_track.bbox[3] for i in range(31)
     )
+    scene = TimedScene(
+        scene_id="drop",
+        kind="lyric",
+        section="lesson",
+        start=0,
+        end=3,
+        tovi_action="present",
+        visual_focus="falling object",
+        required_props=("red_apple",),
+        lesson_target="red",
+        lyric_text="shape",
+        lyric_start=0,
+        lyric_end=1,
+        beat_index_range=(0, 6),
+        downbeat_index_range=(0, 2),
+    )
+    sprite = Image.new("RGBA", (915, 1209), "blue")
+    animation = animation_plan(
+        scene, sprite, "base", beats, (1080, 1920), "story", drop, height_limit=0.48
+    )
+    wide_pose = Image.new("RGBA", (325, 388), "blue")
+    poses = tuple(
+        pose_keyframe(cue, wide_pose, f"pose_{index}", animation.size[1])
+        for index, cue in enumerate(drop_motion.character_pose_sequence)
+    )
+    animation = attach_poses(animation, poses, (1080, 1920))
+    validate_motion(drop_motion, align, (), animation, (1080, 1920))
 
     roll = resolve_composition(
         CompositionRequest("roll", 0, 3, "point", ("generic_roll_object",)),
@@ -273,6 +308,7 @@ def test_generic_drop_roll_compare_and_occupancy():
     roll_motion = plan_motion(roll, 0, 3, "story", beats, align, (), story=roll_story)
     roll_track = roll_motion.prop_tracks[0]
     assert roll_track.events[0].motion == "roll_in"
+    assert roll_motion.camera_track.behavior == "gentle_pan_right"
     assert prop_state(roll_track, roll_motion, 1)[1] == pytest.approx(roll_track.bbox[3])
 
     compare = resolve_composition(
@@ -330,8 +366,23 @@ def test_performance_and_outro_form_a_staged_sequence():
     assert performed.environment_plate_role == "celebration_meadow"
     assert staged.props[0].center[1] < staged.props[1].center[1]
     assert staged.props[1].center[0] < 0.5 < staged.props[2].center[0]
+    assert tuple(prop.width for prop in staged.props[1:]) == (0.12, 0.12)
     compared_stage = stage_composition(compare, compared)
-    compared_motion = plan_motion(compared_stage, 0, 3, "story", beats, align, (), story=compared)
+    compared_motion = plan_motion(
+        compared_stage,
+        0,
+        3,
+        "story",
+        beats,
+        align,
+        (),
+        story=compared,
+        continuity_positions={
+            "generic_drop_object": (0.20, 0.86),
+            "generic_roll_object": (0.85, 0.86),
+        },
+    )
+    assert [track.events[0].origin[0] for track in compared_motion.prop_tracks] == [-0.15, 1.15]
     positions = {
         track.prop_key: ((track.bbox[0] + track.bbox[2]) / 2, track.bbox[3])
         for track in compared_motion.prop_tracks
@@ -348,6 +399,16 @@ def test_performance_and_outro_form_a_staged_sequence():
         previous=compared_motion,
         continuity_positions=positions,
     )
+    assert {accent.kind for accent in performed_motion.ambient_tracks} == {"note"}
+    assert performed_motion.ambient_tracks[0].center[1] == 0.16
+    assert performed_motion.camera_track.behavior == "slow_push_in"
+    assert activity_diagnostics(performed_motion)["max_simultaneous_major_motion"] <= 3
+    assert [
+        track.events[0].origin[0] for track in performed_motion.prop_tracks[1:]
+    ] == pytest.approx([
+        0.115,
+        0.885,
+    ], abs=1 / 1080)
     for motion_plan in (compared_motion, performed_motion):
         for frame in range(31):
             t = frame / 10
@@ -377,6 +438,51 @@ def test_performance_and_outro_form_a_staged_sequence():
     assert staged_outro.outro_phases[-1].end - staged_outro.outro_phases[-1].start == pytest.approx(
         1.8
     )
+
+
+def test_real_performance_props_clear_character_envelope():
+    _, beats = evidence()
+    scene = TimedScene(
+        scene_id="performance",
+        kind="lyric",
+        section="lesson",
+        start=0,
+        end=3,
+        tovi_action="sing",
+        visual_focus="performance",
+        required_props=("red_swatch", "red_apple", "red_ball"),
+        lesson_target="red",
+        lyric_text="Red",
+        lyric_start=0,
+        lyric_end=1,
+        beat_index_range=(0, 6),
+        downbeat_index_range=(0, 2),
+    )
+    composition = resolve_composition(
+        CompositionRequest(
+            scene.scene_id,
+            scene.start,
+            scene.end,
+            scene.tovi_action,
+            scene.required_props,
+            scene.kind,
+        )
+    )
+    story = plan_story(composition, 3, PROP_DEFINITIONS, set(PROP_DEFINITIONS))
+    composition = stage_composition(composition, story)
+    sprite = Image.new("RGBA", (298, 373), "blue")
+    animation = animation_plan(
+        scene, sprite, "singing", beats, (1080, 1920), "story", composition, height_limit=0.48
+    )
+    _, metadata = scene_art(
+        scene,
+        {"belly_cream": "#FCEDB4"},
+        (1080, 1920),
+        "story",
+        composition,
+        background_only=True,
+    )
+    validate_props(scene, metadata, animation, (1080, 1920))
 
 
 def test_tiny_drop_story_real_moviepy_ffmpeg(tmp_path):

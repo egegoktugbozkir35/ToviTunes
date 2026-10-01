@@ -312,3 +312,136 @@ started, and no environment approval, rejection, selection or Pilot V4 render
 was performed.
 
 ENVIRONMENT_GENERATION_INCOMPLETE
+
+## Human Environment Review
+
+The approved production environment set is
+`0663d01d-c660-48e4-93eb-9a2f03adbfe3`. Human approval and exact selection
+were recorded before rendering. The selected set contains these four immutable
+plate artifacts:
+
+| Role | Artifact ID | SHA-256 |
+| --- | --- | --- |
+| `meadow_wide` | `76376c7a-79e7-4b8f-b87c-432e2524df17` | `7774f1c80c25a125d05d592f9bd18257680c3092433352df4d5d0358b3166176` |
+| `lesson_garden` | `ce591d74-b2d5-4a18-8317-e3b2ab63b123` | `81da3068bdc781c8c8b317043f472b06bd8bbacf737a848636c14e2c34e7cea6` |
+| `play_path` | `40b1ca87-7a15-43d7-ac26-2b4b7006b628` | `9c8f2e989687cc52ab250fa4d99e3ac2cac591019da17e9d637b980535d5859d` |
+| `celebration_meadow` | `e15d3b82-1ab7-4f20-9ed3-7ce014f9127c` | `45eab2c6aeb1133fe490c0b5618bee8cb1e12f9d0a4597112f38c1545d188ab3` |
+
+The environment-set manifest SHA-256 is
+`faa18016359b1696f26df86d3b4685ec78f8431b3c09dd796e1db41917be65b0`.
+All four plates
+passed technical validation and selection resolves to this set alone. The
+historical Attempt 2 request audit is prepared **5**, remote started **5**,
+succeeded **4**, terminal failure **1**. That history is distinct from the V4
+render, which made no provider requests.
+
+The available records do not establish licensing or publication rights for the
+environment images. Environment rights therefore remain **unknown**, music
+rights remain **unknown**, and publication remains **blocked**.
+
+## Pilot V4 Production Render
+
+Date: 2026-10-01. Episode `colors-red-001` was rendered from the approved and
+selected environment set without regenerating imagery or changing the selected
+storyboard, audio, alignment, beat analysis, lyrics, or episode timing.
+
+### Authoritative inputs and outputs
+
+| Item | ID / SHA |
+| --- | --- |
+| Episode | `e9751591-906e-4404-88a2-31e7a41071d6` |
+| Storyboard | `25937e67-b373-42e5-a816-9d21a732d96c` / `233708c3399a44aab663b1895a80a8bec95d64c42081b41d27eab6dbbcc03679` |
+| Audio master | `ace1ea8d-6a31-47a2-bb2a-2a895ecd9604` / `06820bff29d0127ae3b25e53c73ba96b874732916acee5b4800e688c1d73e991` |
+| Audio alignment | `9edd8b5e-7554-4ca7-a945-786d9dfa30f1` / `93d624c10876d80c9892d6c29794d7e3571228cb526ef387d884b3168087d0ee` |
+| Beat analysis | `705c82aa-0fd0-47ca-ba22-1265e6c76f2d` / `b52b3d23771c698d7272c0b9a563620e222090b9b778c4b0d2c268f52c32b856` |
+| Character pack revision | `tovi-pack-v1-8f7e487b5ac5279b` |
+| VisualStoryPlan | `a04dba38-7575-4c88-ae39-c6f13914b9fc` |
+| Render manifest | `5c283cdb-7905-4d3f-b263-47629861a447` |
+| Final render | `7b6bca03-78d3-4312-86e5-b729a7e24d94` |
+| Media QA | `b436da74-5ea0-47ff-9f3c-fb7955f17623` |
+
+The final MP4 SHA-256 is
+`ec033312ab6e5792c2787f54b486e36d3243df66ccb3f913b7ec177b427c4316`
+and its byte count is **14,338,377**. The renderer is
+`tovitunes_visual_story_render_v1`. The production file is
+`outputs/TOVITUNES_COLORS_RED_001_PILOT_V4.mp4`; review artifacts are
+`outputs/PILOT_V4_SCENE_CONTACT_SHEET.png` and
+`outputs/PILOT_V3_V4_COMPARISON.png`.
+
+### Media and audio QA
+
+Media QA passed every required check: 1080x1920, 30 fps, H.264/yuv420p video,
+AAC stereo at 44.1 kHz, full decode success, no scene gaps or overlaps, and
+duration within tolerance. Overall duration is **38.165011s**, video duration
+is **38.133333s**, and the allowed tolerance is **0.0716666667s**.
+
+V3 and V4 audio were independently decoded to 44.1 kHz stereo signed 16-bit
+PCM. Both decoded streams contain **6,733,824 bytes** and have the same SHA-256:
+`8c801c4805c96a2b3c9907156956f40244770a8db4868b064f6fe897bdd1e0ab`.
+This proves exact decoded-PCM equivalence for the song, lyrics, timing, trim,
+and fades. The original V3 file was not modified; its SHA-256 remains
+`f753990b3ebce60940177896818f8ddf22374e5a7d171f00648942bdc737793b`,
+final artifact ID remains `6fe77b2c-e285-42b4-90e4-fd8769d9c7fc`, and media
+QA ID remains `3e603f93-743f-45d9-8ff9-6454d575d86b`.
+
+### Scene diagnostics
+
+These are renderer diagnostics, not engagement or retention scores. Active
+bounds are normalized `[left, top, right, bottom]` values.
+
+| Scene | Action / environment / focus | Active bounds | Vertical occupancy | Events | Camera | Prop actions | Pose / keyword events | Dead-space diagnostic |
+| --- | --- | --- | ---: | ---: | --- | --- | --- | --- |
+| intro | introduce / meadow_wide / Tovi | `[0.2, 0.4569, 0.8, 0.86]` | 0.4031 | 0 | slow_push_in | none | 1 / 0 | excessive dead visual space |
+| lyric_01 | reveal / lesson_garden / red swatch | `[0.0630, 0.4397, 0.9598, 0.86]` | 0.4203 | 2 | focus_push | reveal, gentle_bounce | 2 / 2 | excessive dead visual space |
+| lyric_02 | present / lesson_garden / red swatch | `[0.0501, 0.4590, 0.9605, 0.86]` | 0.4010 | 0 | focus_push | none | 2 / 2 | excessive dead visual space |
+| lyric_03 | drop_and_settle / lesson_garden / red apple | `[0.0665, 0.0, 0.9213, 0.86]` | 0.8600 | 3 | focus_push | fall_in, bounce_settle, gentle_bounce | 2 / 1 | none |
+| lyric_04 | roll_through / play_path / red ball | `[0.0630, 0.4397, 1.0, 0.86]` | 0.4203 | 2 | gentle_pan_right | roll_in, gentle_bounce | 2 / 1 | excessive dead visual space |
+| lyric_05 | compare / lesson_garden / red apple | `[0.0, 0.2161, 0.95, 0.86]` | 0.6439 | 3 | slow_pull_out | apple slide_to_focus; ball slide_to_focus, gentle_bounce | 2 / 2 | none |
+| lyric_06 | performance / celebration_meadow / red swatch | `[0.0546, 0.0, 0.9454, 0.86]` | 0.8600 | 6 | slow_push_in | apple, ball, swatch: slide_to_focus, pulse | 0 / 1 | none |
+| lyric_07 | celebrate / celebration_meadow / red swatch | `[0.0546, 0.1866, 0.9454, 0.86]` | 0.6734 | 0 | slow_push_in | none | 0 / 1 | none |
+| outro | celebrate / celebration_meadow / red swatch | `[0.0546, 0.1879, 0.9454, 0.86]` | 0.6721 | 3 | slow_pull_out | apple, ball, swatch: pulse | 3 / 0 | none |
+
+Four scenes retain the conservative dead-space warning: intro, the first
+swatch reveal, its continuation, and the ball scene. The action-aware apple,
+question/comparison, performance, final lyric, and outro scenes avoid it. A
+human reviewer should assess the remaining warnings in the full-motion MP4;
+the contact sheet alone is not authoritative.
+
+### V3 to V4 implementation evidence
+
+The comparison sheet shows implementation differences, not measured audience
+outcomes. V3 uses the deterministic `playful_meadow_v2` composition. V4 uses
+the selected provider-backed environment roles and records them as artifact
+dependencies. The apple performs a grounded fall/bounce/settle action; the ball
+has a visible rolling route paired with a rightward pan; the question scene
+places alternatives in opposing regions around Tovi; and the performance scene
+uses a depth arc, coordinated prop staging, a single decorative note, and a
+larger Tovi stage. The outro explicitly sequences celebration, recap pulses,
+and a neutral settle instead of inheriting an indefinite final-lyric pose.
+
+No claim is made that V4 is more engaging, improves retention, or has received
+artistic approval. Those judgments require human review and audience evidence.
+
+### Idempotency, provider audit, and verification
+
+An exact second render invocation reused all **31** downstream artifacts: one
+VisualStoryPlan, nine scene images, nine scene motions, nine character
+animations, one manifest, one final render, and one media-QA artifact. It did
+not invoke encoding and returned the same final ID and SHA. No new environment,
+plan, motion, final, or QA artifact was created.
+
+The V4 rendering stage made **0** Google image requests, **0** NVIDIA Kimi
+requests, **0** Lyria requests, **0** video-generation-provider requests, and
+**0** YouTube requests. The five historical Google Attempt 2 remote starts are
+environment-generation history and are not render calls. Nothing was uploaded
+or published.
+
+The selected character lock validates all **48** registered artifacts. The
+locked verification suite passes: Ruff, strict mypy, and **574 pytest tests**.
+Regression coverage includes the production failures exposed before encoding:
+wide-pose drop envelopes, provider-backed ambient suppression, roll and
+performance camera overrides, comparison lanes, coordinated performance
+staging and motion budget, performance prop geometry, and the long-outro pose
+settle. `git diff --check` also passes.
+
+PILOT_V4_READY_FOR_VISUAL_STORY_REVIEW
