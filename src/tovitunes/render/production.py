@@ -13,7 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from tovitunes.artifacts.store import ArtifactRecord, AssetStore, InputDependency
 from tovitunes.catalog import load_brand
@@ -24,7 +24,7 @@ from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedStoryboard, beat_range
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.leases import Lease, LeaseStore
-from tovitunes.render import VERSION
+from tovitunes.render import VERSION, VISUAL_STORY_VERSION
 from tovitunes.render.character import (
     ACTION_ROLES,
     animation_plan,
@@ -34,6 +34,7 @@ from tovitunes.render.character import (
     validate_layout,
 )
 from tovitunes.render.composition import (
+    PROP_DEFINITIONS,
     CompositionRequest,
     SceneComposition,
     resolve_composition,
@@ -48,9 +49,18 @@ from tovitunes.render.ffmpeg import (
     run_process,
 )
 from tovitunes.render.models import RenderManifest, SceneRender
-from tovitunes.render.motion import SceneMotionPlan, plan_motion, validate_motion
+from tovitunes.render.motion import SceneMotionPlan, plan_motion, prop_state, validate_motion
 from tovitunes.render.props import png_info, scene_art, validate_props
 from tovitunes.render.qa import media_qa
+from tovitunes.render.story import (
+    EpisodeVisualStoryPlan,
+    VisualStoryPlan,
+    occupancy,
+    plan_story,
+    stage_composition,
+)
+
+V4_VERSION = VISUAL_STORY_VERSION
 
 
 def canonical(value: Any) -> bytes:
@@ -191,8 +201,13 @@ class ProductionRenderer:
     def __init__(self, config: RuntimeConfig, *, canvas: tuple[int, int] = (1080, 1920)) -> None:
         self.config, self.canvas = config, canvas
 
-    def render(self, episode_key: str) -> dict[str, Any]:
+    def render(self, episode_key: str, *, visual_story: bool = False) -> dict[str, Any]:
         load_inputs(self.config, episode_key)  # Complete preflight before artifact writes.
+        environment_selection = None
+        if visual_story:
+            from tovitunes.render.environment_sets import selected_set
+
+            environment_selection = selected_set(self.config)
         try:
             moviepy_version = version("moviepy")
         except PackageNotFoundError:
@@ -207,7 +222,7 @@ class ProductionRenderer:
         )
         try:
             inputs = load_inputs(self.config, episode_key)
-            return self._render(inputs, binaries, leases, lease)
+            return self._render(inputs, binaries, leases, lease, environment_selection)
         finally:
             leases.release(lease)
 
@@ -217,6 +232,7 @@ class ProductionRenderer:
         binaries: dict[str, str],
         leases: LeaseStore,
         lease: Lease,
+        environment_selection: tuple[Any, str] | None = None,
     ) -> dict[str, Any]:
         storyboard = inputs.storyboard
         owner = storyboard.episode_id
@@ -231,6 +247,8 @@ class ProductionRenderer:
 
             def ensure(kind: str, slot: str, path: Path, deps: tuple[str, ...]) -> ArtifactRecord:
                 leases.assert_owner(lease)
+                if environment_selection is not None:
+                    slot += "_v4"
                 digest = sha256(path.read_bytes()).hexdigest()
                 record = store.find_version("episode", owner, kind, slot, digest)
                 actions[f"{kind}:{slot}"] = "reuse" if record else "create"
@@ -247,7 +265,7 @@ class ProductionRenderer:
                             source_kind="deterministic",
                             acquired_at=datetime.now(UTC),
                             provider="tovitunes.render",
-                            model=VERSION,
+                            model=V4_VERSION if environment_selection else VERSION,
                             input_artifact_ids=deps,
                         ),
                         dependencies=[InputDependency(d, "render_input") for d in deps],
@@ -264,7 +282,72 @@ class ProductionRenderer:
             previous_motion_id: str | None = None
             last_lyric_end = max(s.lyric_end for s in storyboard.scenes if s.lyric_end is not None)
             tail_seconds = storyboard.duration_seconds - last_lyric_end
+            prepared: dict[str, tuple[SceneComposition, VisualStoryPlan]] = {}
+            story_record: ArtifactRecord | None = None
+            continuity_positions: dict[str, tuple[float, float]] = {}
+            if environment_selection is not None:
+                environment, environment_id = environment_selection
+                prior: SceneComposition | None = None
+                introduced: set[str] = set()
+                for item in storyboard.scenes:
+                    composition_request_pre = CompositionRequest(
+                        item.scene_id,
+                        item.start,
+                        item.end,
+                        item.tovi_action,
+                        item.required_props,
+                        item.kind,
+                    )
+                    raw = resolve_composition(
+                        composition_request_pre,
+                        prior,
+                        post_lyric_tail_seconds=tail_seconds if item.kind == "outro" else 0,
+                        measured_downbeats=inputs.beats.downbeat_seconds,
+                    )
+                    validate_composition(composition_request_pre, raw, prior)
+                    word_cue = next(
+                        (
+                            word.start - item.start
+                            for word in inputs.alignment.words
+                            if item.start <= word.start < item.end
+                            and word.text.strip(".,!? ").casefold()
+                            in {v.casefold() for v in inputs.target_vocabulary}
+                        ),
+                        None,
+                    )
+                    planned_story = plan_story(
+                        raw,
+                        item.end - item.start,
+                        PROP_DEFINITIONS,
+                        introduced,
+                        word_cue=word_cue,
+                        scene_kind=item.kind,
+                    )
+                    staged = stage_composition(raw, planned_story)
+                    prepared[item.scene_id] = (staged, planned_story)
+                    prior = staged
+                    introduced.update(p.type for p in staged.props)
+                episode_story = EpisodeVisualStoryPlan(
+                    storyboard_artifact_id=sid,
+                    environment_set_artifact_id=environment_id,
+                    scenes=tuple(value[1] for value in prepared.values()),
+                )
+                story_path = stage / "visual_story_plan.json"
+                story_path.write_bytes(canonical(episode_story.model_dump(mode="json")))
+                story_deps = tuple(
+                    dict.fromkeys(
+                        (
+                            sid,
+                            environment_id,
+                            storyboard.beat_analysis_artifact_id,
+                            storyboard.audio_alignment_artifact_id,
+                            *inputs.pack.asset_artifact_ids.values(),
+                        )
+                    )
+                )
+                story_record = ensure("visual_story_plan", "main", story_path, story_deps)
             for scene in storyboard.scenes:
+                story: VisualStoryPlan | None
                 composition_request = CompositionRequest(
                     scene.scene_id,
                     scene.start,
@@ -273,13 +356,17 @@ class ProductionRenderer:
                     scene.required_props,
                     scene.kind,
                 )
-                composition = resolve_composition(
-                    composition_request,
-                    previous,
-                    post_lyric_tail_seconds=tail_seconds if scene.kind == "outro" else 0,
-                    measured_downbeats=inputs.beats.downbeat_seconds,
-                )
-                validate_composition(composition_request, composition, previous)
+                if environment_selection is None:
+                    composition = resolve_composition(
+                        composition_request,
+                        previous,
+                        post_lyric_tail_seconds=tail_seconds if scene.kind == "outro" else 0,
+                        measured_downbeats=inputs.beats.downbeat_seconds,
+                    )
+                    validate_composition(composition_request, composition, previous)
+                    story = None
+                else:
+                    composition, story = prepared[scene.scene_id]
                 motion = plan_motion(
                     composition,
                     scene.start,
@@ -291,7 +378,13 @@ class ProductionRenderer:
                     previous=previous_motion,
                     previous_artifact_id=previous_motion_id,
                     canvas=self.canvas,
+                    story=story,
+                    continuity_positions=continuity_positions,
                 )
+                if story_record is not None:
+                    motion = motion.model_copy(
+                        update={"visual_story_plan_artifact_id": story_record.identity.artifact_id}
+                    )
                 image, metadata = scene_art(
                     scene,
                     inputs.pack.palette,
@@ -301,9 +394,25 @@ class ProductionRenderer:
                     background_only=True,
                     background_variant=motion.background_variant,
                 )
+                background_deps: tuple[str, ...] = (sid,)
+                if environment_selection is not None and story is not None:
+                    plate = environment.plate(story.environment_plate_role)
+                    with Image.open(store.path_for(plate.artifact_id)) as selected_plate:
+                        if selected_plate.size != plate.dimensions:
+                            raise ValueError("selected environment plate dimensions differ")
+                        image = selected_plate.convert("RGB").resize(
+                            self.canvas, Image.Resampling.LANCZOS
+                        )
+                    metadata["environment_set_artifact_id"] = environment_id
+                    metadata["environment_plate_artifact_id"] = plate.artifact_id
+                    metadata["environment_plate_role"] = story.environment_plate_role
+                    metadata["environmental_theme"] = environment.theme
+                    metadata["environment_layers"] = ["selected_provider_plate"]
+                    metadata["renderer_version"] = V4_VERSION
+                    background_deps = (sid, environment_id, plate.artifact_id)
                 png = stage / f"{scene.scene_id}.png"
                 image.save(png, pnginfo=png_info(metadata))
-                background = ensure("scene_image", scene.scene_id, png, (sid,))
+                background = ensure("scene_image", scene.scene_id, png, background_deps)
                 role = composition.sprite_role
                 sprite_id = inputs.pack.asset_artifact_ids[role]
                 sprite_path = store.path_for(sprite_id)
@@ -316,8 +425,10 @@ class ProductionRenderer:
                         self.canvas,
                         sid,
                         composition,
-                        height_limit=0.38,
+                        height_limit=0.48 if environment_selection else 0.38,
                     )
+                if environment_selection:
+                    animation = animation.model_copy(update={"renderer_version": V4_VERSION})
                 validate_layout(animation, self.canvas)
                 poses = []
                 sprite_paths = {}
@@ -340,6 +451,7 @@ class ProductionRenderer:
                             storyboard.beat_analysis_artifact_id,
                             storyboard.audio_alignment_artifact_id,
                             background.identity.artifact_id,
+                            *((story_record.identity.artifact_id,) if story_record else ()),
                             *sprite_paths,
                             *((previous_motion_id,) if motion.inherited_motion_artifact_id else ()),
                         )
@@ -381,6 +493,58 @@ class ProductionRenderer:
                     }
                     if len(samples) < 2:
                         raise ValueError("long character scene has no movement")
+                story_diagnostics: dict[str, Any] = {}
+                if story is not None:
+                    w, h = self.canvas
+                    x, y = animation.end_position
+                    character_box = (
+                        x / w,
+                        y / h,
+                        (x + animation.size[0]) / w,
+                        (y + animation.size[1]) / h,
+                    )
+                    primary_track = next((p for p in motion.prop_tracks if p.primary), None)
+                    action_box: tuple[float, float, float, float] | None = None
+                    if primary_track is not None:
+                        action_samples: list[tuple[float, float, float, float]] = []
+                        for index in range(31):
+                            t = motion.duration * index / 30
+                            px, bottom, scale, _ = prop_state(primary_track, motion, t)
+                            width = (primary_track.bbox[2] - primary_track.bbox[0]) * scale
+                            height = (primary_track.bbox[3] - primary_track.bbox[1]) * scale
+                            box = (px - width / 2, bottom - height, px + width / 2, bottom)
+                            if box[2] > 0 and box[0] < 1 and box[3] > 0 and box[1] < 1:
+                                action_samples.append(
+                                    (
+                                        max(0.0, box[0]),
+                                        max(0.0, box[1]),
+                                        min(1.0, box[2]),
+                                        min(1.0, box[3]),
+                                    )
+                                )
+                        if action_samples:
+                            action_box = (
+                                min(b[0] for b in action_samples),
+                                min(b[1] for b in action_samples),
+                                max(b[2] for b in action_samples),
+                                max(b[3] for b in action_samples),
+                            )
+                    story_diagnostics = {
+                        "story_action": story.story_action,
+                        "environment_role": story.environment_plate_role,
+                        "primary_focus": story.primary_focus,
+                        **occupancy(
+                            character_box, tuple(p.bbox for p in motion.prop_tracks), action_box
+                        ),
+                        "primary_visual_action_bbox": action_box,
+                        "meaningful_event_count": sum(len(p.events) for p in motion.prop_tracks),
+                        "camera_behavior": motion.camera_track.behavior,
+                        "prop_actions": {
+                            p.prop_key: [e.motion for e in p.events] for p in motion.prop_tracks
+                        },
+                        "pose_changes": max(0, len(motion.character_pose_sequence) - 1),
+                        "keyword_events": len(motion.keyword_emphasis_events),
+                    }
                 deterministic.append(
                     {
                         "scene_id": scene.scene_id,
@@ -397,6 +561,7 @@ class ProductionRenderer:
                         "outro_phase_count": len(composition.outro_phases),
                         "long_scene_activity": animation.long_scene_activity,
                         "motion_diagnostics": motion_qa,
+                        **({"visual_story_diagnostics": story_diagnostics} if story else {}),
                     }
                 )
                 scene_refs.append(
@@ -425,6 +590,13 @@ class ProductionRenderer:
                 previous = composition
                 previous_motion = motion
                 previous_motion_id = motion_record.identity.artifact_id
+                if story is not None:
+                    continuity_positions.update(
+                        {
+                            p.prop_key: ((p.bbox[0] + p.bbox[2]) / 2, p.bbox[3])
+                            for p in motion.prop_tracks
+                        }
+                    )
             deps = tuple(
                 dict.fromkeys(
                     (
@@ -432,6 +604,8 @@ class ProductionRenderer:
                         storyboard.audio_master_artifact_id,
                         storyboard.audio_alignment_artifact_id,
                         storyboard.beat_analysis_artifact_id,
+                        *((environment_id,) if environment_selection else ()),
+                        *((story_record.identity.artifact_id,) if story_record else ()),
                         *(s.scene_image_artifact_id for s in scene_refs),
                         *(s.character_animation_artifact_id for s in scene_refs),
                         *(
@@ -445,6 +619,20 @@ class ProductionRenderer:
                 )
             )
             manifest = RenderManifest(
+                renderer_version=V4_VERSION if environment_selection else VERSION,
+                camera_policy_version=(
+                    "story_camera_v1" if environment_selection else "gentle_camera_v1"
+                ),
+                motion_grammar_version=(
+                    "visual_story_motion_v1" if environment_selection else "preschool_motion_v1"
+                ),
+                environmental_theme=environment.theme
+                if environment_selection
+                else "playful_meadow_v2",
+                environment_set_artifact_id=environment_id if environment_selection else None,
+                visual_story_plan_artifact_id=(
+                    story_record.identity.artifact_id if story_record else None
+                ),
                 episode_id=owner,
                 audio_master_artifact_id=storyboard.audio_master_artifact_id,
                 audio_alignment_artifact_id=storyboard.audio_alignment_artifact_id,
@@ -531,29 +719,68 @@ class ProductionRenderer:
                             for d in deterministic
                         ),
                     },
-                    "renderer_version": VERSION,
+                    "renderer_version": V4_VERSION if environment_selection else VERSION,
                     "dynamic_motion_qa": {"passed": True, "major_motion_budget": 3},
                     "visual_activity_diagnostics": [d["motion_diagnostics"] for d in deterministic],
                     "mouth_animation_supported": False,
                 }
             )
+            if environment_selection:
+                qa.update(
+                    {
+                        "visual_story_diagnostics": [
+                            d["visual_story_diagnostics"] for d in deterministic
+                        ],
+                        "environment_set_artifact_id": environment_id,
+                    }
+                )
             qa_path = stage / "qa.json"
             qa_path.write_bytes(canonical(qa))
             qa_record = ensure("media_qa", "main", qa_path, (final.identity.artifact_id,))
             output = self.config.brand_root.parent.parent / "outputs"
             output.mkdir(exist_ok=True)
             episode_key = inputs.store.database.get_episode(owner).external_key
-            export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_V3"
+            export_stem = (
+                f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_"
+                f"{'V4' if environment_selection else 'V3'}"
+            )
             export = output / f"{export_stem}.mp4"
             self._export(store.path_for(final.identity.artifact_id), export)
             self._export(
                 store.path_for(qa_record.identity.artifact_id),
                 output / f"{export_stem}_MEDIA_QA.json",
             )
-            frames = output / f"{episode_key.replace('-', '_')}_v3_frames"
+            frames = (
+                output / f"{episode_key.replace('-', '_')}_"
+                f"{'v4' if environment_selection else 'v3'}_frames"
+            )
             self._frames(export, storyboard, frames)
+            review_sheets = (
+                self._review_sheets(
+                    frames,
+                    output / f"{episode_key.replace('-', '_')}_v3_frames",
+                    storyboard,
+                    output,
+                    export_stem,
+                )
+                if environment_selection
+                else {}
+            )
             return {
-                "classification": "PILOT_V3_READY_FOR_CHILD_ENGAGEMENT_REVIEW",
+                "classification": (
+                    "PILOT_V4_READY_FOR_VISUAL_STORY_REVIEW"
+                    if environment_selection
+                    else "PILOT_V3_READY_FOR_CHILD_ENGAGEMENT_REVIEW"
+                ),
+                **(
+                    {
+                        "environment_set_artifact_id": environment_id,
+                        "visual_story_plan_artifact_id": story_record.identity.artifact_id,
+                        "review_sheets": review_sheets,
+                    }
+                    if environment_selection and story_record
+                    else {}
+                ),
                 "episode_id": owner,
                 "storyboard_artifact_id": sid,
                 "render_manifest_id": manifest_record.identity.artifact_id,
@@ -696,3 +923,52 @@ class ProductionRenderer:
                         ],
                         30,
                     )
+
+    @staticmethod
+    def _review_sheets(
+        v4_frames: Path,
+        v3_frames: Path,
+        storyboard: TimedStoryboard,
+        output: Path,
+        export_stem: str,
+    ) -> dict[str, str]:
+        scenes = storyboard.scenes
+        tile = (216, 384)
+
+        def save_sheet(paths: list[tuple[str, Path]], columns: int, destination: Path) -> None:
+            rows = (len(paths) + columns - 1) // columns
+            image = Image.new("RGB", (columns * 240, rows * 420), "#ffffff")
+            draw = ImageDraw.Draw(image)
+            for index, (label, path) in enumerate(paths):
+                with Image.open(path) as source:
+                    thumb = source.convert("RGB").resize(tile, Image.Resampling.LANCZOS)
+                x, y = (index % columns) * 240 + 12, (index // columns) * 420 + 8
+                image.paste(thumb, (x, y))
+                draw.text((x, y + 388), label, fill="#263238")
+            candidate = destination.with_suffix(".partial.png")
+            image.save(candidate)
+            if (
+                not destination.exists()
+                or sha256(candidate.read_bytes()).digest()
+                != sha256(destination.read_bytes()).digest()
+            ):
+                os.replace(candidate, destination)
+            else:
+                candidate.unlink()
+
+        scene_paths = [(scene.scene_id, v4_frames / f"{scene.scene_id}.png") for scene in scenes]
+        contact = output / f"{export_stem}_SCENE_CONTACT_SHEET.png"
+        save_sheet(scene_paths, 3, contact)
+        result = {"v4_scene_contact_sheet": str(contact)}
+        if all((v3_frames / f"{scene.scene_id}.png").is_file() for scene in scenes):
+            pairs = [
+                (f"{scene.scene_id} V3", v3_frames / f"{scene.scene_id}.png")
+                if index % 2 == 0
+                else (f"{scene.scene_id} V4", v4_frames / f"{scene.scene_id}.png")
+                for scene in scenes
+                for index in range(2)
+            ]
+            comparison = output / f"{export_stem}_V3_V4_COMPARISON.png"
+            save_sheet(pairs, 2, comparison)
+            result["v3_v4_comparison"] = str(comparison)
+        return result

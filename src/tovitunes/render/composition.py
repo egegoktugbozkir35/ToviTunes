@@ -53,13 +53,17 @@ class PropDefinition:
     grounded: bool = True
     motion_class: str = "static"
     color: str = "#E53935"
+    supports_drop: bool = False
+    supports_bounce: bool = False
+    supports_roll: bool = False
+    supports_float: bool = False
 
 
 # Vocabulary belongs to the supported drawing registry, never to layout selection.
 PROP_DEFINITIONS = {
-    "red_swatch": PropDefinition("abstract", False),
-    "red_apple": PropDefinition(),
-    "red_ball": PropDefinition(motion_class="roll"),
+    "red_swatch": PropDefinition("abstract", False, supports_float=True),
+    "red_apple": PropDefinition(supports_drop=True, supports_bounce=True),
+    "red_ball": PropDefinition(motion_class="roll", supports_roll=True),
 }
 
 

@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from tovitunes.domain.storyboard import ProductionModel
-from tovitunes.render import VERSION
+from tovitunes.render import VERSION, VISUAL_STORY_VERSION
 
 SpriteRole = Literal[
     "sprite/hello",
@@ -107,6 +107,12 @@ class RenderManifest(ProductionModel):
     motion_grammar_version: str = "preschool_motion_v1"
     keyword_emphasis_policy: str = "canonical_target_words_v1"
     environmental_theme: str = "playful_meadow_v2"
+    environment_set_artifact_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    visual_story_plan_artifact_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     episode_id: str
     audio_master_artifact_id: str
     audio_alignment_artifact_id: str
@@ -151,11 +157,18 @@ class RenderManifest(ProductionModel):
             *(s.scene_image_artifact_id for s in self.scenes),
             *(s.character_animation_artifact_id for s in self.scenes),
             *(s.scene_motion_artifact_id for s in self.scenes if s.scene_motion_artifact_id),
+            *((self.environment_set_artifact_id,) if self.environment_set_artifact_id else ()),
+            *((self.visual_story_plan_artifact_id,) if self.visual_story_plan_artifact_id else ()),
         }
-        if self.renderer_version.startswith("tovitunes_dynamic_render_v1") and any(
+        dynamic_versions = ("tovitunes_dynamic_render_v1", "tovitunes_visual_story_render_v1")
+        if self.renderer_version.startswith(dynamic_versions) and any(
             s.scene_motion_artifact_id is None for s in self.scenes
         ):
             raise ValueError("dynamic manifest requires scene motion pins")
+        if self.renderer_version == VISUAL_STORY_VERSION and not (
+            self.environment_set_artifact_id and self.visual_story_plan_artifact_id
+        ):
+            raise ValueError("visual story manifest requires environment and story pins")
         if not required.issubset(self.dependency_sha256):
             raise ValueError("manifest is missing pinned dependencies")
         return self

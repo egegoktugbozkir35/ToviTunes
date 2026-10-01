@@ -50,7 +50,7 @@ def _request_fingerprint(
     translated_request: dict[str, Any],
 ) -> str:
     identity = {
-        "canonical_spec": spec.model_dump(mode="json"),
+        "canonical_spec": json.loads(spec.canonical_json()),
         "provider": provider,
         "model": model,
         "translated_request": translated_request,
@@ -90,7 +90,7 @@ def plan_requests(
                         input_fingerprint=_request_fingerprint(
                             spec, provider.provider, provider.model, translated
                         ),
-                        canonical_spec=spec.model_dump(mode="json"),
+                        canonical_spec=json.loads(spec.canonical_json()),
                         canonical_prompt=spec.prompt(),
                         translated_request=translated,
                         capabilities=provider.capabilities.model_dump(mode="json"),
@@ -230,7 +230,19 @@ class BenchmarkRunner:
         expected_fingerprint = _request_fingerprint(
             spec, provider.provider, provider.model, plan.translated_request
         )
-        if expected_fingerprint != plan.input_fingerprint:
+        # Accept externally constructed plans that serialized the new optional
+        # prompt fields with their defaults. New canonical plans retain the old
+        # benchmark fingerprint so existing durable requests remain reusable.
+        expanded_identity = {
+            "canonical_spec": spec.model_dump(mode="json"),
+            "provider": provider.provider,
+            "model": provider.model,
+            "translated_request": plan.translated_request,
+        }
+        expanded_fingerprint = sha256(
+            json.dumps(expanded_identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if plan.input_fingerprint not in {expected_fingerprint, expanded_fingerprint}:
             raise ValueError("planned request fingerprint is invalid")
         row = self.state.prepare(
             benchmark_version=spec.benchmark_version,

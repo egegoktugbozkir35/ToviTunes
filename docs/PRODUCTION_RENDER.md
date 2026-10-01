@@ -67,3 +67,29 @@ publication blocked. No upload or release authorization is inferred.
 CI remains provider-free and uses the tiny 270x480, two-second fixture. The full
 pilot runs locally. See [donor provenance/license notice](RENDER_DONOR_NOTICE.md)
 and [composition review](../GENERIC_VISUAL_COMPOSITION_V1_REVIEW.md).
+
+## Visual storytelling V4
+
+V4 uses a separately generated, human-reviewed environment set. The commands
+below use the authoritative production config. `plan` is offline. `generate-set`
+is the only command that can call the image provider, and it requires the explicit
+flag. It produces four plates and a contact sheet; inspect that sheet before
+approving. `reject` uses the same arguments as `approve` if a plate contains a
+character, lesson object, text, inconsistent art or other unsuitable content.
+
+```powershell
+uv run python -m tovitunes.cli --config <CONFIG> environment plan
+uv run python -m tovitunes.cli --config <CONFIG> environment generate-set --confirm-provider-generation
+uv run python -m tovitunes.cli --config <CONFIG> environment inspect --set-artifact-id <SET_ID>
+uv run python -m tovitunes.cli --config <CONFIG> environment approve --set-artifact-id <SET_ID> --actor <REVIEWER> --reason "Reviewed contact sheet"
+uv run python -m tovitunes.cli --config <CONFIG> environment select --set-artifact-id <SET_ID>
+uv run python -m tovitunes.cli --config <CONFIG> production render-v4 --episode-key colors-red-001
+```
+
+Use `--attempt 2` (or a higher explicit attempt) to request a replacement set
+after failure or rejection. An ambiguous remote request is never resent under
+the same attempt. Rendering requires the selected approved set and never invokes
+an image provider or falls back to the V3 meadow. V4 assets use distinct `_v4`
+slots and the MP4 export ends in `_PILOT_V4.mp4`; V3 stays available. See
+[the V4 implementation report](../VISUAL_STORYTELLING_V1.md) for provenance,
+rights and current readiness.

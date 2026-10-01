@@ -1,0 +1,22 @@
+CREATE TABLE environment_requests (
+    request_id TEXT PRIMARY KEY,
+    set_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('prepared','remote_started','succeeded','terminal_failure','retryable_failure','ambiguous')),
+    provider_request_id TEXT,
+    spec_json TEXT NOT NULL,
+    artifact_id TEXT,
+    response_sha256 TEXT,
+    response_byte_count INTEGER,
+    response_mime TEXT,
+    response_metadata_json TEXT,
+    error_reason TEXT,
+    remote_started_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(set_id, role, attempt)
+);
