@@ -4,6 +4,11 @@ data_root: data
 brand_root: brands/tovitunes
 publication_enabled: false
 expected_youtube_channel_id: null
+environment_generation:
+  provider: google
+  model: gemini-3-pro-image
+  location: global
+  image_size: 2K
 creative_llm:
   provider: nvidia
   model: moonshotai/kimi-k3

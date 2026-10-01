@@ -40,6 +40,27 @@ class CreativeLLMConfig(BaseModel):
         return value
 
 
+class EnvironmentGenerationConfig(BaseModel):
+    """Approved production image-model choices for reviewed environment sets."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["google"] = "google"
+    model: Literal["gemini-3.1-flash-image", "gemini-3-pro-image"] = (
+        "gemini-3.1-flash-image"
+    )
+    location: Literal["global", "us", "eu"] = "global"
+    image_size: Literal["1K", "2K", "4K"] = "1K"
+
+    @model_validator(mode="after")
+    def supported_contract(self) -> "EnvironmentGenerationConfig":
+        if self.model == "gemini-3-pro-image" and self.location != "global":
+            raise ValueError("gemini-3-pro-image is available only at the global location")
+        if self.model == "gemini-3.1-flash-image" and self.image_size != "1K":
+            raise ValueError("the admitted Flash environment contract is pinned to 1K")
+        return self
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -50,6 +71,9 @@ class RuntimeConfig(BaseModel):
     publication_enabled: bool = False
     expected_youtube_channel_id: str | None = None
     creative_llm: CreativeLLMConfig = Field(default_factory=CreativeLLMConfig)
+    environment_generation: EnvironmentGenerationConfig = Field(
+        default_factory=EnvironmentGenerationConfig
+    )
 
     @model_validator(mode="after")
     def publishing_requires_channel(self) -> "RuntimeConfig":

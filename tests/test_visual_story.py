@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.benchmark.providers import ProviderFailure, ProviderResult
-from tovitunes.config import RuntimeConfig
+from tovitunes.config import EnvironmentGenerationConfig, RuntimeConfig
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedScene
 from tovitunes.persistence.db import Database
 from tovitunes.render.character import animation_plan, attach_poses, pose_keyframe
@@ -25,7 +25,9 @@ from tovitunes.render.environment_sets import (
     CANVAS,
     MIN_SOURCE_SIZE,
     ROLES,
+    SOURCE_DIMENSIONS,
     _validate_image,
+    comparison_sheet,
     decide_set,
     generate_set,
     inspect_set,
@@ -64,11 +66,20 @@ def test_documented_vertex_1k_portrait_is_accepted_and_normalized():
 
 class FakeProvider:
     provider = "fixture"
-    model = "fixture-image-v1"
 
-    def __init__(self, *, ambiguous=False):
+    def __init__(
+        self,
+        *,
+        ambiguous=False,
+        model="fixture-image-v1",
+        image_size="1K",
+        location="global",
+    ):
         self.calls = 0
         self.ambiguous = ambiguous
+        self.model = model
+        self.image_size = image_size
+        self.location = location
 
     def generate(self, spec, reference_paths, *, on_remote_start=None):
         self.calls += 1
@@ -77,8 +88,9 @@ class FakeProvider:
             on_remote_start()
         if self.ambiguous:
             raise ProviderFailure("uncertain", outcome="ambiguous")
+        size = SOURCE_DIMENSIONS.get((self.model, self.image_size), MIN_SOURCE_SIZE)
         return ProviderResult(
-            image_bytes=picture(),
+            image_bytes=picture(size),
             mime_type="image/png",
             provider_request_id=f"fixture-{self.calls}",
             usage={"prompt_token_count": 7},
@@ -143,17 +155,124 @@ def test_environment_requires_confirmation_and_is_reviewed(runtime):
             ).fetchone()
         assert rights[0] == "unknown"
         metadata = json.loads(request["response_metadata_json"])
-        assert metadata == {
-            "backend": "fixture",
-            "normalized_dimensions": [1080, 1920],
-            "source_dimensions": [768, 1376],
-            "technical_validation": "passed",
-            "usage_metadata": {"prompt_token_count": 7},
-        }
+        assert metadata["backend"] == "fixture"
+        assert metadata["normalized_dimensions"] == [1080, 1920]
+        assert metadata["source_dimensions"] == [768, 1376]
+        assert metadata["technical_validation"] == "passed"
+        assert metadata["requested_image_size"] == "1K"
+        assert metadata["usage_metadata"] == {"prompt_token_count": 7}
+        assert len(metadata["response_sha256"]) == 64
+        assert store.get(metadata["source_artifact_id"]).provenance.model == provider.model
     repeated = generate_set(runtime, confirmed=True, provider=provider)
     assert repeated["manifest_artifact_id"] == selected_id and provider.calls == 4
     assert repeated["review_status"] == "approved"
     assert repeated["provider_calls"]["remote_started"] == 0
+
+
+def test_environment_plan_and_fingerprint_pin_model_size_and_references(runtime):
+    flash = plan(runtime)
+    pro_1k = plan(
+        runtime.model_copy(
+            update={
+                "environment_generation": EnvironmentGenerationConfig(
+                    model="gemini-3-pro-image", location="global", image_size="1K"
+                )
+            }
+        )
+    )
+    pro_2k = plan(
+        runtime.model_copy(
+            update={
+                "environment_generation": EnvironmentGenerationConfig(
+                    model="gemini-3-pro-image", location="global", image_size="2K"
+                )
+            }
+        )
+    )
+    assert pro_2k["provider"] == "google"
+    assert pro_2k["model"] == "gemini-3-pro-image"
+    assert pro_2k["requested_image_size"] == "2K"
+    assert pro_2k["location"] == "global"
+    assert pro_2k["role_count"] == 4
+    assert pro_2k["provider_calls"] == 0 and pro_2k["live_calls"] == 0
+    assert pro_2k["requests"][0]["reference_assets"] == []
+    assert all(
+        request["reference_assets"] == ["meadow_wide"]
+        for request in pro_2k["requests"][1:]
+    )
+    assert len(
+        {
+            flash["generation_fingerprint"],
+            pro_1k["generation_fingerprint"],
+            pro_2k["generation_fingerprint"],
+        }
+    ) == 3
+
+
+def test_pro_2k_set_is_immutable_and_comparable_with_flash(runtime, tmp_path):
+    flash_provider = FakeProvider(model="gemini-3.1-flash-image", image_size="1K")
+    flash_result = generate_set(runtime, confirmed=True, provider=flash_provider)
+    flash_manifest = inspect_set(runtime, flash_result["manifest_artifact_id"])
+
+    pro_config = runtime.model_copy(
+        update={
+            "environment_generation": EnvironmentGenerationConfig(
+                model="gemini-3-pro-image", location="global", image_size="2K"
+            )
+        }
+    )
+    pro_provider = FakeProvider(model="gemini-3-pro-image", image_size="2K")
+    pro_result = generate_set(pro_config, confirmed=True, provider=pro_provider)
+    assert flash_provider.calls == 4 and pro_provider.calls == 4
+    assert pro_result["manifest_artifact_id"] != flash_result["manifest_artifact_id"]
+    assert pro_result["set_id"] != flash_result["set_id"]
+    assert inspect_set(runtime, flash_result["manifest_artifact_id"]) == flash_manifest
+
+    inspected = inspect_set(pro_config, pro_result["manifest_artifact_id"])
+    environment = inspected["environment_set"]
+    assert environment["provider"] == "fixture"
+    assert environment["model"] == "gemini-3-pro-image"
+    assert environment["requested_image_size"] == "2K"
+    assert environment["location"] == "global"
+    assert len(environment["generation_fingerprint"]) == 64
+    assert all(plate["source_dimensions"] == [1536, 2752] for plate in environment["plates"])
+    assert all(plate["source_artifact_id"] for plate in environment["plates"])
+    assert inspected["review_status"] == "pending"
+
+    output = comparison_sheet(
+        pro_config,
+        flash_result["manifest_artifact_id"],
+        pro_result["manifest_artifact_id"],
+        tmp_path / "comparison.png",
+    )
+    with Image.open(output) as comparison:
+        assert comparison.size == (960, 3440)
+
+
+def test_schema_one_flash_manifest_remains_readable():
+    from tovitunes.render.environment_sets import EnvironmentSet
+
+    historical = EnvironmentSet.model_validate(
+        {
+            "schema_version": 1,
+            "set_id": "preschool-world-v1",
+            "plates": [
+                {
+                    "role": role,
+                    "artifact_id": f"historical-{role}",
+                    "sha256": "a" * 64,
+                    "provider": "google",
+                    "model": "gemini-3.1-flash-image",
+                    "local_request_id": f"request-{role}",
+                    "generated_at": "2026-09-30T00:00:00Z",
+                }
+                for role in ROLES
+            ],
+        }
+    )
+    assert historical.schema_version == 1
+    assert historical.model is None
+    assert all(plate.model == "gemini-3.1-flash-image" for plate in historical.plates)
 
 
 def test_ambiguous_environment_request_never_resends(runtime):
@@ -187,6 +306,7 @@ def test_source_dimensions_survive_technical_validation_failure(runtime):
         ).fetchone()
     assert row["status"] == "terminal_failure"
     assert json.loads(row["response_metadata_json"]) == {
+        "requested_image_size": "1K",
         "source_dimensions": [767, 1376],
         "technical_validation": "failed",
         "usage_metadata": {"prompt_token_count": 3},

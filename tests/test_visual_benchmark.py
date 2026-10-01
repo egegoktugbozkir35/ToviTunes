@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -1023,11 +1023,13 @@ class VertexTestTransport(httpx.BaseTransport):
         return self.response
 
 
-def vertex_response(*, image_count: int = 1) -> httpx.Response:
+def vertex_response(
+    *, image_count: int = 1, model: str = "gemini-3.1-flash-image"
+) -> httpx.Response:
     part = {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(png_bytes()).decode()}}
     return httpx.Response(200, json={
         "responseId": "vertex-123",
-        "modelVersion": "gemini-3.1-flash-image",
+        "modelVersion": model,
         "candidates": [{"content": {"role": "model", "parts": [part] * image_count}}],
         "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "totalTokenCount": 10},
     })
@@ -1038,13 +1040,17 @@ def vertex_provider(
     *,
     project: str | None = "test-project",
     location: str | None = None,
+    model: str = "gemini-3.1-flash-image",
+    image_size: Literal["1K", "2K", "4K"] = "1K",
     credentials_loader: Callable[[], Credentials] | None = None,
 ) -> GeminiImageProvider:
     credentials = Credentials(token="fake-secret-token", quota_project_id="test-project")
     return GeminiImageProvider(
+        model=model,
         transport=transport,
         project=project,
         location=location or "global",
+        image_size=image_size,
         credentials_loader=credentials_loader or (lambda: credentials),
     )
 
@@ -1070,6 +1076,49 @@ def test_vertex_dry_run_needs_no_credentials_or_network(
     assert len(translated["supplied_reference_artifact_ids"]) == 3
     assert all("sha256" in item for item in translated["body"]["input"][1:])
     assert plan.canonical_prompt and plan.input_fingerprint
+
+
+def test_nano_banana_pro_2k_request_translation_and_contract(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(
+        vertex_response(model="gemini-3-pro-image"), state
+    )
+    provider = vertex_provider(
+        transport, model="gemini-3-pro-image", location="global", image_size="2K"
+    )
+    translated = provider.translate(spec)
+    assert translated.body["model"] == "gemini-3-pro-image"
+    assert translated.body["location"] == "global"
+    assert translated.body["image_config"] == {
+        "aspect_ratio": "9:16",
+        "image_size": "2K",
+    }
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "succeeded"
+    request = transport.calls[0]
+    body = json.loads(request.content)
+    assert "locations/global" in str(request.url)
+    assert "gemini-3-pro-image" in str(request.url)
+    assert body["generationConfig"]["imageConfig"]["imageSize"] == "2K"
+    receipt = state.receipt(result["request_id"])
+    assert receipt is not None
+    metadata = json.loads(receipt["response_metadata_json"])
+    assert metadata["requested_image_size"] == "2K"
+    assert metadata["model_version"] == "gemini-3-pro-image"
+
+
+def test_nano_banana_pro_rejects_non_global_location_before_auth() -> None:
+    provider = GeminiImageProvider(
+        model="gemini-3-pro-image",
+        location="us",
+        image_size="2K",
+        project="test-project",
+        credentials_loader=lambda: pytest.fail("ADC used"),
+    )
+    with pytest.raises(ProviderFailure, match="global"):
+        provider.preflight()
 
 
 def test_vertex_missing_project_preflight_is_retryable(

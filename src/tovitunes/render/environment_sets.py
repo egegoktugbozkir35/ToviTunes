@@ -49,6 +49,17 @@ ROLE_BRIEFS = {
 CANVAS = (1080, 1920)
 # Documented Gemini 3.1 Flash Image output for 1K portrait 9:16.
 MIN_SOURCE_SIZE = (768, 1376)
+SOURCE_DIMENSIONS = {
+    ("gemini-3.1-flash-image", "1K"): (768, 1376),
+    ("gemini-3-pro-image", "1K"): (768, 1376),
+    ("gemini-3-pro-image", "2K"): (1536, 2752),
+    ("gemini-3-pro-image", "4K"): (3072, 5504),
+}
+SOURCE_SUFFIXES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
 
 
 class EnvironmentPlate(ProductionModel):
@@ -62,10 +73,15 @@ class EnvironmentPlate(ProductionModel):
     provider_request_id: str | None = None
     generated_at: datetime
     source_references: tuple[str, ...] = ()
+    requested_image_size: str | None = None
+    location: str | None = None
+    source_artifact_id: str | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source_dimensions: tuple[int, int] | None = None
 
 
 class EnvironmentSet(ProductionModel):
-    schema_version: int = 1
+    schema_version: Literal[1, 2] = 2
     set_id: str
     prompt_version: str = PROMPT_VERSION
     theme: str = THEME
@@ -79,6 +95,11 @@ class EnvironmentSet(ProductionModel):
         }
     )
     review_status: str = "pending"
+    provider: str | None = None
+    model: str | None = None
+    location: str | None = None
+    requested_image_size: str | None = None
+    generation_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     def plate(self, role: str) -> EnvironmentPlate:
         return next(p for p in self.plates if p.role == role)
@@ -94,6 +115,47 @@ def _store(config: RuntimeConfig) -> tuple[Database, AssetStore, str]:
     catalog = load_brand(config.brand_root)
     db.register_catalog(catalog)
     return db, AssetStore(config.data_root, db), catalog.version.revision_id
+
+
+def _configured_provider(config: RuntimeConfig) -> GeminiImageProvider:
+    generation = config.environment_generation
+    return GeminiImageProvider(
+        model=generation.model,
+        location=generation.location,
+        image_size=generation.image_size,
+    )
+
+
+def _provider_settings(
+    config: RuntimeConfig, provider: ImageProvider
+) -> tuple[str, str, str, str]:
+    generation = config.environment_generation
+    location = getattr(provider, "location", generation.location)
+    image_size = getattr(provider, "image_size", generation.image_size)
+    return provider.provider, provider.model, str(location), str(image_size)
+
+
+def _generation_fingerprint(
+    theme: str, provider: str, model: str, location: str, image_size: str
+) -> str:
+    payload = {
+        "theme": theme,
+        "prompt_version": PROMPT_VERSION,
+        "roles": ROLES,
+        "provider": provider,
+        "model": model,
+        "location": location,
+        "image_size": image_size,
+    }
+    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _set_id(theme: str, fingerprint: str) -> str:
+    return f"{theme}-{fingerprint[:16]}"
+
+
+def _request_fingerprint(spec: CanonicalImageSpec, generation_fingerprint: str) -> str:
+    return sha256(f"{spec.fingerprint()}:{generation_fingerprint}".encode()).hexdigest()
 
 
 def _spec(
@@ -150,13 +212,21 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
     if theme != THEME or attempt < 1:
         raise ValueError("unsupported environment theme or attempt")
     brand_id = load_brand(config.brand_root).version.revision_id
-    provider = GeminiImageProvider()
+    provider = _configured_provider(config)
+    provider_name, model, location, image_size = _provider_settings(config, provider)
+    fingerprint = _generation_fingerprint(theme, provider_name, model, location, image_size)
     return {
-        "set_id": theme,
-        "provider": provider.provider,
-        "model": provider.model,
+        "set_id": _set_id(theme, fingerprint),
+        "theme": theme,
+        "provider": provider_name,
+        "model": model,
+        "requested_image_size": image_size,
+        "location": location,
+        "generation_fingerprint": fingerprint,
+        "role_count": len(ROLES),
         "request_count": len(ROLES),
         "provider_calls": 0,
+        "live_calls": 0,
         "requests": [
             {
                 "role": role,
@@ -180,11 +250,20 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
     }
 
 
-def _validate_image(data: bytes) -> Image.Image:
+def _validate_image(
+    data: bytes, expected_source_dimensions: tuple[int, int] | None = None
+) -> Image.Image:
     with Image.open(io.BytesIO(data)) as opened:
         opened.load()
         image = ImageOps.exif_transpose(opened)
-        if image.width < MIN_SOURCE_SIZE[0] or image.height < MIN_SOURCE_SIZE[1]:
+        if expected_source_dimensions is not None and image.size != expected_source_dimensions:
+            raise ValueError(
+                "provider image dimensions differ from the requested image contract: "
+                f"expected {expected_source_dimensions}, received {image.size}"
+            )
+        if expected_source_dimensions is None and (
+            image.width < MIN_SOURCE_SIZE[0] or image.height < MIN_SOURCE_SIZE[1]
+        ):
             raise ValueError("provider image is too small for a 1080x1920 plate")
         if abs(image.width / image.height - 9 / 16) > 0.025:
             raise ValueError("provider image is not portrait 9:16")
@@ -274,9 +353,15 @@ def generate_set(
         raise ValueError("live image generation requires --confirm-provider-generation")
     if theme != THEME or attempt < 1:
         raise ValueError("unsupported environment theme or attempt")
-    provider = provider or GeminiImageProvider()
+    provider = provider or _configured_provider(config)
     if isinstance(provider, GeminiImageProvider):
         provider.preflight()
+    provider_name, model, location, image_size = _provider_settings(config, provider)
+    generation_fingerprint = _generation_fingerprint(
+        theme, provider_name, model, location, image_size
+    )
+    set_id = _set_id(theme, generation_fingerprint)
+    expected_source_dimensions = SOURCE_DIMENSIONS.get((model, image_size))
     db, store, brand_id = _store(config)
     working = config.data_root / ".environment-working"
     working.mkdir(exist_ok=True)
@@ -287,22 +372,22 @@ def generate_set(
         store = AssetStore(config.data_root, db, generated_source_roots=[stage])
         for role in ROLES:
             master = plates[0] if plates else None
-            reference = (
-                ReferenceImage(
+            master_reference_id: str | None = None
+            reference: ReferenceImage | None = None
+            if master is not None:
+                master_reference_id = master.source_artifact_id or master.artifact_id
+                reference = ReferenceImage(
                     role="world_master",
-                    artifact_id=master.artifact_id,
-                    sha256=master.sha256,
-                    mime_type="image/png",
+                    artifact_id=master_reference_id,
+                    sha256=(master.source_sha256 or master.sha256),
+                    mime_type=store.get(master_reference_id).mime_type,
                 )
-                if master
-                else None
-            )
             spec = _spec(role, brand_id, attempt, reference)
-            fingerprint = spec.fingerprint()
+            fingerprint = _request_fingerprint(spec, generation_fingerprint)
             with closing(db.connect()) as conn:
                 row = conn.execute(
                     "SELECT * FROM environment_requests WHERE set_id=? AND role=? AND attempt=?",
-                    (theme, role, attempt),
+                    (set_id, role, attempt),
                 ).fetchone()
                 if row is None:
                     request_id = str(uuid4())
@@ -313,12 +398,12 @@ def generate_set(
                         "'prepared',?,?,?)",
                         (
                             request_id,
-                            theme,
+                            set_id,
                             role,
                             attempt,
                             fingerprint,
-                            provider.provider,
-                            provider.model,
+                            provider_name,
+                            model,
                             spec.canonical_json(),
                             _now(),
                             _now(),
@@ -329,25 +414,35 @@ def generate_set(
                     status = "prepared"
                 else:
                     request_id, status = row["request_id"], row["status"]
-                    if row["fingerprint"] != fingerprint or row["model"] != provider.model:
+                    if (
+                        row["fingerprint"] != fingerprint
+                        or row["provider"] != provider_name
+                        or row["model"] != model
+                    ):
                         raise ValueError("existing environment request differs; use a new attempt")
                     if status == "succeeded":
                         record = store.get(row["artifact_id"])
                         if not store.inspect(record.identity.artifact_id).valid:
                             raise ValueError("persisted environment plate is invalid")
+                        stored_metadata = json.loads(row["response_metadata_json"] or "{}")
                         plates.append(
                             EnvironmentPlate(
                                 role=role,
                                 artifact_id=record.identity.artifact_id,
                                 sha256=record.sha256,
-                                provider=provider.provider,
-                                model=provider.model,
+                                provider=provider_name,
+                                model=model,
                                 local_request_id=request_id,
                                 provider_request_id=row["provider_request_id"],
                                 generated_at=record.provenance.acquired_at,
                                 source_references=spec.references
                                 and (spec.references[0].artifact_id,)
                                 or (),
+                                requested_image_size=image_size,
+                                location=location,
+                                source_artifact_id=stored_metadata.get("source_artifact_id"),
+                                source_sha256=stored_metadata.get("response_sha256"),
+                                source_dimensions=stored_metadata.get("source_dimensions"),
                             )
                         )
                         continue
@@ -368,38 +463,69 @@ def generate_set(
             try:
                 result = provider.generate(
                     spec,
-                    (store.path_for(master.artifact_id),) if master else (),
+                    (store.path_for(master_reference_id),) if master_reference_id else (),
                     on_remote_start=remote_start,
                 )
                 received_result = result
                 response_metadata = _response_metadata(result)
                 if not started:
                     raise ValueError("provider returned without remote-start receipt")
-                image = _validate_image(result.image_bytes)
+                with Image.open(io.BytesIO(result.image_bytes)) as source_image:
+                    source_dimensions = (source_image.width, source_image.height)
+                response_metadata["requested_image_size"] = image_size
+                image = _validate_image(result.image_bytes, expected_source_dimensions)
                 response_metadata["normalized_dimensions"] = list(image.size)
                 response_metadata["technical_validation"] = "passed"
-                path = stage / f"{role}.png"
-                image.save(path, format="PNG")
-                provenance = Provenance(
+                response_metadata["response_sha256"] = sha256(result.image_bytes).hexdigest()
+                source_record = None
+                source_suffix = SOURCE_SUFFIXES.get(result.mime_type)
+                provider_provenance = Provenance(
                     source_kind="provider",
                     acquired_at=datetime.now(UTC),
-                    provider=provider.provider,
-                    model=provider.model,
+                    provider=provider_name,
+                    model=model,
                     request_id=result.provider_request_id,
                     local_request_id=request_id,
                     prompt_version=PROMPT_VERSION,
-                    input_artifact_ids=(master.artifact_id,) if master else (),
+                    input_artifact_ids=(master_reference_id,) if master_reference_id else (),
                 )
+                if source_suffix is not None:
+                    source_path = stage / f"{role}_source{source_suffix}"
+                    source_path.write_bytes(result.image_bytes)
+                    source_record = store.ingest(
+                        source_path,
+                        owner_scope="brand",
+                        owner_id=brand_id,
+                        kind="environment_source_plate",
+                        slot_key=role,
+                        provenance=provider_provenance,
+                        dependencies=[
+                            InputDependency(master_reference_id, "world_style_reference")
+                        ]
+                        if master_reference_id
+                        else [],
+                        expected_media_type=result.mime_type,
+                    )
+                    response_metadata["source_artifact_id"] = source_record.identity.artifact_id
+                path = stage / f"{role}.png"
+                image.save(path, format="PNG")
+                normalized_dependencies = []
+                if source_record is not None:
+                    normalized_dependencies.append(
+                        InputDependency(source_record.identity.artifact_id, "provider_source")
+                    )
+                if master_reference_id:
+                    normalized_dependencies.append(
+                        InputDependency(master_reference_id, "world_style_reference")
+                    )
                 record = store.ingest(
                     path,
                     owner_scope="brand",
                     owner_id=brand_id,
                     kind="environment_plate",
                     slot_key=role,
-                    provenance=provenance,
-                    dependencies=[InputDependency(master.artifact_id, "world_style_reference")]
-                    if master
-                    else [],
+                    provenance=provider_provenance,
+                    dependencies=normalized_dependencies,
                     expected_media_type="image/png",
                 )
                 _transition(
@@ -418,12 +544,19 @@ def generate_set(
                         role=role,
                         artifact_id=record.identity.artifact_id,
                         sha256=record.sha256,
-                        provider=provider.provider,
-                        model=provider.model,
+                        provider=provider_name,
+                        model=model,
                         local_request_id=request_id,
                         provider_request_id=result.provider_request_id,
                         generated_at=record.provenance.acquired_at,
-                        source_references=(master.artifact_id,) if master else (),
+                        source_references=(master_reference_id,) if master_reference_id else (),
+                        requested_image_size=image_size,
+                        location=location,
+                        source_artifact_id=(
+                            source_record.identity.artifact_id if source_record else None
+                        ),
+                        source_sha256=sha256(result.image_bytes).hexdigest(),
+                        source_dimensions=source_dimensions,
                     )
                 )
             except ProviderFailure as exc:
@@ -455,7 +588,16 @@ def generate_set(
                 )
                 counts["ambiguous" if status == "ambiguous" else "failed"] += 1
                 raise
-        environment = EnvironmentSet(set_id=theme, plates=tuple(plates))
+        environment = EnvironmentSet(
+            set_id=set_id,
+            theme=theme,
+            plates=tuple(plates),
+            provider=provider_name,
+            model=model,
+            location=location,
+            requested_image_size=image_size,
+            generation_fingerprint=generation_fingerprint,
+        )
         manifest_path = stage / "environment_set.json"
         manifest_path.write_text(environment.model_dump_json(), encoding="utf-8")
         digest = sha256(manifest_path.read_bytes()).hexdigest()
@@ -470,8 +612,9 @@ def generate_set(
                 provenance=Provenance(
                     source_kind="deterministic",
                     acquired_at=datetime.now(UTC),
-                    provider="tovitunes.environment_sets",
-                    model=PROMPT_VERSION,
+                    provider=f"tovitunes.environment_sets:{provider_name}",
+                    model=model,
+                    prompt_version=PROMPT_VERSION,
                     input_artifact_ids=tuple(p.artifact_id for p in plates),
                 ),
                 dependencies=[InputDependency(p.artifact_id, "environment_plate") for p in plates],
@@ -480,7 +623,7 @@ def generate_set(
         sheet = contact_sheet(
             store,
             environment,
-            review_output / f"{theme}_attempt_{attempt}_environment_contact_sheet.png",
+            review_output / f"{set_id}_attempt_{attempt}_environment_contact_sheet.png",
         )
         with closing(db.connect()) as conn:
             decision = conn.execute(
@@ -489,9 +632,16 @@ def generate_set(
                 (manifest.identity.artifact_id,),
             ).fetchone()
         return {
-            "set_id": theme,
+            "set_id": set_id,
+            "theme": theme,
+            "provider": provider_name,
+            "model": model,
+            "requested_image_size": image_size,
+            "location": location,
+            "generation_fingerprint": generation_fingerprint,
             "manifest_artifact_id": manifest.identity.artifact_id,
             "plate_artifact_ids": {p.role: p.artifact_id for p in plates},
+            "source_artifact_ids": {p.role: p.source_artifact_id for p in plates},
             "contact_sheet": str(sheet),
             "review_status": decision[0] if decision else "pending",
             "provider_calls": counts,
@@ -512,6 +662,47 @@ def contact_sheet(store: AssetStore, environment: EnvironmentSet, output: Path) 
             (cell_x + 8, cell_y + 833, cell_x + 472, cell_y + 872), fill="#1d3557"
         )
         draw.text((cell_x + 18, cell_y + 841), plate.role, fill="white", font=font)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(output)
+    return output
+
+
+def export_contact_sheet(config: RuntimeConfig, artifact_id: str, output: Path) -> Path:
+    _, store, _ = _store(config)
+    environment = EnvironmentSet.model_validate(store.read_json(artifact_id))
+    if tuple(plate.role for plate in environment.plates) != ROLES:
+        raise ValueError("environment set lacks required plates")
+    return contact_sheet(store, environment, output)
+
+
+def comparison_sheet(
+    config: RuntimeConfig,
+    flash_artifact_id: str,
+    pro_artifact_id: str,
+    output: Path,
+) -> Path:
+    _, store, _ = _store(config)
+    flash = EnvironmentSet.model_validate(store.read_json(flash_artifact_id))
+    pro = EnvironmentSet.model_validate(store.read_json(pro_artifact_id))
+    if tuple(plate.role for plate in flash.plates) != ROLES:
+        raise ValueError("Flash environment set lacks required plates")
+    if tuple(plate.role for plate in pro.plates) != ROLES:
+        raise ValueError("Pro environment set lacks required plates")
+    if pro.model != "gemini-3-pro-image":
+        raise ValueError("comparison Pro set is not pinned to gemini-3-pro-image")
+    sheet = Image.new("RGB", (960, 3440), "white")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default(size=18)
+    for row, role in enumerate(ROLES):
+        for column, (label, environment) in enumerate((("Flash", flash), ("Nano Banana Pro", pro))):
+            plate = environment.plate(role)
+            x = column * 480
+            y = row * 860
+            with Image.open(store.path_for(plate.artifact_id)) as source:
+                thumb = source.convert("RGB").resize((464, 825), Image.Resampling.LANCZOS)
+                sheet.paste(thumb, (x + 8, y + 8))
+            draw.rectangle((x + 8, y + 833, x + 472, y + 852), fill="#1d3557")
+            draw.text((x + 18, y + 834), f"{role} | {label}", fill="white", font=font)
     output.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output)
     return output
@@ -568,10 +759,18 @@ def decide_set(
             ).fetchone()
         if rejection:
             raise ValueError("rejected environment set requires a new generation attempt")
-    for plate in environment.plates:
+    review_artifact_ids = [
+        artifact_id
+        for plate in environment.plates
+        for artifact_id in (
+            *((plate.source_artifact_id,) if plate.source_artifact_id else ()),
+            plate.artifact_id,
+        )
+    ]
+    for artifact_id_to_review in review_artifact_ids:
         store.record_approval(
             ApprovalDecision(
-                target_id=plate.artifact_id,
+                target_id=artifact_id_to_review,
                 target_kind="artifact",
                 status=status,
                 actor=actor,
@@ -597,6 +796,9 @@ def decide_set(
 def select_set(config: RuntimeConfig, artifact_id: str) -> dict[str, object]:
     _, store, _ = _store(config)
     environment = EnvironmentSet.model_validate(store.read_json(artifact_id))
+    for plate in environment.plates:
+        if plate.source_artifact_id:
+            store.select(plate.source_artifact_id)
     for plate in environment.plates:
         store.select(plate.artifact_id)
     store.select(artifact_id)
