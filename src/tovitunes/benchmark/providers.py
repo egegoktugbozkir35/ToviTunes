@@ -358,12 +358,14 @@ class GeminiImageProvider:
         project: str | None = None,
         location: str | None = None,
         image_size: Literal["1K", "2K", "4K"] = "1K",
+        aspect_ratio: Literal["1:1", "9:16"] = "9:16",
         timeout_seconds: float = 180,
     ) -> None:
         if image_size not in {"1K", "2K", "4K"}:
             raise ValueError("unsupported Gemini image size")
         self.model = model
         self.image_size = image_size
+        self.aspect_ratio = aspect_ratio
         self._transport = transport
         self._credentials_loader = credentials_loader
         self._project = project
@@ -375,8 +377,8 @@ class GeminiImageProvider:
         return ProviderCapabilities(
             reference_images=True,
             maximum_reference_images=14,
-            portrait_9_16=True,
-            requested_size=f"{self.image_size}, 9:16",
+            portrait_9_16=self.aspect_ratio == "9:16",
+            requested_size=f"{self.image_size}, {self.aspect_ratio}",
             grounding_enabled=False,
             api_contract="Vertex AI Gemini generateContent via google-genai",
         )
@@ -411,7 +413,7 @@ class GeminiImageProvider:
                 ],
                 "response_modalities": ["TEXT", "IMAGE"],
                 "image_config": {
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": self.aspect_ratio,
                     "image_size": self.image_size,
                 },
                 "tools": [],
@@ -462,7 +464,7 @@ class GeminiImageProvider:
         config = types.GenerateContentConfig(
             response_modalities=[types.Modality.TEXT, types.Modality.IMAGE],
             image_config=types.ImageConfig(
-                aspect_ratio="9:16", image_size=self.image_size
+                aspect_ratio=self.aspect_ratio, image_size=self.image_size
             ),
             tools=[],
         )
