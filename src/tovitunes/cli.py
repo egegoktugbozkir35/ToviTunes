@@ -106,6 +106,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command in {"approve", "reject"}:
             sub.add_argument("--actor", required=True)
             sub.add_argument("--reason", required=True)
+    lesson_objects = subcommands.add_parser("lesson-objects")
+    lesson_object_commands = lesson_objects.add_subparsers(
+        dest="lesson_object_command", required=True
+    )
+    lesson_object_commands.add_parser("plan")
+    lesson_generate = lesson_object_commands.add_parser("generate")
+    lesson_generate.add_argument("--confirm-provider-generation", action="store_true")
+    lesson_generate.add_argument(
+        "--output", type=Path, default=Path("outputs/PROP_ART_V2_REVIEW.png")
+    )
+    lesson_candidates = lesson_object_commands.add_parser("generate-candidates")
+    lesson_candidates.add_argument("--confirm-provider-generation", action="store_true")
+    lesson_candidates.add_argument("--candidates-per-object", type=int, default=4)
+    lesson_candidates.add_argument(
+        "--output", type=Path, default=Path("outputs/PROP_ART_V2_REVIEW.png")
+    )
     for command in ("plan", "status"):
         sub = subcommands.add_parser(command)
         sub.add_argument("episode_id")
@@ -223,6 +239,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "lesson-objects":
+        from tovitunes.render.lesson_objects import contact_sheet, generate, generate_candidates
+        from tovitunes.render.lesson_objects import plan as plan_lesson_objects
+
+        try:
+            if args.lesson_object_command == "plan":
+                lesson_result = plan_lesson_objects(config)
+            elif args.lesson_object_command == "generate-candidates":
+                lesson_result = generate_candidates(
+                    config,
+                    confirmed=args.confirm_provider_generation,
+                    candidates_per_object=args.candidates_per_object,
+                )
+                lesson_result["contact_sheet"] = str(
+                    contact_sheet(config, lesson_result, args.output.resolve())
+                )
+            else:
+                lesson_result = generate(config, confirmed=args.confirm_provider_generation)
+                lesson_result["contact_sheet"] = str(
+                    contact_sheet(config, lesson_result, args.output.resolve())
+                )
+        except ProviderFailure as exc:
+            parser.error(
+                json.dumps(
+                    {
+                        "error": str(exc),
+                        "outcome": exc.outcome,
+                        "provider_request_id": exc.provider_request_id,
+                        "diagnostics": exc.diagnostics,
+                    },
+                    sort_keys=True,
+                )
+            )
+        except (ValueError, KeyError, OSError, RuntimeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(lesson_result, sort_keys=True))
+        return 0
     if args.command == "environment":
         from tovitunes.render.environment_sets import (
             comparison_sheet,

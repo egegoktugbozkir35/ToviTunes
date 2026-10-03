@@ -64,10 +64,96 @@ class ProviderFailure(Exception):
         *,
         outcome: Literal["retryable_failure", "terminal_failure", "ambiguous"],
         provider_request_id: str | None = None,
+        diagnostics: dict[str, object] | None = None,
     ) -> None:
         super().__init__(reason)
         self.outcome = outcome
         self.provider_request_id = provider_request_id
+        self.diagnostics = dict(diagnostics or {})
+
+
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b(authorization|cookies?|set-cookie|access[_ -]?token|refresh[_ -]?token|"
+    r"id[_ -]?token|client[_ -]?secret|private[_ -]?key|credentials?)"
+    r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+)"
+)
+_BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_JWT_TOKEN = re.compile(r"\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\b")
+_GOOGLE_TOKEN = re.compile(r"\b(?:ya29\.|1//|AIza)[A-Za-z0-9._~-]{12,}\b")
+
+
+def _sanitize_provider_text(value: object, *, limit: int = 500) -> str | None:
+    """Return one bounded line while removing common credential/token forms."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = " ".join(value.split())
+    text = _BEARER_TOKEN.sub("Bearer [REDACTED]", text)
+    text = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _JWT_TOKEN.sub("[REDACTED]", text)
+    text = _GOOGLE_TOKEN.sub("[REDACTED]", text)
+    return text[:limit]
+
+
+def _safe_identifier(value: object, *, limit: int = 200) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = re.sub(r"[^A-Za-z0-9._:/+@=-]", "_", value.strip())[:limit]
+    return cleaned or None
+
+
+def _vertex_error_diagnostics(
+    exc: errors.APIError, *, model: str, location: str
+) -> tuple[str, dict[str, object], str | None]:
+    """Extract an allowlisted, sanitized subset of a Vertex SDK error."""
+    status_code = int(exc.code or 0)
+    canonical_status = _safe_identifier(exc.status, limit=80)
+    provider_message = _sanitize_provider_text(exc.message)
+    response_headers = getattr(exc.response, "headers", {}) if exc.response is not None else {}
+    request_id = _safe_identifier(response_headers.get("x-request-id"))
+
+    error_info_reason: str | None = None
+    error_info_type: str | None = None
+    details = exc.details
+    if isinstance(details, dict):
+        payload = details.get("error", details)
+        structured = payload.get("details", ()) if isinstance(payload, dict) else ()
+        if isinstance(structured, list):
+            for item in structured:
+                if not isinstance(item, dict):
+                    continue
+                candidate_reason = _safe_identifier(item.get("reason"), limit=120)
+                candidate_type = _safe_identifier(item.get("@type"), limit=160)
+                if candidate_reason:
+                    error_info_reason = candidate_reason
+                if candidate_type:
+                    error_info_type = candidate_type.rsplit("/", 1)[-1]
+                if error_info_reason:
+                    break
+
+    diagnostics: dict[str, object] = {
+        "http_status": status_code,
+        "model": model,
+        "location": location,
+        "endpoint_family": "Vertex AI Gemini generateContent",
+    }
+    for key, value in (
+        ("canonical_status", canonical_status),
+        ("provider_message", provider_message),
+        ("provider_request_id", request_id),
+        ("error_info_reason", error_info_reason),
+        ("error_info_type", error_info_type),
+    ):
+        if value:
+            diagnostics[key] = value
+
+    summary = f"Vertex AI returned HTTP {status_code}"
+    if canonical_status:
+        summary += f" ({canonical_status})"
+    if provider_message:
+        summary += f": {provider_message}"
+    if error_info_reason:
+        summary += f" [reason={error_info_reason}]"
+    return summary, diagnostics, request_id
 
 
 @dataclass(frozen=True)
@@ -358,12 +444,14 @@ class GeminiImageProvider:
         project: str | None = None,
         location: str | None = None,
         image_size: Literal["1K", "2K", "4K"] = "1K",
+        aspect_ratio: Literal["1:1", "9:16"] = "9:16",
         timeout_seconds: float = 180,
     ) -> None:
         if image_size not in {"1K", "2K", "4K"}:
             raise ValueError("unsupported Gemini image size")
         self.model = model
         self.image_size = image_size
+        self.aspect_ratio = aspect_ratio
         self._transport = transport
         self._credentials_loader = credentials_loader
         self._project = project
@@ -375,8 +463,8 @@ class GeminiImageProvider:
         return ProviderCapabilities(
             reference_images=True,
             maximum_reference_images=14,
-            portrait_9_16=True,
-            requested_size=f"{self.image_size}, 9:16",
+            portrait_9_16=self.aspect_ratio == "9:16",
+            requested_size=f"{self.image_size}, {self.aspect_ratio}",
             grounding_enabled=False,
             api_contract="Vertex AI Gemini generateContent via google-genai",
         )
@@ -411,7 +499,7 @@ class GeminiImageProvider:
                 ],
                 "response_modalities": ["TEXT", "IMAGE"],
                 "image_config": {
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": self.aspect_ratio,
                     "image_size": self.image_size,
                 },
                 "tools": [],
@@ -462,7 +550,7 @@ class GeminiImageProvider:
         config = types.GenerateContentConfig(
             response_modalities=[types.Modality.TEXT, types.Modality.IMAGE],
             image_config=types.ImageConfig(
-                aspect_ratio="9:16", image_size=self.image_size
+                aspect_ratio=self.aspect_ratio, image_size=self.image_size
             ),
             tools=[],
         )
@@ -524,11 +612,14 @@ class GeminiImageProvider:
                 if status == 408 or status >= 500
                 else "terminal_failure"
             )
-            headers = exc.response.headers if exc.response is not None else {}
+            summary, diagnostics, request_id = _vertex_error_diagnostics(
+                exc, model=self.model, location=self.location
+            )
             raise ProviderFailure(
-                f"Vertex AI returned HTTP {status}",
+                summary,
                 outcome=outcome,
-                provider_request_id=headers.get("x-request-id"),
+                provider_request_id=request_id,
+                diagnostics=diagnostics,
             ) from exc
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ProviderFailure(

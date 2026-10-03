@@ -65,7 +65,19 @@ def build_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
         if prop["motion"] == "roll_in":
             bbox = prop["bbox"]
             ball = ImageClip(
-                np.array(prop_image(prop["type"], bbox[2] - bbox[0])), transparent=True
+                np.array(
+                    prop_image(
+                        prop["type"],
+                        bbox[2] - bbox[0],
+                        reviewed_asset_path=Path(
+                            payload.get("lesson_asset_paths", {}).get(prop["type"])
+                        )
+                        if payload.get("lesson_asset_paths", {}).get(prop["type"])
+                        else None,
+                        style_version=payload.get("prop_style_version", "preschool_soft_v1"),
+                    )
+                ),
+                transparent=True,
             )
             ball = ball.with_duration(duration).with_position(
                 lambda t, p=prop: prop_position(t, p, canvas[0])
@@ -140,7 +152,13 @@ def build_dynamic_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
     for track in motion.prop_tracks:
         prop = props[track.prop_key]
         size = prop["bbox"][2] - prop["bbox"][0]
-        asset = prop_image(track.prop_key, size)
+        asset_path = payload.get("lesson_asset_paths", {}).get(track.prop_key)
+        asset = prop_image(
+            track.prop_key,
+            size,
+            reviewed_asset_path=Path(asset_path) if asset_path else None,
+            style_version=payload.get("prop_style_version", "preschool_soft_v1"),
+        )
         clip = clip_for(asset).resized(lambda t, p=track: prop_state(p, motion, t)[2])
         if any(e.motion in {"wiggle", "roll_in"} for e in track.events):
             clip = clip.rotated(lambda t, p=track: prop_state(p, motion, t)[3], expand=True)

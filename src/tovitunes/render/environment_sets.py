@@ -564,7 +564,12 @@ def generate_set(
                     exc.outcome if started or exc.outcome != "ambiguous" else "terminal_failure"
                 )
                 _transition(
-                    db, request_id, status, provider_id=exc.provider_request_id, error=str(exc)
+                    db,
+                    request_id,
+                    status,
+                    provider_id=exc.provider_request_id,
+                    response_metadata=exc.diagnostics or None,
+                    error=str(exc),
                 )
                 counts["ambiguous" if status == "ambiguous" else "failed"] += 1
                 raise

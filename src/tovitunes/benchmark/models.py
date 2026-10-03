@@ -92,7 +92,7 @@ class CanonicalImageSpec(BaseModel):
     palette: dict[str, str]
     identity_rules: tuple[str, ...]
     forbidden_changes: tuple[str, ...]
-    aspect_ratio: Literal["9:16"] = "9:16"
+    aspect_ratio: Literal["1:1", "9:16"] = "9:16"
     composition_brief: str = "One 9:16 portrait image for a preschool educational Short."
     reference_instructions: str = (
         "Treat all supplied views as the same canonical Tovi character. "

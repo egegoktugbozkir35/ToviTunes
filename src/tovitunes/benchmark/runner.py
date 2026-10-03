@@ -306,6 +306,7 @@ class BenchmarkRunner:
                 outcome,
                 provider_request_id=exc.provider_request_id if remote_started else None,
                 latency_seconds=latency,
+                response_metadata=exc.diagnostics or None,
                 error_kind=exc.outcome if remote_started else "local_preflight",
                 error_reason=str(exc),
             )
