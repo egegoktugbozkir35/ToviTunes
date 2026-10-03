@@ -195,6 +195,7 @@ Across the immutable historical attempt and this continuation:
 - Character lock: valid, 48 artifacts
 - `git diff --check`: passed
 - Tests and validation provider calls: 0
-- GitHub CI: pending for the final pushed head
+- GitHub CI: passed on Windows for implementation head `19893c1`, run `37116086662`, job
+  `111183070084`
 
 PROP_ART_VERTEX_ACCESS_BLOCKED
