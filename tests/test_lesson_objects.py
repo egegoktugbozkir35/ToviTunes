@@ -9,7 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from tovitunes.artifacts.store import AssetStore
-from tovitunes.benchmark.providers import ProviderResult
+from tovitunes.benchmark.providers import ProviderFailure, ProviderResult
 from tovitunes.config import EnvironmentGenerationConfig, RuntimeConfig
 from tovitunes.domain.review import ApprovalDecision, RightsDecision
 from tovitunes.persistence.db import Database
@@ -19,7 +19,9 @@ from tovitunes.render.composition import (
 )
 from tovitunes.render.lesson_objects import (
     OBJECT_KEYS,
+    contact_sheet,
     generate,
+    generate_candidates,
     plan,
     resolve_reviewed_assets,
 )
@@ -178,3 +180,72 @@ def test_generation_rejects_opaque_provider_output(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="LESSON_OBJECT_TRANSPARENCY_BLOCKED"):
         generate(runtime(tmp_path), confirmed=True, provider=Opaque())
+
+
+def test_candidate_generation_uses_eight_distinct_pending_slots(tmp_path: Path) -> None:
+    config = runtime(tmp_path)
+    provider = FakeTransparentProvider()
+    result = generate_candidates(config, confirmed=True, provider=provider)
+    assert provider.calls == ["red_apple"] * 4 + ["red_ball"] * 4
+    assert result["audit"] == {
+        "prepared": 8,
+        "remote_started": 8,
+        "succeeded": 8,
+        "terminal_failure": 0,
+        "retryable_failure": 0,
+        "ambiguous": 0,
+        "technically_rejected_after_success": 0,
+        "actual_live_image_requests": 8,
+    }
+    candidates = result["candidates"]
+    assert len(candidates) == 8
+    assert len({item["candidate_slot"] for item in candidates}) == 8
+    assert all(item["review_status"] == "pending" for item in candidates)
+    assert all(item["rights_status"] == "review_required" for item in candidates)
+    assert all(item["normalized_dimensions"] == [1024, 1024] for item in candidates)
+    output = contact_sheet(config, result, tmp_path / "review.png")
+    with Image.open(output) as sheet:
+        assert sheet.width >= 1700 and sheet.height >= 1300
+
+
+def test_candidate_generation_retains_rejected_source_and_continues(tmp_path: Path) -> None:
+    class FirstOpaque(FakeTransparentProvider):
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            result = super().generate(spec, reference_paths, on_remote_start=on_remote_start)
+            if len(self.calls) != 1:
+                return result
+            with Image.open(io.BytesIO(result.image_bytes)) as image:
+                opaque = image.convert("RGB").convert("RGBA")
+            data = io.BytesIO()
+            opaque.save(data, format="PNG")
+            return result.model_copy(update={"image_bytes": data.getvalue()})
+
+    result = generate_candidates(runtime(tmp_path), confirmed=True, provider=FirstOpaque())
+    first = result["candidates"][0]
+    assert first["technical_validation_status"] == "rejected"
+    assert first["source_artifact_id"]
+    assert first["normalized_artifact_id"] is None
+    assert len(result["candidates"]) == 8
+    assert result["audit"]["technically_rejected_after_success"] == 1
+
+
+def test_first_terminal_access_failure_stops_candidate_run(tmp_path: Path) -> None:
+    class Blocked(FakeTransparentProvider):
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            if on_remote_start:
+                on_remote_start()
+            self.calls.append(spec.case_id)
+            raise ProviderFailure(
+                "Vertex AI returned HTTP 403 (PERMISSION_DENIED): blocked",
+                outcome="terminal_failure",
+                diagnostics={
+                    "http_status": 403,
+                    "canonical_status": "PERMISSION_DENIED",
+                    "provider_message": "blocked",
+                },
+            )
+
+    provider = Blocked()
+    with pytest.raises(ProviderFailure, match="PERMISSION_DENIED"):
+        generate_candidates(runtime(tmp_path), confirmed=True, provider=provider)
+    assert provider.calls == ["red_apple"]

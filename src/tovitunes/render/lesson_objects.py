@@ -6,14 +6,14 @@ import tempfile
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import Field
 
 from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.benchmark.models import CanonicalImageSpec
-from tovitunes.benchmark.providers import GeminiImageProvider, ImageProvider
+from tovitunes.benchmark.providers import GeminiImageProvider, ImageProvider, ProviderFailure
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
@@ -65,6 +65,31 @@ class LessonObjectAsset(ProductionModel):
     review_status: Literal["pending", "approved"] = "pending"
     rights_status: Literal["review_required", "commercial_use_confirmed"] = "review_required"
     lesson_color: str = LESSON_RED
+
+
+class LessonObjectCandidate(ProductionModel):
+    object_key: str
+    candidate_index: int = Field(ge=1, le=4)
+    candidate_slot: str
+    source_artifact_id: str
+    normalized_artifact_id: str | None = None
+    source_sha256: str
+    normalized_sha256: str | None = None
+    provider: str
+    model: str
+    location: str
+    requested_resolution: str
+    provider_request_id: str | None = None
+    local_request_id: str
+    source_dimensions: tuple[int, int]
+    normalized_dimensions: tuple[int, int] | None = None
+    mime_type: str
+    usage_metadata: dict[str, Any] | None = None
+    technical_validation_status: Literal["valid", "rejected"]
+    technical_rejection_reason: str | None = None
+    review_status: Literal["pending"] = "pending"
+    rights_status: Literal["review_required"] = "review_required"
+    generation_timestamp: datetime
 
 
 def _store(config: RuntimeConfig) -> tuple[AssetStore, str]:
@@ -322,6 +347,241 @@ def generate(
     }
 
 
+def _candidate_slot(object_key: str, candidate_index: int) -> str:
+    if object_key not in OBJECT_KEYS or not 1 <= candidate_index <= 4:
+        raise ValueError("unsupported lesson-object candidate identity")
+    return f"{object_key}_candidate_{candidate_index:02d}"
+
+
+def _source_dimensions(data: bytes) -> tuple[int, int]:
+    with Image.open(io.BytesIO(data)) as opened:
+        opened.load()
+        return int(opened.width), int(opened.height)
+
+
+def _request_audit_entry(
+    object_key: str, candidate_index: int, local_request_id: str
+) -> dict[str, object]:
+    return {
+        "object_key": object_key,
+        "candidate_index": candidate_index,
+        "local_request_id": local_request_id,
+        "prepared": True,
+        "remote_started": False,
+        "outcome": None,
+        "provider_request_id": None,
+        "diagnostics": {},
+        "technically_rejected_after_success": False,
+    }
+
+
+def generate_candidates(
+    config: RuntimeConfig,
+    *,
+    confirmed: bool,
+    candidates_per_object: int = 4,
+    provider: ImageProvider | None = None,
+) -> dict[str, object]:
+    """Generate an explicit, bounded review set without changing canonical selection."""
+    if not confirmed:
+        raise ValueError("live image generation requires --confirm-provider-generation")
+    if not 1 <= candidates_per_object <= 4:
+        raise ValueError("candidates-per-object must be between 1 and 4")
+    planned = len(OBJECT_KEYS) * candidates_per_object
+    if planned > 8:
+        raise ValueError("lesson-object candidate generation exceeds the eight-call ceiling")
+    configured = provider or _provider(config)
+    if isinstance(configured, GeminiImageProvider):
+        configured.preflight()
+    store, brand_id = _store(config)
+    working = config.data_root / ".lesson-object-working"
+    working.mkdir(exist_ok=True)
+    candidates: list[LessonObjectCandidate] = []
+    requests: list[dict[str, object]] = []
+    with tempfile.TemporaryDirectory(dir=working) as dirname:
+        stage = Path(dirname)
+        trusted = AssetStore(config.data_root, store.database, generated_source_roots=[stage])
+        for object_key in OBJECT_KEYS:
+            for candidate_index in range(1, candidates_per_object + 1):
+                spec = _spec(object_key, brand_id).model_copy(update={"attempt": candidate_index})
+                local_request_id = spec.fingerprint()
+                audit = _request_audit_entry(object_key, candidate_index, local_request_id)
+                requests.append(audit)
+
+                def mark_remote_started(entry: dict[str, object] = audit) -> None:
+                    entry["remote_started"] = True
+
+                try:
+                    result = configured.generate(
+                        spec, (), on_remote_start=mark_remote_started
+                    )
+                except ProviderFailure as exc:
+                    audit["outcome"] = exc.outcome
+                    audit["provider_request_id"] = exc.provider_request_id
+                    audit["diagnostics"] = exc.diagnostics
+                    if object_key == "red_apple" and candidate_index == 1 and (
+                        exc.outcome == "terminal_failure"
+                        or exc.diagnostics.get("http_status") == 403
+                        or exc.diagnostics.get("canonical_status") == "PERMISSION_DENIED"
+                    ):
+                        raise
+                    continue
+
+                audit["outcome"] = "succeeded"
+                audit["provider_request_id"] = result.provider_request_id
+                slot = _candidate_slot(object_key, candidate_index)
+                suffix = SOURCE_SUFFIXES.get(result.mime_type)
+                if suffix is None:
+                    audit["technically_rejected_after_success"] = True
+                    audit["technical_rejection_reason"] = "unsupported provider MIME type"
+                    continue
+                generated_at = datetime.now(UTC)
+                source_path = stage / f"{slot}-source{suffix}"
+                source_path.write_bytes(result.image_bytes)
+                source = trusted.ingest(
+                    source_path,
+                    owner_scope="brand",
+                    owner_id=brand_id,
+                    kind="lesson_object_source",
+                    slot_key=slot,
+                    provenance=Provenance(
+                        source_kind="provider",
+                        acquired_at=generated_at,
+                        provider=configured.provider,
+                        model=configured.model,
+                        request_id=result.provider_request_id,
+                        local_request_id=local_request_id,
+                        prompt_version=PROMPT_VERSION,
+                    ),
+                )
+                _pending(trusted, source.identity.artifact_id)
+                source_dimensions = _source_dimensions(result.image_bytes)
+                normalized_record = None
+                rejection_reason = None
+                try:
+                    normalized = normalize(
+                        _validate_transparent_source(result.image_bytes, result.mime_type)
+                    )
+                except ValueError as exc:
+                    rejection_reason = str(exc)
+                    audit["technically_rejected_after_success"] = True
+                    audit["technical_rejection_reason"] = rejection_reason
+                else:
+                    normalized_path = stage / f"{slot}.png"
+                    normalized.save(normalized_path, format="PNG", optimize=False)
+                    normalized_record = trusted.ingest(
+                        normalized_path,
+                        owner_scope="brand",
+                        owner_id=brand_id,
+                        kind="lesson_object_candidate",
+                        slot_key=slot,
+                        provenance=Provenance(
+                            source_kind="deterministic",
+                            acquired_at=generated_at,
+                            provider="tovitunes.lesson_objects.normalize",
+                            model=LESSON_OBJECT_STYLE_VERSION,
+                            input_artifact_ids=(source.identity.artifact_id,),
+                        ),
+                        dependencies=[
+                            InputDependency(source.identity.artifact_id, "provider_source")
+                        ],
+                        expected_media_type="image/png",
+                    )
+                    _pending(trusted, normalized_record.identity.artifact_id)
+                candidates.append(
+                    LessonObjectCandidate(
+                        object_key=object_key,
+                        candidate_index=candidate_index,
+                        candidate_slot=slot,
+                        source_artifact_id=source.identity.artifact_id,
+                        normalized_artifact_id=(
+                            normalized_record.identity.artifact_id if normalized_record else None
+                        ),
+                        source_sha256=source.sha256,
+                        normalized_sha256=(
+                            normalized_record.sha256 if normalized_record else None
+                        ),
+                        provider=configured.provider,
+                        model=configured.model,
+                        location=str(getattr(configured, "location", "unknown")),
+                        requested_resolution=str(
+                            getattr(configured, "image_size", "unknown")
+                        ),
+                        provider_request_id=result.provider_request_id,
+                        local_request_id=local_request_id,
+                        source_dimensions=source_dimensions,
+                        normalized_dimensions=CANVAS if normalized_record else None,
+                        mime_type=result.mime_type,
+                        usage_metadata=result.usage,
+                        technical_validation_status=(
+                            "valid" if normalized_record else "rejected"
+                        ),
+                        technical_rejection_reason=rejection_reason,
+                        generation_timestamp=generated_at,
+                    )
+                )
+        manifest_data = {
+            "style_version": LESSON_OBJECT_STYLE_VERSION,
+            "prompt_version": PROMPT_VERSION,
+            "generation_budget": planned,
+            "requests": requests,
+            "candidates": [item.model_dump(mode="json") for item in candidates],
+        }
+        manifest_path = stage / "lesson-object-candidates-v2.json"
+        manifest_path.write_text(
+            json.dumps(manifest_data, sort_keys=True), encoding="utf-8"
+        )
+        manifest = trusted.ingest(
+            manifest_path,
+            owner_scope="brand",
+            owner_id=brand_id,
+            kind="lesson_object_candidate_manifest",
+            slot_key=LESSON_OBJECT_STYLE_VERSION,
+            provenance=Provenance(
+                source_kind="deterministic",
+                acquired_at=datetime.now(UTC),
+                provider="tovitunes.lesson_objects.candidates",
+                model=LESSON_OBJECT_STYLE_VERSION,
+                input_artifact_ids=tuple(
+                    item.normalized_artifact_id or item.source_artifact_id
+                    for item in candidates
+                ),
+            ),
+            dependencies=[
+                InputDependency(
+                    item.normalized_artifact_id or item.source_artifact_id,
+                    item.candidate_slot,
+                )
+                for item in candidates
+            ],
+        )
+        _pending(trusted, manifest.identity.artifact_id)
+    audit_totals = {
+        "prepared": len(requests),
+        "remote_started": sum(bool(item["remote_started"]) for item in requests),
+        "succeeded": sum(item["outcome"] == "succeeded" for item in requests),
+        "terminal_failure": sum(item["outcome"] == "terminal_failure" for item in requests),
+        "retryable_failure": sum(
+            item["outcome"] == "retryable_failure" for item in requests
+        ),
+        "ambiguous": sum(item["outcome"] == "ambiguous" for item in requests),
+        "technically_rejected_after_success": sum(
+            bool(item["technically_rejected_after_success"]) for item in requests
+        ),
+        "actual_live_image_requests": sum(
+            bool(item["remote_started"]) for item in requests
+        ),
+    }
+    return {
+        "style_version": LESSON_OBJECT_STYLE_VERSION,
+        "generation_budget": planned,
+        "audit": audit_totals,
+        "requests": requests,
+        "candidates": [item.model_dump(mode="json") for item in candidates],
+        "manifest_artifact_id": manifest.identity.artifact_id,
+    }
+
+
 def resolve_reviewed_assets(
     store: AssetStore, brand_id: str, object_keys: tuple[str, ...] = OBJECT_KEYS
 ) -> dict[str, Path]:
@@ -349,72 +609,86 @@ def resolve_reviewed_assets(
 
 def contact_sheet(config: RuntimeConfig, generation: dict[str, object], output: Path) -> Path:
     store, _ = _store(config)
-    raw_assets = generation.get("assets")
+    raw_assets = generation.get("candidates", generation.get("assets"))
     if not isinstance(raw_assets, list):
         raise ValueError("generation result lacks lesson objects")
-    paths = {
-        str(item["object_key"]): store.path_for(str(item["asset_artifact_id"]))
-        for item in raw_assets
-        if isinstance(item, dict)
-    }
-    cards = [
+    candidate_mode = "candidates" in generation
+    cards: list[tuple[str, Image.Image]] = [
         (
-            "OLD SWATCH / preschool_soft_v1",
+            "SWATCH — Legacy",
             prop_image("red_swatch", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
-        ("NEW SWATCH / deterministic", deterministic_swatch(420)),
+        ("SWATCH — V2 deterministic", deterministic_swatch(420)),
         (
-            "OLD APPLE / preschool_soft_v1",
+            "APPLE — Legacy",
             prop_image("red_apple", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
         (
-            "GENERATED APPLE / pending",
-            prop_image(
-                "red_apple",
-                420,
-                reviewed_asset_path=paths["red_apple"],
-                style_version=LESSON_OBJECT_STYLE_VERSION,
-            ),
-        ),
-        (
-            "OLD BALL / preschool_soft_v1",
+            "BALL — Legacy",
             prop_image("red_ball", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
-        (
-            "GENERATED BALL / pending",
-            prop_image(
-                "red_ball",
-                420,
-                reviewed_asset_path=paths["red_ball"],
-                style_version=LESSON_OBJECT_STYLE_VERSION,
-            ),
-        ),
     ]
-    sheet = Image.new("RGB", (1440, 1560), "#F4F1EA")
+    generated_cards: dict[str, list[tuple[str, Image.Image]]] = {
+        "red_apple": [],
+        "red_ball": [],
+    }
+    for item in raw_assets:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = item.get("normalized_artifact_id", item.get("asset_artifact_id"))
+        if not isinstance(artifact_id, str):
+            continue
+        object_key = str(item["object_key"])
+        index = int(item.get("candidate_index", 1))
+        generated_cards[object_key].append(
+            (
+                f"{object_key.removeprefix('red_').upper()} — Candidate {index:02d}",
+                prop_image(
+                    object_key,
+                    420,
+                    reviewed_asset_path=store.path_for(artifact_id),
+                    style_version=LESSON_OBJECT_STYLE_VERSION,
+                ),
+            )
+        )
+    if not candidate_mode:
+        generated_cards["red_apple"][0] = (
+            "APPLE — Candidate 01", generated_cards["red_apple"][0][1]
+        )
+        generated_cards["red_ball"][0] = (
+            "BALL — Candidate 01", generated_cards["red_ball"][0][1]
+        )
+    ordered_cards = cards[:2]
+    ordered_cards.extend([cards[2], *generated_cards["red_apple"]])
+    ordered_cards.extend([cards[3], *generated_cards["red_ball"]])
+    columns = 5
+    card_width, card_height = 330, 385
+    rows = (len(ordered_cards) + columns - 1) // columns
+    sheet = Image.new("RGB", (1770, 110 + rows * 420), "#F4F1EA")
     draw = ImageDraw.Draw(sheet)
-    font = ImageFont.load_default(size=28)
+    font = ImageFont.load_default(size=22)
     title_font = ImageFont.load_default(size=38)
     draw.text((60, 35), "ToviTunes Prop Art V2 — Human Review", fill="#243047", font=title_font)
-    for index, (label, image) in enumerate(cards):
-        column, row = index % 2, index // 2
-        x, y = 55 + column * 710, 115 + row * 470
+    for index, (label, image) in enumerate(ordered_cards):
+        column, row = index % columns, index // columns
+        x, y = 40 + column * 345, 105 + row * 420
         draw.rounded_rectangle(
-            (x, y, x + 655, y + 425),
+            (x, y, x + card_width, y + card_height),
             radius=24,
             fill="white",
             outline="#D8D4CA",
             width=3,
         )
-        checker = Image.new("RGB", (360, 360), "white")
+        checker = Image.new("RGB", (290, 290), "white")
         check = ImageDraw.Draw(checker)
-        for cy in range(0, 360, 30):
-            for cx in range(0, 360, 30):
+        for cy in range(0, 290, 29):
+            for cx in range(0, 290, 29):
                 if (cx // 30 + cy // 30) % 2:
-                    check.rectangle((cx, cy, cx + 29, cy + 29), fill="#E9E9E9")
-        preview = image.resize((360, 360), Image.Resampling.LANCZOS)
+                    check.rectangle((cx, cy, cx + 28, cy + 28), fill="#E9E9E9")
+        preview = image.resize((290, 290), Image.Resampling.LANCZOS)
         checker.paste(preview, (0, 0), preview)
-        sheet.paste(checker, (x + 148, y + 48))
-        draw.text((x + 24, y + 12), label, fill="#252525", font=font)
+        sheet.paste(checker, (x + 20, y + 70))
+        draw.text((x + 18, y + 20), label, fill="#252525", font=font)
     output.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output, format="PNG")
     return output

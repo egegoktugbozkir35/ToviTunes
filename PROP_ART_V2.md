@@ -101,3 +101,100 @@ bounce motion, ball roll/grounding, prop/Tovi separation, semantic identity rete
 No pilot render was started.
 
 PROP_ART_V2_BLOCKED
+
+## Multi-candidate generation attempt — 2026-10-03
+
+### Scope and implementation
+
+This continuation used PR head `a15e1e49db73b3053a74760ce5eaa397185f6205` on existing
+PR `#33` / branch `codex/prop-art-v2`. It added a narrow, separately invoked
+`lesson-objects generate-candidates` path for up to four immutable review candidates per semantic
+object. Candidate sources and technically valid normalized assets use distinct AssetStore slots
+such as `red_apple_candidate_01`; the existing canonical reviewed-asset resolver, approval flow,
+selection flow, renderer, deterministic swatch, and lesson color remain unchanged.
+
+The candidate path hard-limits a run to eight explicitly enumerated requests, uses no retry loop,
+retains provider source evidence before transparency validation, leaves every retained artifact at
+`review_status = pending` and `rights_status = review_required`, and records separate source and
+normalized identities, hashes, dimensions, MIME type, request IDs, usage, validation state, and
+generation time. Regression coverage verifies the eight-call ceiling and order, distinct slots,
+pending review/rights state, rejected-source retention, continuation after a technical rejection,
+contact-sheet layout, and immediate termination after a first-candidate access failure.
+
+### Authorized run configuration
+
+- Run time: `2026-10-03T13:16:38+03:00` (Europe/Istanbul)
+- Provider: `google`
+- Model: `gemini-3-pro-image`
+- Resource project: `project-e3968bf9-fde5-4d99-aea`
+- Location: `global`
+- Requested resolution: `2K`
+- Requested aspect ratio: `1:1`
+- Fresh generation budget: at most 8 requests
+- Intended order: four `red_apple` candidates, then four `red_ball` candidates
+- First local request ID: `3b20c3594edccfd28090f4de76f94c414ab673afc7f4e959eb41392b3aaaa9be`
+
+### New-run provider-call audit
+
+- `prepared`: 1
+- `remote_started`: 1
+- `succeeded`: 0
+- `terminal_failure`: 1
+- `retryable_failure`: 0
+- `ambiguous`: 0
+- `technically_rejected_after_success`: 0
+- `actual_live_image_requests`: 1
+
+The first fresh request was `red_apple` candidate 01. It returned a terminal access failure. The
+critical stop rule was applied immediately; candidates 02–04 and all `red_ball` candidates were not
+prepared or started. No automatic retry occurred.
+
+### Safe Vertex diagnostics
+
+- HTTP status: `403`
+- Canonical status: `PERMISSION_DENIED`
+- Sanitized provider message: `Lightning dunning decision is deny for project: projects/74415701220`
+- ErrorInfo reason: unavailable
+- ErrorInfo type: unavailable
+- Provider request ID: unavailable
+- Model: `gemini-3-pro-image`
+- Location: `global`
+- Endpoint family: `Vertex AI Gemini generateContent`
+
+No token, credential, ADC content, cookie, Authorization header, arbitrary response header, or raw
+provider response body was printed or persisted.
+
+### Candidates and review output
+
+The provider returned no image bytes, so no source or normalized candidate artifact was created.
+Consequently there are no candidate artifact IDs, SHA-256 values, dimensions, MIME types, usage
+metadata, alpha-validation results, review decisions, or rights decisions for this run. No artifact
+was approved, selected, or ranked. `outputs/PROP_ART_V2_REVIEW.png` was not created because there is
+no technically valid new apple candidate and no technically valid new ball candidate.
+
+The deterministic V2 swatch remains unchanged and was not regenerated. No pilot was rendered.
+
+### Cumulative Prop Art V2 provider totals
+
+Across the immutable historical attempt and this continuation:
+
+- Gemini image requests: 2
+- Successful Gemini image responses: 0
+- Terminal failures: 2 (both HTTP 403; only the new response retained structured diagnostics)
+- Technically rejected successful responses: 0
+- NVIDIA Kimi requests: 0
+- Lyria requests: 0
+- Video-generation requests: 0
+- YouTube requests: 0
+
+### Validation
+
+- Full pytest: `583 passed, 10 skipped`
+- Ruff: passed
+- Strict mypy: passed for 70 source files
+- Character lock: valid, 48 artifacts
+- `git diff --check`: passed
+- Tests and validation provider calls: 0
+- GitHub CI: pending for the final pushed head
+
+PROP_ART_VERTEX_ACCESS_BLOCKED
