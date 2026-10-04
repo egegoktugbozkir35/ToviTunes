@@ -13,7 +13,9 @@ MIN_DISTINCT_VISUAL_SCENE_SECONDS = 0.6
 LONG_TAIL_SECONDS = 3.0
 LONG_CHARACTER_SCENE_SECONDS = 3.0
 GROUND_PLANE_Y = 0.92
-PROP_STYLE_VERSION = "preschool_soft_v1"
+LEGACY_PROP_STYLE_VERSION = "preschool_soft_v1"
+PROP_STYLE_VERSION = LEGACY_PROP_STYLE_VERSION
+LESSON_OBJECT_STYLE_VERSION = "lesson_object_assets_v2"
 Direction = Literal["left", "right", "none"]
 
 SLOTS: dict[str, tuple[float, float]] = {
@@ -57,13 +59,22 @@ class PropDefinition:
     supports_bounce: bool = False
     supports_roll: bool = False
     supports_float: bool = False
+    render_strategy: Literal["deterministic_swatch", "reviewed_asset", "legacy_procedural"] = (
+        "legacy_procedural"
+    )
 
 
 # Vocabulary belongs to the supported drawing registry, never to layout selection.
 PROP_DEFINITIONS = {
-    "red_swatch": PropDefinition("abstract", False, supports_float=True),
-    "red_apple": PropDefinition(supports_drop=True, supports_bounce=True),
-    "red_ball": PropDefinition(motion_class="roll", supports_roll=True),
+    "red_swatch": PropDefinition(
+        "abstract", False, supports_float=True, render_strategy="deterministic_swatch"
+    ),
+    "red_apple": PropDefinition(
+        supports_drop=True, supports_bounce=True, render_strategy="reviewed_asset"
+    ),
+    "red_ball": PropDefinition(
+        motion_class="roll", supports_roll=True, render_strategy="reviewed_asset"
+    ),
 }
 
 

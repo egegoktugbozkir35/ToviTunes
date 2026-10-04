@@ -1,16 +1,18 @@
 """Shared supersampled preschool prop style and composition-driven scene artwork."""
 
 import json
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
-from PIL import Image, ImageColor, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter
 from PIL.PngImagePlugin import PngInfo
 
 from tovitunes.domain.storyboard import TimedScene
 from tovitunes.render import VERSION
 from tovitunes.render.composition import (
+    LEGACY_PROP_STYLE_VERSION,
+    LESSON_OBJECT_STYLE_VERSION,
     PROP_DEFINITIONS,
-    PROP_STYLE_VERSION,
     CompositionRequest,
     SceneComposition,
     resolve_composition,
@@ -27,6 +29,8 @@ PROP_STYLE_CONTRACT = {
     "outline_style": "soft_tonal_contour",
     "palette_source": "lesson/brand",
 }
+
+RENDER_STRATEGIES = {key: value.render_strategy for key, value in PROP_DEFINITIONS.items()}
 
 
 def soft_shape(size: int, shapes: list[tuple[str, tuple[int, int, int, int], int]]) -> Image.Image:
@@ -117,9 +121,76 @@ def leaf_shape(image: Image.Image) -> None:
     image.alpha_composite(leaf)
 
 
-def prop_image(kind: str, size: int = 560) -> Image.Image:
+def deterministic_swatch(size: int = 560) -> Image.Image:
+    """Purpose-built teaching card whose authoritative surface is lesson red."""
+    if size <= 0:
+        raise ValueError("invalid size")
+    internal = size * SUPERSAMPLE
+    scale = internal / 600
+    mask = soft_shape(internal, [("rounded", (35, 35, 565, 565), 58)])
+    image = soft_shadow(mask, internal)
+    surface = Image.new("RGBA", (internal, internal), (*ImageColor.getrgb(LESSON_RED), 0))
+    surface.putalpha(mask)
+    # Paper/card depth: linear, restrained tonal bands rather than spherical light.
+    overlay = Image.new("RGBA", (internal, internal))
+    draw = ImageDraw.Draw(overlay)
+    draw.rounded_rectangle(
+        tuple(round(v * scale) for v in (43, 43, 557, 557)),
+        radius=round(50 * scale),
+        fill=(255, 255, 255, 0),
+        outline=(255, 225, 220, 42),
+        width=max(1, round(5 * scale)),
+    )
+    for row in range(round(48 * scale), round(180 * scale)):
+        alpha = round(8 * (1 - (row - 48 * scale) / (132 * scale)))
+        draw.line(
+            (round(48 * scale), row, round(552 * scale), row),
+            fill=(255, 255, 255, max(0, alpha)),
+        )
+    overlay.putalpha(ImageChops.multiply(overlay.getchannel("A"), mask))
+    surface.alpha_composite(overlay)
+    image.alpha_composite(surface)
+    bounds = image.getchannel("A").getbbox()
+    assert bounds is not None
+    cropped = image.crop(bounds)
+    output = Image.new("RGBA", (internal, internal))
+    fitted = cropped.resize(
+        (round(internal * 0.94), round(internal * 0.94)), Image.Resampling.LANCZOS
+    )
+    output.alpha_composite(fitted, ((internal - fitted.width) // 2, internal - fitted.height))
+    return output.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def _reviewed_asset(path: Path, size: int) -> Image.Image:
+    with Image.open(path) as opened:
+        opened.load()
+        if opened.format != "PNG" or opened.mode != "RGBA":
+            raise ValueError("reviewed lesson object must be an RGBA PNG")
+        image = cast(Image.Image, opened.copy())
+    bounds = image.getchannel("A").getbbox()
+    if bounds is None:
+        raise ValueError("reviewed lesson object has no visible pixels")
+    return image.resize((size, size), Image.Resampling.LANCZOS)
+
+
+def prop_image(
+    kind: str,
+    size: int = 560,
+    *,
+    reviewed_asset_path: Path | None = None,
+    style_version: str = LEGACY_PROP_STYLE_VERSION,
+) -> Image.Image:
     if kind not in PROP_TYPES or size <= 0:
         raise ValueError("unsupported prop or invalid size")
+    if style_version == LESSON_OBJECT_STYLE_VERSION:
+        strategy = RENDER_STRATEGIES[kind]
+        if strategy == "deterministic_swatch":
+            return deterministic_swatch(size)
+        if reviewed_asset_path is None:
+            raise ValueError(f"selected reviewed lesson-object asset unavailable: {kind}")
+        return _reviewed_asset(reviewed_asset_path, size)
+    if style_version != LEGACY_PROP_STYLE_VERSION:
+        raise ValueError("unsupported prop style version")
     internal = size * SUPERSAMPLE
     if kind == "red_swatch":
         shapes = [("rounded", (25, 25, 575, 555), 105)]
@@ -167,6 +238,9 @@ def scene_art(
     *,
     background_only: bool = False,
     background_variant: str = "wide",
+    lesson_asset_paths: dict[str, Path] | None = None,
+    lesson_asset_metadata: dict[str, dict[str, str]] | None = None,
+    prop_style_version: str = LEGACY_PROP_STYLE_VERSION,
 ) -> tuple[Image.Image, dict[str, Any]]:
     composition = composition or resolve_composition(
         CompositionRequest(
@@ -208,17 +282,26 @@ def scene_art(
         if placement.type not in PROP_TYPES:
             raise ValueError(f"unsupported prop: {placement.type}")
         bbox = placement.bbox(canvas, ground)
-        props.append(
-            {
-                **placement.model_dump(mode="json"),
-                "bbox": bbox,
-                "count": 1,
-                "ground_plane_y": round(h * ground),
-                "prop_style_version": PROP_STYLE_VERSION,
-            }
-        )
+        prop_metadata = {
+            **placement.model_dump(mode="json"),
+            "bbox": bbox,
+            "count": 1,
+            "ground_plane_y": round(h * ground),
+            "prop_style_version": prop_style_version,
+            "render_strategy": RENDER_STRATEGIES[placement.type]
+            if prop_style_version == LESSON_OBJECT_STYLE_VERSION
+            else "legacy_procedural",
+        }
+        if placement.type in (lesson_asset_metadata or {}):
+            prop_metadata.update((lesson_asset_metadata or {})[placement.type])
+        props.append(prop_metadata)
         if placement.motion == "static" and not background_only:
-            prop = prop_image(placement.type, bbox[2] - bbox[0])
+            prop = prop_image(
+                placement.type,
+                bbox[2] - bbox[0],
+                reviewed_asset_path=(lesson_asset_paths or {}).get(placement.type),
+                style_version=prop_style_version,
+            )
             image.paste(prop, (bbox[0], bbox[1]), prop)
     metadata = {
         "renderer_version": VERSION,
@@ -229,7 +312,7 @@ def scene_art(
         "props": props,
         "contains_tovi": False,
         "composition": composition.model_dump(mode="json"),
-        "prop_style_version": PROP_STYLE_VERSION,
+        "prop_style_version": prop_style_version,
         "prop_style_contract": PROP_STYLE_CONTRACT,
         "supersample": SUPERSAMPLE,
     }
@@ -271,7 +354,8 @@ def validate_props(
         or any(
             p["count"] != 1 or p["lesson_color"] != PROP_DEFINITIONS[p["type"]].color for p in props
         )
-        or metadata["prop_style_version"] != PROP_STYLE_VERSION
+        or metadata["prop_style_version"]
+        not in {LESSON_OBJECT_STYLE_VERSION, LEGACY_PROP_STYLE_VERSION}
     ):
         raise ValueError("educational prop QA failed")
     w, h = canvas
@@ -286,6 +370,10 @@ def validate_props(
         x0, y0, x1, y1 = prop["bbox"]
         if prop["bbox"] != placement.bbox(canvas, composition.ground_plane_y):
             raise ValueError("prop pixels differ from composition plan")
+        if prop.get("render_strategy") == "reviewed_asset" and not all(
+            prop.get(field) for field in ("asset_artifact_id", "asset_sha256", "anchor")
+        ):
+            raise ValueError("reviewed prop metadata is incomplete")
         if not (w * 0.04 <= x0 < x1 <= w * 0.96 and h * 0.04 <= y0 < y1 <= h * 0.96):
             raise ValueError("lesson prop exceeds safe canvas bounds")
         if x0 < character[2] and x1 > character[0] and y0 < character[3] and y1 > character[1]:

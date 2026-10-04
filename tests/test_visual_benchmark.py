@@ -1035,6 +1035,31 @@ def vertex_response(
     })
 
 
+def vertex_error_response(status: int, *, message: str = "provider failure") -> httpx.Response:
+    return httpx.Response(
+        status,
+        headers={
+            "x-request-id": "safe-request-403",
+            "authorization": "Bearer raw-header-secret",
+            "set-cookie": "session=raw-cookie-secret",
+        },
+        json={
+            "error": {
+                "code": status,
+                "status": "PERMISSION_DENIED" if status == 403 else "PROVIDER_ERROR",
+                "message": message,
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "MODEL_ACCESS_DENIED",
+                        "metadata": {"credential": "unknown-sensitive-value"},
+                    }
+                ],
+            }
+        },
+    )
+
+
 def vertex_provider(
     transport: VertexTestTransport,
     *,
@@ -1107,6 +1132,69 @@ def test_nano_banana_pro_2k_request_translation_and_contract(
     metadata = json.loads(receipt["response_metadata_json"])
     assert metadata["requested_image_size"] == "2K"
     assert metadata["model_version"] == "gemini-3-pro-image"
+
+
+def test_vertex_403_safe_diagnostics_are_sanitized_and_persisted(
+    tmp_path: Path, catalog: BrandCatalog
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    secret_message = (
+        "Model access denied; Authorization=Bearer top-secret-token; "
+        "access_token=ya29.super-secret-token; credentials=adc-secret"
+    )
+    transport = VertexTestTransport(vertex_error_response(403, message=secret_message), state)
+    provider = vertex_provider(
+        transport, model="gemini-3-pro-image", location="global", image_size="2K"
+    )
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == "terminal_failure"
+    assert len(transport.calls) == 1  # In-memory transport only; no network/provider call.
+    row = state.get_request(result["request_id"])
+    assert row["provider_request_id"] == "safe-request-403"
+    assert "HTTP 403 (PERMISSION_DENIED)" in row["error_reason"]
+    assert "reason=MODEL_ACCESS_DENIED" in row["error_reason"]
+    diagnostics = json.loads(row["response_metadata_json"])
+    assert diagnostics == {
+        "canonical_status": "PERMISSION_DENIED",
+        "endpoint_family": "Vertex AI Gemini generateContent",
+        "error_info_reason": "MODEL_ACCESS_DENIED",
+        "error_info_type": "google.rpc.ErrorInfo",
+        "http_status": 403,
+        "location": "global",
+        "model": "gemini-3-pro-image",
+        "provider_message": (
+            "Model access denied; Authorization=[REDACTED] [REDACTED]; "
+            "access_token=[REDACTED]; credentials=[REDACTED]"
+        ),
+        "provider_request_id": "safe-request-403",
+    }
+    persisted = json.dumps(row, sort_keys=True)
+    for secret in (
+        "top-secret-token",
+        "ya29.super-secret-token",
+        "adc-secret",
+        "raw-header-secret",
+        "raw-cookie-secret",
+        "unknown-sensitive-value",
+    ):
+        assert secret not in persisted
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    ((429, "retryable_failure"), (408, "ambiguous"), (500, "ambiguous"), (503, "ambiguous")),
+)
+def test_vertex_safe_diagnostics_preserve_failure_classification(
+    tmp_path: Path, catalog: BrandCatalog, status: int, expected: str
+) -> None:
+    runner, state, spec = runner_fixture(tmp_path, catalog)
+    transport = VertexTestTransport(vertex_error_response(status), state)
+    provider = vertex_provider(transport)
+    result = runner.run(make_plan(spec, provider), provider)
+    assert result["status"] == expected
+    assert len(transport.calls) == 1  # In-memory transport only; no network/provider call.
+    diagnostics = json.loads(state.get_request(result["request_id"])["response_metadata_json"])
+    assert diagnostics["http_status"] == status
 
 
 def test_nano_banana_pro_rejects_non_global_location_before_auth() -> None:

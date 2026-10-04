@@ -1,16 +1,20 @@
 """Narrow image-provider adapters with injectable, offline-testable transports."""
 
 import base64
+import copy
+import hashlib
 import json
 import os
 import re
 import secrets
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import urlencode
 
 import google.auth
 import httpx
@@ -64,10 +68,96 @@ class ProviderFailure(Exception):
         *,
         outcome: Literal["retryable_failure", "terminal_failure", "ambiguous"],
         provider_request_id: str | None = None,
+        diagnostics: dict[str, object] | None = None,
     ) -> None:
         super().__init__(reason)
         self.outcome = outcome
         self.provider_request_id = provider_request_id
+        self.diagnostics = dict(diagnostics or {})
+
+
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b(authorization|cookies?|set-cookie|access[_ -]?token|refresh[_ -]?token|"
+    r"id[_ -]?token|client[_ -]?secret|private[_ -]?key|credentials?)"
+    r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;}]+)"
+)
+_BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_JWT_TOKEN = re.compile(r"\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\b")
+_GOOGLE_TOKEN = re.compile(r"\b(?:ya29\.|1//|AIza)[A-Za-z0-9._~-]{12,}\b")
+
+
+def _sanitize_provider_text(value: object, *, limit: int = 500) -> str | None:
+    """Return one bounded line while removing common credential/token forms."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = " ".join(value.split())
+    text = _BEARER_TOKEN.sub("Bearer [REDACTED]", text)
+    text = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _JWT_TOKEN.sub("[REDACTED]", text)
+    text = _GOOGLE_TOKEN.sub("[REDACTED]", text)
+    return text[:limit]
+
+
+def _safe_identifier(value: object, *, limit: int = 200) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = re.sub(r"[^A-Za-z0-9._:/+@=-]", "_", value.strip())[:limit]
+    return cleaned or None
+
+
+def _vertex_error_diagnostics(
+    exc: errors.APIError, *, model: str, location: str
+) -> tuple[str, dict[str, object], str | None]:
+    """Extract an allowlisted, sanitized subset of a Vertex SDK error."""
+    status_code = int(exc.code or 0)
+    canonical_status = _safe_identifier(exc.status, limit=80)
+    provider_message = _sanitize_provider_text(exc.message)
+    response_headers = getattr(exc.response, "headers", {}) if exc.response is not None else {}
+    request_id = _safe_identifier(response_headers.get("x-request-id"))
+
+    error_info_reason: str | None = None
+    error_info_type: str | None = None
+    details = exc.details
+    if isinstance(details, dict):
+        payload = details.get("error", details)
+        structured = payload.get("details", ()) if isinstance(payload, dict) else ()
+        if isinstance(structured, list):
+            for item in structured:
+                if not isinstance(item, dict):
+                    continue
+                candidate_reason = _safe_identifier(item.get("reason"), limit=120)
+                candidate_type = _safe_identifier(item.get("@type"), limit=160)
+                if candidate_reason:
+                    error_info_reason = candidate_reason
+                if candidate_type:
+                    error_info_type = candidate_type.rsplit("/", 1)[-1]
+                if error_info_reason:
+                    break
+
+    diagnostics: dict[str, object] = {
+        "http_status": status_code,
+        "model": model,
+        "location": location,
+        "endpoint_family": "Vertex AI Gemini generateContent",
+    }
+    for key, value in (
+        ("canonical_status", canonical_status),
+        ("provider_message", provider_message),
+        ("provider_request_id", request_id),
+        ("error_info_reason", error_info_reason),
+        ("error_info_type", error_info_type),
+    ):
+        if value:
+            diagnostics[key] = value
+
+    summary = f"Vertex AI returned HTTP {status_code}"
+    if canonical_status:
+        summary += f" ({canonical_status})"
+    if provider_message:
+        summary += f": {provider_message}"
+    if error_info_reason:
+        summary += f" [reason={error_info_reason}]"
+    return summary, diagnostics, request_id
 
 
 @dataclass(frozen=True)
@@ -141,6 +231,256 @@ class ImageProvider(Protocol):
         *,
         on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult: ...
+
+
+class QwenComfyUIImageProvider:
+    """Temporary local adapter for the saved, proven Qwen 2.1 API workflow."""
+
+    provider = "qwen_comfyui"
+    model = "qwen-image-2.1-q8"
+    location = "local"
+    _nodes = {
+        "459:451": "UnetLoaderGGUF",
+        "459:452": "TextEncodeQwenImage21",
+        "459:453": "CLIPLoader",
+        "459:454": "VAELoader",
+        "459:456": "EmptyLatentImage",
+        "459:457": "VAEDecode",
+        "459:458": "KSampler",
+        "461": "SaveImageAdvanced",
+    }
+
+    def __init__(
+        self,
+        workflow_path: Path,
+        *,
+        base_url: str = "http://127.0.0.1:8188",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        cfg: float = 1.0,
+        sampler: str = "euler",
+        scheduler: str = "simple",
+        timeout_seconds: float = 600,
+        poll_interval_seconds: float = 1,
+        transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.workflow_path = workflow_path
+        self.base_url = base_url.rstrip("/")
+        self.width, self.height = width, height
+        self.steps, self.cfg = steps, cfg
+        self.sampler, self.scheduler = sampler, scheduler
+        self.image_size = f"{width}x{height}"
+        self.timeout_seconds = timeout_seconds
+        self.poll_interval_seconds = poll_interval_seconds
+        self._transport = transport
+        self._clock, self._sleep = clock, sleep
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            reference_images=False,
+            maximum_reference_images=0,
+            portrait_9_16=False,
+            requested_size=self.image_size,
+            api_contract="local ComfyUI /prompt, /history, /view",
+        )
+
+    def _workflow(self) -> tuple[dict[str, Any], str]:
+        try:
+            data = self.workflow_path.read_bytes()
+            raw = json.loads(data)
+            if not isinstance(raw, dict):
+                raise ValueError("workflow root is not an API node mapping")
+            for node_id, class_type in self._nodes.items():
+                node = raw[node_id]
+                if node["class_type"] != class_type or not isinstance(node["inputs"], dict):
+                    raise ValueError(f"workflow node {node_id} must be {class_type}")
+            if (
+                raw["459:451"]["inputs"]["unet_name"] != "qwen_image_2.1_Q8_0.gguf"
+                or raw["459:453"]["inputs"]["clip_name"] != "qwen3vl_8b_int8_convrot.safetensors"
+                or raw["459:454"]["inputs"]["vae_name"] != "qwen_image_2.1_vae_bf16.safetensors"
+                or raw["461"]["inputs"]["images"] != ["459:457", 0]
+                or raw["459:456"]["inputs"]["batch_size"] != 1
+            ):
+                raise ValueError("workflow model stack, batch, or output differs from proven graph")
+            for node_id, names in {
+                "459:452": ("prompt", "negative_prompt", "resolution"),
+                "459:456": ("width", "height"),
+                "459:458": ("seed", "steps", "cfg", "sampler_name", "scheduler"),
+                "461": ("filename_prefix", "format"),
+            }.items():
+                if not all(name in raw[node_id]["inputs"] for name in names):
+                    raise ValueError(f"workflow node {node_id} has missing inputs")
+            if raw["461"]["inputs"]["format"] != "png":
+                raise ValueError("workflow output must be PNG")
+            return copy.deepcopy(raw), hashlib.sha256(data).hexdigest()
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ProviderFailure(
+                f"Qwen API workflow unavailable or invalid at {self.workflow_path}: {exc}",
+                outcome="terminal_failure",
+            ) from exc
+
+    def _translated(self, spec: CanonicalImageSpec) -> tuple[TranslatedRequest, str]:
+        if spec.references:
+            raise ProviderFailure(
+                "Qwen text-to-image does not accept references", outcome="terminal_failure"
+            )
+        workflow, workflow_hash = self._workflow()
+        seed = int.from_bytes(hashlib.sha256(spec.fingerprint().encode()).digest()[:8], "big")
+        workflow["459:452"]["inputs"]["prompt"] = (
+            spec.prompt() + " Clean plain white background for deterministic exterior removal."
+        )
+        workflow["459:452"]["inputs"]["resolution"] = max(self.width, self.height)
+        workflow["459:456"]["inputs"].update(width=self.width, height=self.height)
+        workflow["459:458"]["inputs"].update(
+            seed=seed,
+            steps=self.steps,
+            cfg=self.cfg,
+            sampler_name=self.sampler,
+            scheduler=self.scheduler,
+        )
+        workflow["461"]["inputs"]["filename_prefix"] = "ToviTunes_prop_art_v2"
+        return (
+            TranslatedRequest(
+                endpoint=f"{self.base_url}/prompt",
+                body={"prompt": workflow, "client_id": "tovitunes-prop-art-v2"},
+                supplied_reference_artifact_ids=(),
+            ),
+            workflow_hash,
+        )
+
+    def translate(self, spec: CanonicalImageSpec) -> TranslatedRequest:
+        return self._translated(spec)[0]
+
+    def generate(
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
+    ) -> ProviderResult:
+        if reference_paths:
+            raise ProviderFailure(
+                "Qwen text-to-image does not accept references", outcome="terminal_failure"
+            )
+        translated, workflow_hash = self._translated(spec)
+        seed = translated.body["prompt"]["459:458"]["inputs"]["seed"]
+        prompt_id: str | None = None
+        started = self._clock()
+        try:
+            with httpx.Client(transport=self._transport, timeout=30) as client:
+                if on_remote_start is not None:
+                    on_remote_start()
+                response = client.post(translated.endpoint, json=translated.body)
+                if response.status_code >= 400:
+                    raise ProviderFailure(
+                        f"ComfyUI rejected /prompt (HTTP {response.status_code})",
+                        outcome="terminal_failure" if response.status_code < 500 else "ambiguous",
+                    )
+                payload = response.json()
+                prompt_id = payload.get("prompt_id") if isinstance(payload, dict) else None
+                if not isinstance(prompt_id, str) or not prompt_id:
+                    raise ProviderFailure("ComfyUI /prompt omitted prompt_id", outcome="ambiguous")
+                while self._clock() - started < self.timeout_seconds:
+                    history = client.get(f"{self.base_url}/history/{prompt_id}")
+                    if history.status_code >= 500:
+                        raise ProviderFailure(
+                            "ComfyUI history became unavailable",
+                            outcome="ambiguous",
+                            provider_request_id=prompt_id,
+                        )
+                    if history.status_code not in {200, 404}:
+                        raise ProviderFailure(
+                            f"ComfyUI history returned HTTP {history.status_code}",
+                            outcome="ambiguous",
+                            provider_request_id=prompt_id,
+                        )
+                    item = history.json().get(prompt_id, {}) if history.status_code == 200 else {}
+                    if item:
+                        status = item.get("status", {})
+                        if (
+                            status.get("status_str") == "error"
+                            or status.get("completed") is True
+                            and status.get("status_str") != "success"
+                        ):
+                            messages = status.get("messages", [])
+                            detail = _sanitize_provider_text(
+                                str(messages[-1]) if messages else "execution error", limit=180
+                            )
+                            raise ProviderFailure(
+                                f"ComfyUI execution failed: {detail}",
+                                outcome="terminal_failure",
+                                provider_request_id=prompt_id,
+                            )
+                        images = item.get("outputs", {}).get("461", {}).get("images", [])
+                        if status.get("status_str") == "success" and images:
+                            output = images[0]
+                            if not isinstance(output, dict) or not all(
+                                k in output for k in ("filename", "subfolder", "type")
+                            ):
+                                raise ProviderFailure(
+                                    "ComfyUI output metadata is invalid",
+                                    outcome="terminal_failure",
+                                    provider_request_id=prompt_id,
+                                )
+                            query = urlencode(
+                                {key: output[key] for key in ("filename", "subfolder", "type")}
+                            )
+                            view = client.get(f"{self.base_url}/view?{query}")
+                            if view.status_code != 200:
+                                raise ProviderFailure(
+                                    "ComfyUI image retrieval failed",
+                                    outcome="ambiguous",
+                                    provider_request_id=prompt_id,
+                                )
+                            return ProviderResult(
+                                image_bytes=view.content,
+                                mime_type="image/png",
+                                provider_request_id=prompt_id,
+                                response_metadata={
+                                    "seed": seed,
+                                    "width": self.width,
+                                    "height": self.height,
+                                    "steps": self.steps,
+                                    "cfg": self.cfg,
+                                    "sampler": self.sampler,
+                                    "scheduler": self.scheduler,
+                                    "workflow_sha256": workflow_hash,
+                                    "workflow_file": self.workflow_path.name,
+                                    "output_filename": output["filename"],
+                                },
+                            )
+                        if status.get("status_str") == "success":
+                            raise ProviderFailure(
+                                "ComfyUI completed without expected image output",
+                                outcome="terminal_failure",
+                                provider_request_id=prompt_id,
+                            )
+                    self._sleep(self.poll_interval_seconds)
+        except ProviderFailure:
+            raise
+        except httpx.ConnectError as exc:
+            raise ProviderFailure(
+                "ComfyUI connection refused before submission"
+                if prompt_id is None
+                else "ComfyUI connection lost after submission",
+                outcome="terminal_failure" if prompt_id is None else "ambiguous",
+                provider_request_id=prompt_id,
+            ) from exc
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise ProviderFailure(
+                "ComfyUI response became uncertain after submission",
+                outcome="ambiguous",
+                provider_request_id=prompt_id,
+            ) from exc
+        raise ProviderFailure(
+            "ComfyUI generation timed out after submission",
+            outcome="ambiguous",
+            provider_request_id=prompt_id,
+        )
 
 
 def _api_failure(response: HttpResponse) -> ProviderFailure:
@@ -358,12 +698,14 @@ class GeminiImageProvider:
         project: str | None = None,
         location: str | None = None,
         image_size: Literal["1K", "2K", "4K"] = "1K",
+        aspect_ratio: Literal["1:1", "9:16"] = "9:16",
         timeout_seconds: float = 180,
     ) -> None:
         if image_size not in {"1K", "2K", "4K"}:
             raise ValueError("unsupported Gemini image size")
         self.model = model
         self.image_size = image_size
+        self.aspect_ratio = aspect_ratio
         self._transport = transport
         self._credentials_loader = credentials_loader
         self._project = project
@@ -375,8 +717,8 @@ class GeminiImageProvider:
         return ProviderCapabilities(
             reference_images=True,
             maximum_reference_images=14,
-            portrait_9_16=True,
-            requested_size=f"{self.image_size}, 9:16",
+            portrait_9_16=self.aspect_ratio == "9:16",
+            requested_size=f"{self.image_size}, {self.aspect_ratio}",
             grounding_enabled=False,
             api_contract="Vertex AI Gemini generateContent via google-genai",
         )
@@ -411,7 +753,7 @@ class GeminiImageProvider:
                 ],
                 "response_modalities": ["TEXT", "IMAGE"],
                 "image_config": {
-                    "aspect_ratio": "9:16",
+                    "aspect_ratio": self.aspect_ratio,
                     "image_size": self.image_size,
                 },
                 "tools": [],
@@ -462,7 +804,7 @@ class GeminiImageProvider:
         config = types.GenerateContentConfig(
             response_modalities=[types.Modality.TEXT, types.Modality.IMAGE],
             image_config=types.ImageConfig(
-                aspect_ratio="9:16", image_size=self.image_size
+                aspect_ratio=self.aspect_ratio, image_size=self.image_size
             ),
             tools=[],
         )
@@ -524,11 +866,14 @@ class GeminiImageProvider:
                 if status == 408 or status >= 500
                 else "terminal_failure"
             )
-            headers = exc.response.headers if exc.response is not None else {}
+            summary, diagnostics, request_id = _vertex_error_diagnostics(
+                exc, model=self.model, location=self.location
+            )
             raise ProviderFailure(
-                f"Vertex AI returned HTTP {status}",
+                summary,
                 outcome=outcome,
-                provider_request_id=headers.get("x-request-id"),
+                provider_request_id=request_id,
+                diagnostics=diagnostics,
             ) from exc
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ProviderFailure(

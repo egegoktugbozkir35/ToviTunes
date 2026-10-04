@@ -34,6 +34,8 @@ from tovitunes.render.character import (
     validate_layout,
 )
 from tovitunes.render.composition import (
+    LEGACY_PROP_STYLE_VERSION,
+    LESSON_OBJECT_STYLE_VERSION,
     PROP_DEFINITIONS,
     CompositionRequest,
     SceneComposition,
@@ -244,6 +246,31 @@ class ProductionRenderer:
             store = AssetStore(
                 self.config.data_root, inputs.store.database, generated_source_roots=[stage]
             )
+            lesson_asset_paths: dict[str, Path] = {}
+            lesson_asset_metadata: dict[str, dict[str, str]] = {}
+            lesson_asset_ids: tuple[str, ...] = ()
+            prop_style_version = LEGACY_PROP_STYLE_VERSION
+            brand_id = inputs.store.database.get_episode(owner).brand_revision_id
+            lesson_manifest = store.selected(
+                "brand", brand_id, "lesson_object_manifest", LESSON_OBJECT_STYLE_VERSION
+            )
+            if lesson_manifest is not None:
+                from tovitunes.render.lesson_objects import resolve_reviewed_assets
+
+                lesson_asset_paths = resolve_reviewed_assets(store, brand_id)
+                resolved_ids = []
+                for key in sorted(lesson_asset_paths):
+                    selected = store.selected("brand", brand_id, "lesson_object", key)
+                    if selected is None:
+                        raise ValueError(f"selected lesson-object disappeared: {key}")
+                    resolved_ids.append(selected.identity.artifact_id)
+                    lesson_asset_metadata[key] = {
+                        "asset_artifact_id": selected.identity.artifact_id,
+                        "asset_sha256": selected.sha256,
+                        "anchor": "bottom_center",
+                    }
+                lesson_asset_ids = (lesson_manifest.identity.artifact_id, *resolved_ids)
+                prop_style_version = LESSON_OBJECT_STYLE_VERSION
 
             def ensure(kind: str, slot: str, path: Path, deps: tuple[str, ...]) -> ArtifactRecord:
                 leases.assert_owner(lease)
@@ -393,8 +420,11 @@ class ProductionRenderer:
                     composition,
                     background_only=True,
                     background_variant=motion.background_variant,
+                    lesson_asset_paths=lesson_asset_paths,
+                    lesson_asset_metadata=lesson_asset_metadata,
+                    prop_style_version=prop_style_version,
                 )
-                background_deps: tuple[str, ...] = (sid,)
+                background_deps: tuple[str, ...] = (sid, *lesson_asset_ids)
                 if environment_selection is not None and story is not None:
                     plate = environment.plate(story.environment_plate_role)
                     with Image.open(store.path_for(plate.artifact_id)) as selected_plate:
@@ -409,7 +439,12 @@ class ProductionRenderer:
                     metadata["environmental_theme"] = environment.theme
                     metadata["environment_layers"] = ["selected_provider_plate"]
                     metadata["renderer_version"] = V4_VERSION
-                    background_deps = (sid, environment_id, plate.artifact_id)
+                    background_deps = (
+                        sid,
+                        environment_id,
+                        plate.artifact_id,
+                        *lesson_asset_ids,
+                    )
                 png = stage / f"{scene.scene_id}.png"
                 image.save(png, pnginfo=png_info(metadata))
                 background = ensure("scene_image", scene.scene_id, png, background_deps)
@@ -585,6 +620,10 @@ class ProductionRenderer:
                         "metadata": metadata,
                         "motion": motion.model_dump(mode="json"),
                         "sprite_paths": sprite_paths,
+                        "lesson_asset_paths": {
+                            key: str(path) for key, path in lesson_asset_paths.items()
+                        },
+                        "prop_style_version": prop_style_version,
                     }
                 )
                 previous = composition
@@ -606,6 +645,7 @@ class ProductionRenderer:
                         storyboard.beat_analysis_artifact_id,
                         *((environment_id,) if environment_selection else ()),
                         *((story_record.identity.artifact_id,) if story_record else ()),
+                        *lesson_asset_ids,
                         *(s.scene_image_artifact_id for s in scene_refs),
                         *(s.character_animation_artifact_id for s in scene_refs),
                         *(

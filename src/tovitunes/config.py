@@ -46,9 +46,7 @@ class EnvironmentGenerationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: Literal["google"] = "google"
-    model: Literal["gemini-3.1-flash-image", "gemini-3-pro-image"] = (
-        "gemini-3.1-flash-image"
-    )
+    model: Literal["gemini-3.1-flash-image", "gemini-3-pro-image"] = "gemini-3.1-flash-image"
     location: Literal["global", "us", "eu"] = "global"
     image_size: Literal["1K", "2K", "4K"] = "1K"
 
@@ -58,6 +56,53 @@ class EnvironmentGenerationConfig(BaseModel):
             raise ValueError("gemini-3-pro-image is available only at the global location")
         if self.model == "gemini-3.1-flash-image" and self.image_size != "1K":
             raise ValueError("the admitted Flash environment contract is pinned to 1K")
+        return self
+
+
+class LessonObjectGenerationConfig(BaseModel):
+    """Provider settings for reviewed lesson objects only."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    provider: Literal["google", "qwen_comfyui"] = "google"
+    model: str = "gemini-3-pro-image"
+    location: str = "global"
+    image_size: Literal["2K"] = "2K"
+    base_url: str = "http://127.0.0.1:8188"
+    workflow_path: Path = Path("workflows/qwen_image_2_1_t2i_api.json")
+    width: int = Field(default=1024, ge=64)
+    height: int = Field(default=1024, ge=64)
+    steps: int = Field(default=20, ge=1)
+    cfg: float = Field(default=1.0, gt=0)
+    sampler: str = "euler"
+    scheduler: str = "simple"
+    timeout_seconds: float = Field(default=600, gt=0)
+    poll_interval_seconds: float = Field(default=1, gt=0)
+
+    @model_validator(mode="after")
+    def supported_contract(self) -> "LessonObjectGenerationConfig":
+        if self.provider == "google":
+            if (self.model, self.location, self.image_size) != (
+                "gemini-3-pro-image",
+                "global",
+                "2K",
+            ):
+                raise ValueError("Google lesson objects require gemini-3-pro-image/global/2K")
+        else:
+            parsed = urlsplit(self.base_url)
+            if (
+                self.model != "qwen-image-2.1-q8"
+                or parsed.scheme != "http"
+                or parsed.hostname not in {"127.0.0.1", "localhost"}
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.path not in {"", "/"}
+            ):
+                raise ValueError(
+                    "Qwen lesson objects require qwen-image-2.1-q8 and a local HTTP base URL"
+                )
         return self
 
 
@@ -73,6 +118,9 @@ class RuntimeConfig(BaseModel):
     creative_llm: CreativeLLMConfig = Field(default_factory=CreativeLLMConfig)
     environment_generation: EnvironmentGenerationConfig = Field(
         default_factory=EnvironmentGenerationConfig
+    )
+    lesson_object_generation: LessonObjectGenerationConfig = Field(
+        default_factory=LessonObjectGenerationConfig
     )
 
     @model_validator(mode="after")
@@ -99,4 +147,14 @@ def load_config(path: Path) -> RuntimeConfig:
                 if not candidate.is_absolute()
                 else candidate.resolve()
             )
+    lesson_generation = raw.get("lesson_object_generation")
+    if isinstance(lesson_generation, dict) and isinstance(
+        lesson_generation.get("workflow_path"), str
+    ):
+        candidate = Path(lesson_generation["workflow_path"])
+        lesson_generation["workflow_path"] = (
+            (config_file.parent / candidate).resolve()
+            if not candidate.is_absolute()
+            else candidate.resolve()
+        )
     return RuntimeConfig.model_validate(raw)
