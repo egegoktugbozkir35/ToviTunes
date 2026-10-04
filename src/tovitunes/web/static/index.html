@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ToviTunes Studio</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark">♪</span><div><strong>ToviTunes</strong><small>Local studio</small></div></div>
+    <span class="local">● LOCAL OPERATOR</span>
+  </header>
+  <main>
+    <section class="hero">
+      <div><p class="eyebrow">PRODUCTION DESK</p><h1>Make every little moment count.</h1><p>See the evidence behind each lesson, review its render, and prepare a private test.</p></div>
+      <button id="refresh" class="button secondary">Refresh dashboard</button>
+    </section>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section class="overview"><div class="section-heading"><h2>Studio health</h2><span id="last-refresh"></span></div><div id="system" class="health-grid"></div></section>
+    <section class="workspace"><aside class="episodes"><div class="section-heading"><h2>Episodes</h2><span id="episode-count"></span></div><div id="episode-list"></div></aside>
+      <div class="detail"><div id="episode-detail" class="empty"><span class="empty-icon">♫</span><h2>Select an episode</h2><p>Its production journey will appear here.</p></div></div>
+    </section>
+    <section class="jobs"><div class="section-heading"><h2>Activity</h2><span>One production job at a time</span></div><div id="job-list" class="job-list"></div></section>
+  </main>
+  <footer>ToviTunes · Private test uploads never clear commercial rights.</footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
