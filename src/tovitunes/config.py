@@ -106,6 +106,33 @@ class LessonObjectGenerationConfig(BaseModel):
         return self
 
 
+class YouTubeConfig(BaseModel):
+    """Local OAuth files and immutable upload policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+    credentials_file: Path = Path("secrets/client_secret.json")
+    token_file: Path = Path("secrets/youtube_token.json")
+    category_id: str = Field(default="27", pattern=r"^[0-9]+$")
+    upload_chunk_size: int = -1
+    max_retries: int = Field(default=5, ge=0, le=10)
+    contains_synthetic_media: bool = True
+
+    @field_validator("upload_chunk_size")
+    @classmethod
+    def valid_chunk_size(cls, value: int) -> int:
+        if value != -1 and (value <= 0 or value % (256 * 1024)):
+            raise ValueError("upload chunk size must be -1 or a positive multiple of 256 KiB")
+        return value
+
+
+class PublicationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -115,6 +142,7 @@ class RuntimeConfig(BaseModel):
     brand_root: Path
     publication_enabled: bool = False
     expected_youtube_channel_id: str | None = None
+    publication: PublicationConfig = Field(default_factory=PublicationConfig)
     creative_llm: CreativeLLMConfig = Field(default_factory=CreativeLLMConfig)
     environment_generation: EnvironmentGenerationConfig = Field(
         default_factory=EnvironmentGenerationConfig
@@ -123,9 +151,24 @@ class RuntimeConfig(BaseModel):
         default_factory=LessonObjectGenerationConfig
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_publication_flag(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("publication_enabled") is True:
+            raw = dict(value)
+            publication = dict(raw.get("publication") or {})
+            youtube = dict(publication.get("youtube") or {})
+            youtube["enabled"] = True
+            publication["youtube"] = youtube
+            raw["publication"] = publication
+            return raw
+        return value
+
     @model_validator(mode="after")
     def publishing_requires_channel(self) -> "RuntimeConfig":
-        if self.publication_enabled and not self.expected_youtube_channel_id:
+        if (
+            self.publication_enabled or self.publication.youtube.enabled
+        ) and not self.expected_youtube_channel_id:
             raise ValueError("publishing requires an expected YouTube channel ID")
         return self
 
@@ -157,4 +200,19 @@ def load_config(path: Path) -> RuntimeConfig:
             if not candidate.is_absolute()
             else candidate.resolve()
         )
+    publication = raw.setdefault("publication", {})
+    if isinstance(publication, dict):
+        youtube = publication.setdefault("youtube", {})
+        if isinstance(youtube, dict):
+            youtube.setdefault("credentials_file", "secrets/client_secret.json")
+            youtube.setdefault("token_file", "secrets/youtube_token.json")
+            for key in ("credentials_file", "token_file"):
+                value = youtube.get(key)
+                if isinstance(value, str):
+                    candidate = Path(value)
+                    youtube[key] = (
+                        (config_file.parent / candidate).resolve()
+                        if not candidate.is_absolute()
+                        else candidate.resolve()
+                    )
     return RuntimeConfig.model_validate(raw)

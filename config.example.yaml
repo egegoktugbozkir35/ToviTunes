@@ -4,6 +4,15 @@ data_root: data
 brand_root: brands/tovitunes
 publication_enabled: false
 expected_youtube_channel_id: null
+publication:
+  youtube:
+    enabled: false
+    credentials_file: secrets/client_secret.json
+    token_file: secrets/youtube_token.json
+    category_id: "27"
+    upload_chunk_size: -1
+    max_retries: 5
+    contains_synthetic_media: true
 environment_generation:
   provider: google
   model: gemini-3-pro-image

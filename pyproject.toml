@@ -27,6 +27,8 @@ video-render = ["moviepy==2.2.1"]
 audio-analysis = ["librosa>=0.11,<1"]
 audio-timing = ["beat-this==1.1.0"]
 audio-asr = ["whisperx>=3.7,<4; python_version < '3.13'"]
+web = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
+youtube = ["google-api-python-client>=2.160,<3", "google-auth-oauthlib>=1.2,<2"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -35,7 +37,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-tovitunes = ["persistence/migrations/*.sql"]
+tovitunes = ["persistence/migrations/*.sql", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -53,5 +55,5 @@ packages = ["tovitunes"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk", "beat_this.*", "moviepy", "moviepy.*"]
+module = ["yaml", "miniaudio", "mutagen.*", "librosa", "numpy", "torch", "torchaudio", "whisperx", "whisperx.*", "faster_whisper.*", "ctranslate2", "nltk", "beat_this.*", "moviepy", "moviepy.*", "googleapiclient.*", "google_auth_oauthlib.*", "httplib2.*"]
 ignore_missing_imports = true
