@@ -20,7 +20,7 @@ class CreativeLLMConfig(BaseModel):
     api_key_env: str = Field(default="NVIDIA_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     timeout_seconds: float = Field(default=1800, gt=0)
     temperature: float = Field(default=0.7, ge=0, le=2)
-    max_tokens: int = Field(default=8192, ge=1, le=131072)
+    max_tokens: int = Field(default=16384, ge=1, le=131072)
 
     @field_validator("base_url")
     @classmethod

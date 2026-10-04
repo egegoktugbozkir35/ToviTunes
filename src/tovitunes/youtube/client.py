@@ -16,7 +16,8 @@ from tovitunes.creative.models import EpisodePublicationMetadata
 
 SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
-SCOPES = (SCOPE, READ_SCOPE)
+UPDATE_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
+SCOPES = (SCOPE, READ_SCOPE, UPDATE_SCOPE)
 RETRYABLE = {429, 500, 502, 503, 504}
 
 
@@ -80,7 +81,7 @@ class YouTubeClient:
                 if not isinstance(token_scopes, list) or not set(SCOPES).issubset(token_scopes):
                     if not interactive:
                         raise YouTubeError(
-                            "YouTube authorization needs reconnect for channel and video status"
+                            "YouTube authorization needs reconnect for public visibility access"
                         )
                 else:
                     credentials = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
@@ -189,12 +190,48 @@ class YouTubeClient:
             "video_id": video_id,
             "available": True,
             "title": item.get("snippet", {}).get("title"),
+            "channel_id": item.get("snippet", {}).get("channelId"),
             "privacy": status.get("privacyStatus"),
             "upload_status": status.get("uploadStatus"),
             "processing_status": item.get("processingDetails", {}).get("processingStatus"),
             "made_for_kids": status.get("madeForKids"),
             "self_declared_made_for_kids": status.get("selfDeclaredMadeForKids"),
+            "contains_synthetic_media": status.get("containsSyntheticMedia"),
+            "embeddable": status.get("embeddable"),
+            "license": status.get("license"),
+            "public_stats_viewable": status.get("publicStatsViewable"),
         }
+
+    def publish_video(self, video_id: str, current_status: dict[str, Any]) -> dict[str, Any]:
+        """Update the recorded video in place; the caller owns durable remote-start fencing."""
+        status: dict[str, Any] = {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": True,
+            "containsSyntheticMedia": self.config.contains_synthetic_media,
+        }
+        for local, remote in (
+            ("embeddable", "embeddable"),
+            ("license", "license"),
+            ("public_stats_viewable", "publicStatsViewable"),
+        ):
+            if current_status.get(local) is not None:
+                status[remote] = current_status[local]
+        try:
+            result = (
+                self.service()
+                .videos()
+                .update(part="status", body={"id": video_id, "status": status})
+                .execute()
+            )
+        except Exception as exc:
+            raise UploadAmbiguous(
+                "Public visibility outcome is uncertain; manual reconciliation required"
+            ) from exc
+        if not isinstance(result, dict) or result.get("id") != video_id:
+            raise UploadAmbiguous(
+                "Public visibility outcome is uncertain; manual reconciliation required"
+            )
+        return result
 
     @staticmethod
     def _http_status(error: Exception) -> int | None:

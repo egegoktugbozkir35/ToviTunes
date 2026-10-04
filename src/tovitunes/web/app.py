@@ -19,7 +19,12 @@ from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.production import ProductionRenderer
 from tovitunes.web.jobs import JobBusy, JobManager, safe_error
-from tovitunes.web.services import episode_detail, episodes, system_status
+from tovitunes.web.services import (
+    episode_detail,
+    episodes,
+    generate_publication_metadata,
+    system_status,
+)
 from tovitunes.youtube.client import YouTubeClient, YouTubeError
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
@@ -140,6 +145,19 @@ def create_app(config: RuntimeConfig) -> FastAPI:
         except KeyError as exc:
             raise HTTPException(404, "Episode unavailable") from exc
 
+    @app.post("/api/episodes/{episode_key}/publication-metadata", status_code=202)
+    def publication_metadata(episode_key: str) -> dict[str, Any]:
+        key = checked_key(episode_key)
+        try:
+            episode_detail(config, key)
+        except KeyError as exc:
+            raise HTTPException(404, "Episode unavailable") from exc
+        return submit(
+            "publication_metadata",
+            key,
+            lambda: generate_publication_metadata(config, key),
+        )
+
     @app.get("/api/youtube/status")
     def youtube_status(refresh: bool = False) -> dict[str, Any]:
         yt = config.publication.youtube
@@ -201,6 +219,16 @@ def create_app(config: RuntimeConfig) -> FastAPI:
         client = YouTubeClient(config.publication.youtube)
         client.assert_channel(config.expected_youtube_channel_id)
         return client.video_status(str(publication["youtube_video_id"]))
+
+    @app.post("/api/episodes/{episode_key}/youtube/publish")
+    def publish_public(episode_key: str) -> dict[str, Any]:
+        key = checked_key(episode_key)
+        try:
+            return PublicationService(config).publish_public(key)
+        except KeyError as exc:
+            raise HTTPException(404, "Episode unavailable") from exc
+        except (ValueError, YouTubeError) as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.get("/api/media/{artifact_id}")
     def media(artifact_id: str) -> FileResponse:

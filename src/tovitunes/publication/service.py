@@ -41,7 +41,7 @@ class PublicationService:
 
     def history(self, episode_id: str) -> list[dict[str, Any]]:
         with closing(self.database.connect()) as db:
-            return [
+            attempts = [
                 _row_dict(row)
                 for row in db.execute(
                     "SELECT * FROM publication_attempts WHERE episode_id=? "
@@ -49,6 +49,20 @@ class PublicationService:
                     (episode_id,),
                 )
             ]
+            for attempt in attempts:
+                event = db.execute(
+                    "SELECT * FROM publication_visibility_events WHERE upload_attempt_id=? "
+                    "ORDER BY prepared_at DESC LIMIT 1",
+                    (attempt["attempt_id"],),
+                ).fetchone()
+                attempt["public_promotion"] = dict(event) if event else None
+                if event and event["outcome"] == "succeeded":
+                    attempt["privacy_status"] = "public"
+                elif event and event["outcome"] in {"remote_started", "ambiguous"}:
+                    attempt["operator_action"] = (
+                        "Public visibility uncertain; manual reconciliation required"
+                    )
+            return attempts
 
     def latest(self, episode_id: str) -> dict[str, Any] | None:
         history = self.history(episode_id)
@@ -186,6 +200,148 @@ class PublicationService:
             return _row_dict(row)
         finally:
             leases.release(lease)
+
+    def publish_public(self, episode_key: str) -> dict[str, Any]:
+        """Promote one durable private upload, never inserting a new video."""
+        if (
+            not self.config.publication.youtube.enabled
+            or not self.config.expected_youtube_channel_id
+        ):
+            raise ValueError("YouTube channel is not configured")
+        leases = LeaseStore(self.database)
+        lease = leases.acquire(f"youtube-private:{episode_key}", duration_seconds=600)
+        try:
+            preflight = evaluate_release(self.config, episode_key)
+            if not preflight.public_release_allowed:
+                raise ValueError("Public release is blocked by release preflight")
+            with closing(self.database.connect()) as db:
+                episode = db.execute(
+                    "SELECT episode_id FROM episodes WHERE external_key=?", (episode_key,)
+                ).fetchone()
+                if episode is None:
+                    raise KeyError(episode_key)
+                eid = str(episode[0])
+                unresolved = db.execute(
+                    "SELECT event_id FROM publication_visibility_events WHERE episode_id=? "
+                    "AND outcome IN ('prepared','remote_started','ambiguous') LIMIT 1",
+                    (eid,),
+                ).fetchone()
+                if unresolved:
+                    raise ValueError(
+                        "Public visibility is uncertain; manual reconciliation required"
+                    )
+                upload = db.execute(
+                    "SELECT * FROM publication_attempts WHERE episode_id=? AND outcome='succeeded' "
+                    "ORDER BY prepared_at DESC LIMIT 1",
+                    (eid,),
+                ).fetchone()
+                if upload is None:
+                    raise ValueError("No successful private YouTube upload exists")
+                previous = db.execute(
+                    "SELECT * FROM publication_visibility_events WHERE upload_attempt_id=? "
+                    "AND outcome='succeeded' LIMIT 1",
+                    (upload["attempt_id"],),
+                ).fetchone()
+            if (
+                upload["render_artifact_id"] != preflight.render_artifact_id
+                or upload["render_sha256"] != preflight.render_sha256
+                or upload["metadata_fingerprint"] != preflight.metadata_fingerprint
+                or preflight.metadata_artifact_id is None
+            ):
+                raise ValueError("Selected render or metadata changed since private upload")
+            if previous:
+                return dict(previous)
+            video_id = str(upload["youtube_video_id"])
+            client = self.client_factory()
+            client.assert_channel(self.config.expected_youtube_channel_id)
+            remote = client.video_status(video_id)
+            if (
+                not remote.get("available")
+                or remote.get("video_id") != video_id
+                or remote.get("channel_id") != self.config.expected_youtube_channel_id
+                or remote.get("privacy") != "private"
+                or remote.get("upload_status") != "processed"
+                or remote.get("processing_status") != "succeeded"
+                or remote.get("self_declared_made_for_kids") is not True
+                or remote.get("contains_synthetic_media")
+                is not self.config.publication.youtube.contains_synthetic_media
+            ):
+                raise ValueError("Recorded private video is not ready or its policy differs")
+            if evaluate_release(self.config, episode_key).as_dict() != preflight.as_dict():
+                raise ValueError("Release evidence changed before public promotion")
+            leases.assert_owner(lease)
+            event_id = str(uuid4())
+            with closing(self.database.connect()) as db:
+                db.execute(
+                    "INSERT INTO publication_visibility_events "
+                    "(event_id,upload_attempt_id,episode_id,youtube_video_id,prior_privacy,"
+                    "target_privacy,render_artifact_id,render_sha256,metadata_artifact_id,"
+                    "metadata_fingerprint,prepared_at,outcome) VALUES (?,?,?,?,'private','public',"
+                    "?,?,?,?,?,'prepared')",
+                    (
+                        event_id,
+                        upload["attempt_id"],
+                        eid,
+                        video_id,
+                        preflight.render_artifact_id,
+                        preflight.render_sha256,
+                        preflight.metadata_artifact_id,
+                        preflight.metadata_fingerprint,
+                        _now(),
+                    ),
+                )
+                db.commit()
+            started = False
+            try:
+                with closing(self.database.connect()) as db:
+                    db.execute(
+                        "UPDATE publication_visibility_events SET outcome='remote_started', "
+                        "remote_started_at=? WHERE event_id=? AND outcome='prepared'",
+                        (_now(), event_id),
+                    )
+                    db.commit()
+                started = True
+                result = client.publish_video(video_id, remote)
+                status = result.get("status", {})
+                if (
+                    result.get("id") != video_id
+                    or status.get("privacyStatus") != "public"
+                    or status.get("selfDeclaredMadeForKids") is not True
+                    or status.get("containsSyntheticMedia")
+                    is not self.config.publication.youtube.contains_synthetic_media
+                ):
+                    raise UploadAmbiguous("Public visibility response is uncertain")
+            except Exception as exc:
+                self._finish_visibility(
+                    event_id,
+                    "ambiguous" if started else "terminal_failure",
+                    "Public visibility outcome is uncertain; manual reconciliation required"
+                    if started
+                    else "Public promotion preparation failed",
+                )
+                if started:
+                    raise UploadAmbiguous(
+                        "Public visibility outcome is uncertain; manual reconciliation required"
+                    ) from exc
+                raise
+            self._finish_visibility(event_id, "succeeded", None)
+            with closing(self.database.connect()) as db:
+                event = db.execute(
+                    "SELECT * FROM publication_visibility_events WHERE event_id=?", (event_id,)
+                ).fetchone()
+            assert event is not None
+            return dict(event)
+        finally:
+            leases.release(lease)
+
+    def _finish_visibility(self, event_id: str, outcome: str, summary: str | None) -> None:
+        with closing(self.database.connect()) as db:
+            db.execute(
+                "UPDATE publication_visibility_events SET outcome=?,completed_at=?,"
+                "safe_error_summary=? WHERE event_id=?",
+                (outcome, _now(), summary, event_id),
+            )
+            db.commit()
 
     def _finish(self, attempt_id: str, outcome: str, classification: str, summary: str) -> None:
         with closing(self.database.connect()) as db:

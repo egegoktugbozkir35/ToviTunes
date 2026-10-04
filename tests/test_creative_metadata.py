@@ -196,6 +196,23 @@ def test_same_render_reuses_metadata_even_if_provider_configuration_changes(fini
     assert second["publication_metadata_artifact_id"] == first["publication_metadata_artifact_id"]
 
 
+def test_frozen_storyboard_without_creative_pair_supplies_metadata_facts(finished):
+    flow, _, creative, final, manifest = finished
+    with closing(flow.database.connect()) as db:
+        db.execute(
+            "DELETE FROM artifact_selections WHERE owner_id=? "
+            "AND kind IN ('episode_spec','lyrics')",
+            (creative["episode_id"],),
+        )
+        db.commit()
+    facts, dependencies = MetadataWriter(flow)._facts(creative["episode_id"])
+    assert facts["episode_spec"]["basis"] == "selected_timed_storyboard"
+    assert facts["lyrics"]["lines"]
+    assert facts["final_render"]["sha256"] == final.sha256
+    assert manifest.identity.artifact_id in dependencies
+    assert creative["episode_spec_artifact_id"] not in dependencies
+
+
 def test_human_objective_hold_blocks_post_render_metadata(finished):
     flow, fake, creative, _, _ = finished
     flow.store.record_approval(

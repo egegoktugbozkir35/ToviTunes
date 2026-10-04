@@ -455,6 +455,7 @@ def test_oauth_saved_token_refresh_and_invalid_grant(context, monkeypatch):
                 "scopes": [
                     "https://www.googleapis.com/auth/youtube.upload",
                     "https://www.googleapis.com/auth/youtube.readonly",
+                    "https://www.googleapis.com/auth/youtube.force-ssl",
                 ]
             }
         ),
@@ -485,6 +486,7 @@ def test_oauth_saved_token_refresh_and_invalid_grant(context, monkeypatch):
                     "scopes": [
                         "https://www.googleapis.com/auth/youtube.upload",
                         "https://www.googleapis.com/auth/youtube.readonly",
+                        "https://www.googleapis.com/auth/youtube.force-ssl",
                     ],
                 }
             )

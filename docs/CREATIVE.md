@@ -8,7 +8,7 @@ identity, or approve an educational claim. Existing `EpisodeSpec`, `LyricsSpec`,
 ## Configuration and commands
 
 `creative_llm` in `config.example.yaml` explicitly selects NVIDIA NIM and `moonshotai/kimi-k3`,
-with `/v1/chat/completions`, temperature `0.7`, `max_tokens=8192`, and configurable `1800` second
+with `/v1/chat/completions`, temperature `0.7`, `max_tokens=16384`, and configurable `1800` second
 timeout. Credentials belong only in `NVIDIA_API_KEY` (or the configured `api_key_env`). YAML
 rejects inline keys. No alternate model/provider, Ollama, OpenAI or embeddings fallback exists.
 
