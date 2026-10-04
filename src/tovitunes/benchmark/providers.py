@@ -1,16 +1,20 @@
 """Narrow image-provider adapters with injectable, offline-testable transports."""
 
 import base64
+import copy
+import hashlib
 import json
 import os
 import re
 import secrets
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import urlencode
 
 import google.auth
 import httpx
@@ -227,6 +231,256 @@ class ImageProvider(Protocol):
         *,
         on_remote_start: Callable[[], None] | None = None,
     ) -> ProviderResult: ...
+
+
+class QwenComfyUIImageProvider:
+    """Temporary local adapter for the saved, proven Qwen 2.1 API workflow."""
+
+    provider = "qwen_comfyui"
+    model = "qwen-image-2.1-q8"
+    location = "local"
+    _nodes = {
+        "459:451": "UnetLoaderGGUF",
+        "459:452": "TextEncodeQwenImage21",
+        "459:453": "CLIPLoader",
+        "459:454": "VAELoader",
+        "459:456": "EmptyLatentImage",
+        "459:457": "VAEDecode",
+        "459:458": "KSampler",
+        "461": "SaveImageAdvanced",
+    }
+
+    def __init__(
+        self,
+        workflow_path: Path,
+        *,
+        base_url: str = "http://127.0.0.1:8188",
+        width: int = 1024,
+        height: int = 1024,
+        steps: int = 20,
+        cfg: float = 1.0,
+        sampler: str = "euler",
+        scheduler: str = "simple",
+        timeout_seconds: float = 600,
+        poll_interval_seconds: float = 1,
+        transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.workflow_path = workflow_path
+        self.base_url = base_url.rstrip("/")
+        self.width, self.height = width, height
+        self.steps, self.cfg = steps, cfg
+        self.sampler, self.scheduler = sampler, scheduler
+        self.image_size = f"{width}x{height}"
+        self.timeout_seconds = timeout_seconds
+        self.poll_interval_seconds = poll_interval_seconds
+        self._transport = transport
+        self._clock, self._sleep = clock, sleep
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            reference_images=False,
+            maximum_reference_images=0,
+            portrait_9_16=False,
+            requested_size=self.image_size,
+            api_contract="local ComfyUI /prompt, /history, /view",
+        )
+
+    def _workflow(self) -> tuple[dict[str, Any], str]:
+        try:
+            data = self.workflow_path.read_bytes()
+            raw = json.loads(data)
+            if not isinstance(raw, dict):
+                raise ValueError("workflow root is not an API node mapping")
+            for node_id, class_type in self._nodes.items():
+                node = raw[node_id]
+                if node["class_type"] != class_type or not isinstance(node["inputs"], dict):
+                    raise ValueError(f"workflow node {node_id} must be {class_type}")
+            if (
+                raw["459:451"]["inputs"]["unet_name"] != "qwen_image_2.1_Q8_0.gguf"
+                or raw["459:453"]["inputs"]["clip_name"] != "qwen3vl_8b_int8_convrot.safetensors"
+                or raw["459:454"]["inputs"]["vae_name"] != "qwen_image_2.1_vae_bf16.safetensors"
+                or raw["461"]["inputs"]["images"] != ["459:457", 0]
+                or raw["459:456"]["inputs"]["batch_size"] != 1
+            ):
+                raise ValueError("workflow model stack, batch, or output differs from proven graph")
+            for node_id, names in {
+                "459:452": ("prompt", "negative_prompt", "resolution"),
+                "459:456": ("width", "height"),
+                "459:458": ("seed", "steps", "cfg", "sampler_name", "scheduler"),
+                "461": ("filename_prefix", "format"),
+            }.items():
+                if not all(name in raw[node_id]["inputs"] for name in names):
+                    raise ValueError(f"workflow node {node_id} has missing inputs")
+            if raw["461"]["inputs"]["format"] != "png":
+                raise ValueError("workflow output must be PNG")
+            return copy.deepcopy(raw), hashlib.sha256(data).hexdigest()
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ProviderFailure(
+                f"Qwen API workflow unavailable or invalid at {self.workflow_path}: {exc}",
+                outcome="terminal_failure",
+            ) from exc
+
+    def _translated(self, spec: CanonicalImageSpec) -> tuple[TranslatedRequest, str]:
+        if spec.references:
+            raise ProviderFailure(
+                "Qwen text-to-image does not accept references", outcome="terminal_failure"
+            )
+        workflow, workflow_hash = self._workflow()
+        seed = int.from_bytes(hashlib.sha256(spec.fingerprint().encode()).digest()[:8], "big")
+        workflow["459:452"]["inputs"]["prompt"] = (
+            spec.prompt() + " Clean plain white background for deterministic exterior removal."
+        )
+        workflow["459:452"]["inputs"]["resolution"] = max(self.width, self.height)
+        workflow["459:456"]["inputs"].update(width=self.width, height=self.height)
+        workflow["459:458"]["inputs"].update(
+            seed=seed,
+            steps=self.steps,
+            cfg=self.cfg,
+            sampler_name=self.sampler,
+            scheduler=self.scheduler,
+        )
+        workflow["461"]["inputs"]["filename_prefix"] = "ToviTunes_prop_art_v2"
+        return (
+            TranslatedRequest(
+                endpoint=f"{self.base_url}/prompt",
+                body={"prompt": workflow, "client_id": "tovitunes-prop-art-v2"},
+                supplied_reference_artifact_ids=(),
+            ),
+            workflow_hash,
+        )
+
+    def translate(self, spec: CanonicalImageSpec) -> TranslatedRequest:
+        return self._translated(spec)[0]
+
+    def generate(
+        self,
+        spec: CanonicalImageSpec,
+        reference_paths: tuple[Path, ...],
+        *,
+        on_remote_start: Callable[[], None] | None = None,
+    ) -> ProviderResult:
+        if reference_paths:
+            raise ProviderFailure(
+                "Qwen text-to-image does not accept references", outcome="terminal_failure"
+            )
+        translated, workflow_hash = self._translated(spec)
+        seed = translated.body["prompt"]["459:458"]["inputs"]["seed"]
+        prompt_id: str | None = None
+        started = self._clock()
+        try:
+            with httpx.Client(transport=self._transport, timeout=30) as client:
+                if on_remote_start is not None:
+                    on_remote_start()
+                response = client.post(translated.endpoint, json=translated.body)
+                if response.status_code >= 400:
+                    raise ProviderFailure(
+                        f"ComfyUI rejected /prompt (HTTP {response.status_code})",
+                        outcome="terminal_failure" if response.status_code < 500 else "ambiguous",
+                    )
+                payload = response.json()
+                prompt_id = payload.get("prompt_id") if isinstance(payload, dict) else None
+                if not isinstance(prompt_id, str) or not prompt_id:
+                    raise ProviderFailure("ComfyUI /prompt omitted prompt_id", outcome="ambiguous")
+                while self._clock() - started < self.timeout_seconds:
+                    history = client.get(f"{self.base_url}/history/{prompt_id}")
+                    if history.status_code >= 500:
+                        raise ProviderFailure(
+                            "ComfyUI history became unavailable",
+                            outcome="ambiguous",
+                            provider_request_id=prompt_id,
+                        )
+                    if history.status_code not in {200, 404}:
+                        raise ProviderFailure(
+                            f"ComfyUI history returned HTTP {history.status_code}",
+                            outcome="ambiguous",
+                            provider_request_id=prompt_id,
+                        )
+                    item = history.json().get(prompt_id, {}) if history.status_code == 200 else {}
+                    if item:
+                        status = item.get("status", {})
+                        if (
+                            status.get("status_str") == "error"
+                            or status.get("completed") is True
+                            and status.get("status_str") != "success"
+                        ):
+                            messages = status.get("messages", [])
+                            detail = _sanitize_provider_text(
+                                str(messages[-1]) if messages else "execution error", limit=180
+                            )
+                            raise ProviderFailure(
+                                f"ComfyUI execution failed: {detail}",
+                                outcome="terminal_failure",
+                                provider_request_id=prompt_id,
+                            )
+                        images = item.get("outputs", {}).get("461", {}).get("images", [])
+                        if status.get("status_str") == "success" and images:
+                            output = images[0]
+                            if not isinstance(output, dict) or not all(
+                                k in output for k in ("filename", "subfolder", "type")
+                            ):
+                                raise ProviderFailure(
+                                    "ComfyUI output metadata is invalid",
+                                    outcome="terminal_failure",
+                                    provider_request_id=prompt_id,
+                                )
+                            query = urlencode(
+                                {key: output[key] for key in ("filename", "subfolder", "type")}
+                            )
+                            view = client.get(f"{self.base_url}/view?{query}")
+                            if view.status_code != 200:
+                                raise ProviderFailure(
+                                    "ComfyUI image retrieval failed",
+                                    outcome="ambiguous",
+                                    provider_request_id=prompt_id,
+                                )
+                            return ProviderResult(
+                                image_bytes=view.content,
+                                mime_type="image/png",
+                                provider_request_id=prompt_id,
+                                response_metadata={
+                                    "seed": seed,
+                                    "width": self.width,
+                                    "height": self.height,
+                                    "steps": self.steps,
+                                    "cfg": self.cfg,
+                                    "sampler": self.sampler,
+                                    "scheduler": self.scheduler,
+                                    "workflow_sha256": workflow_hash,
+                                    "workflow_file": self.workflow_path.name,
+                                    "output_filename": output["filename"],
+                                },
+                            )
+                        if status.get("status_str") == "success":
+                            raise ProviderFailure(
+                                "ComfyUI completed without expected image output",
+                                outcome="terminal_failure",
+                                provider_request_id=prompt_id,
+                            )
+                    self._sleep(self.poll_interval_seconds)
+        except ProviderFailure:
+            raise
+        except httpx.ConnectError as exc:
+            raise ProviderFailure(
+                "ComfyUI connection refused before submission"
+                if prompt_id is None
+                else "ComfyUI connection lost after submission",
+                outcome="terminal_failure" if prompt_id is None else "ambiguous",
+                provider_request_id=prompt_id,
+            ) from exc
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise ProviderFailure(
+                "ComfyUI response became uncertain after submission",
+                outcome="ambiguous",
+                provider_request_id=prompt_id,
+            ) from exc
+        raise ProviderFailure(
+            "ComfyUI generation timed out after submission",
+            outcome="ambiguous",
+            provider_request_id=prompt_id,
+        )
 
 
 def _api_failure(response: HttpResponse) -> ProviderFailure:

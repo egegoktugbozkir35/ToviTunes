@@ -199,3 +199,47 @@ Across the immutable historical attempt and this continuation:
   `111183070084`
 
 PROP_ART_VERTEX_ACCESS_BLOCKED
+
+## Temporary local Qwen candidate provider — 2026-10-04
+
+Prop Art V2 can use `lesson_object_generation.provider: qwen_comfyui` independently of the frozen
+environment generator. The local ComfyUI endpoint is `http://127.0.0.1:8188`. Launch ComfyUI
+with `--use-split-cross-attention --cpu-vae`. The model stack is
+`qwen_image_2.1_Q8_0.gguf`, `qwen3vl_8b_int8_convrot.safetensors`, and
+`qwen_image_2.1_vae_bf16.safetensors` with ComfyUI-GGUF installed. The saved API graph at
+`workflows/qwen_image_2_1_t2i_api.json` was extracted from the exact API prompt embedded in a
+successful local 20-step PNG. Its real node IDs and inputs are validated before submission.
+The separately supplied ComfyUI API export is preserved at `review/QWEN_EXPORTED_API_WORKFLOW.json`.
+It has the same node IDs, types, links, and model stack; its only input-value difference is a saved
+32-step sampler setting. The active 20-step workflow preserves the exact live-run workflow hash.
+
+Settings are 1024 × 1024, batch 1, 20 steps, CFG 1.0, Euler, simple scheduler, and an explicit
+seed derived from each candidate's canonical request identity. The provider posts once to
+`/prompt`, polls `/history/{prompt_id}`, and retrieves the recorded output through `/view`.
+Prompt ID, seed, settings, and workflow SHA-256 are retained with each candidate. There are no
+hidden retries.
+
+The exact opaque PNG returned by ComfyUI is stored unchanged as `lesson_object_source` before
+preparation. A deterministic edge-connected flood removes a verified, uniform near-white exterior;
+interior white details are preserved. Unsafe backgrounds produce a technically rejected candidate
+while retaining the raw source. Normalization then produces the usual RGBA lesson-object candidate.
+Human review remains pending and rights remain `review_required`; nothing is selected automatically.
+This local backend is temporary pending Azure integration.
+
+### Local review run
+
+On 2026-10-04, the two-call smoke generated one apple and one ball. After both passed technical
+validation, the bounded review run generated four apples and four balls. The review run audit is
+`8 prepared / 8 remote-started / 8 succeeded / 0 technically rejected / 0 ambiguous / 0 retried`.
+There were ten local Qwen generations in total across the smoke and review runs; the first apple
+and ball were reproduced with the same seeds. There were no Google, Azure, or paid image calls in
+this continuation. Workflow SHA-256 was
+`fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e`.
+
+The final review sheet is `outputs/PROP_ART_V2_REVIEW.png`. Review copies of the sheet and the
+exact eight-candidate CLI audit are committed under `review/` for PR review. The candidate manifest
+artifact ID is `69a105a0-7151-4aa9-83bb-264af9c3a3b7`. All eight source PNGs and eight
+normalized RGBA candidates passed SHA and asset-store integrity checks. Each is still pending
+human review with `review_required` rights and no selected pointer. The local AssetStore contains
+the immutable full-resolution source and normalized artifacts. Human choice and rights clearance
+are outstanding.

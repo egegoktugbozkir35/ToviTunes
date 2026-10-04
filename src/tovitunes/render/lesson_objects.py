@@ -3,6 +3,7 @@
 import io
 import json
 import tempfile
+from collections import deque
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -13,7 +14,12 @@ from pydantic import Field
 
 from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.benchmark.models import CanonicalImageSpec
-from tovitunes.benchmark.providers import GeminiImageProvider, ImageProvider, ProviderFailure
+from tovitunes.benchmark.providers import (
+    GeminiImageProvider,
+    ImageProvider,
+    ProviderFailure,
+    QwenComfyUIImageProvider,
+)
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
@@ -85,6 +91,7 @@ class LessonObjectCandidate(ProductionModel):
     normalized_dimensions: tuple[int, int] | None = None
     mime_type: str
     usage_metadata: dict[str, Any] | None = None
+    generation_metadata: dict[str, Any] = Field(default_factory=dict)
     technical_validation_status: Literal["valid", "rejected"]
     technical_rejection_reason: str | None = None
     review_status: Literal["pending"] = "pending"
@@ -100,14 +107,21 @@ def _store(config: RuntimeConfig) -> tuple[AssetStore, str]:
     return AssetStore(config.data_root, database), catalog.version.revision_id
 
 
-def _provider(config: RuntimeConfig) -> GeminiImageProvider:
-    generation = config.environment_generation
-    if (
-        generation.model != "gemini-3-pro-image"
-        or generation.location != "global"
-        or generation.image_size != "2K"
-    ):
-        raise ValueError("lesson-object generation requires gemini-3-pro-image/global/2K")
+def _provider(config: RuntimeConfig) -> ImageProvider:
+    generation = config.lesson_object_generation
+    if generation.provider == "qwen_comfyui":
+        return QwenComfyUIImageProvider(
+            workflow_path=generation.workflow_path,
+            base_url=generation.base_url,
+            width=generation.width,
+            height=generation.height,
+            steps=generation.steps,
+            cfg=generation.cfg,
+            sampler=generation.sampler,
+            scheduler=generation.scheduler,
+            timeout_seconds=generation.timeout_seconds,
+            poll_interval_seconds=generation.poll_interval_seconds,
+        )
     return GeminiImageProvider(
         model=generation.model,
         location=generation.location,
@@ -116,7 +130,7 @@ def _provider(config: RuntimeConfig) -> GeminiImageProvider:
     )
 
 
-def _spec(object_key: str, brand_id: str) -> CanonicalImageSpec:
+def _spec(object_key: str, brand_id: str, *, white_background: bool = False) -> CanonicalImageSpec:
     if object_key not in OBJECT_KEYS:
         raise ValueError("unsupported lesson object")
     return CanonicalImageSpec(
@@ -130,7 +144,10 @@ def _spec(object_key: str, brand_id: str) -> CanonicalImageSpec:
             f"{LESSON_RED} independently of illustration pixels."
         ),
         common_brief=(
-            "Create one centered reusable transparent-background asset for compositing into "
+            "Create one centered reusable asset for compositing into ToviTunes and Nano Banana "
+            "Pro environments. Preserve generous plain white padding."
+            if white_background
+            else "Create one centered reusable transparent-background asset for compositing into "
             "ToviTunes and Nano Banana Pro environments. Preserve generous transparent padding."
         ),
         composition_brief=(
@@ -143,16 +160,22 @@ def _spec(object_key: str, brand_id: str) -> CanonicalImageSpec:
         references=(),
         palette={"authoritative_lesson_red": LESSON_RED},
         identity_rules=(
-            "Output a PNG with real alpha transparency.",
+            "Output a PNG on a uniform plain white background."
+            if white_background
+            else "Output a PNG with real alpha transparency.",
             "Keep the object visually compatible with polished rounded preschool 2D art.",
         ),
         forbidden_changes=(
-            "No background or opaque rectangular canvas.",
+            "No textured, colored, or scenic background."
+            if white_background
+            else "No background or opaque rectangular canvas.",
             "No text, logo, watermark, face, eyes, limbs, or character personality.",
         ),
         negative_constraints=(
             "No photorealism, 3D render, famous franchise, or named artist imitation.",
-            "No white, colored, checkerboard, or scenic background; use transparent alpha.",
+            "No colored, checkerboard, or scenic background; use plain white."
+            if white_background
+            else "No white, colored, checkerboard, or scenic background; use transparent alpha.",
         ),
         aspect_ratio="1:1",
     )
@@ -165,12 +188,18 @@ def plan(config: RuntimeConfig) -> dict[str, object]:
         "style_version": LESSON_OBJECT_STYLE_VERSION,
         "provider": provider.provider,
         "model": provider.model,
-        "location": provider.location,
-        "image_size": provider.image_size,
+        "location": str(getattr(provider, "location", "local")),
+        "image_size": str(getattr(provider, "image_size", "unknown")),
         "request_count": 2,
         "provider_calls": 0,
         "requests": [
-            {"object_key": key, "prompt": _spec(key, brand_id).prompt()} for key in OBJECT_KEYS
+            {
+                "object_key": key,
+                "prompt": _spec(
+                    key, brand_id, white_background=provider.provider == "qwen_comfyui"
+                ).prompt(),
+            }
+            for key in OBJECT_KEYS
         ],
     }
 
@@ -196,6 +225,72 @@ def _validate_transparent_source(data: bytes, mime_type: str) -> Image.Image:
     if any(cast(int, alpha.getpixel(point)) > 8 for point in corners):
         raise ValueError("LESSON_OBJECT_TRANSPARENCY_BLOCKED")
     return image
+
+
+def _prepare_qwen_white_background(data: bytes, mime_type: str) -> Image.Image:
+    """Remove only near-white pixels connected to the image exterior."""
+    if mime_type != "image/png":
+        raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: source is not PNG")
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            opened.load()
+            if opened.format != "PNG" or opened.mode not in {"RGB", "RGBA"}:
+                raise ValueError("source must be RGB/RGBA PNG")
+            image = opened.convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: {exc}") from exc
+    width, height = image.size
+    pixels = image.load()
+    if pixels is None or width < 64 or height < 64:
+        raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: invalid image")
+
+    def near_white(x: int, y: int) -> bool:
+        r, g, b, a = cast(tuple[int, int, int, int], pixels[x, y])
+        return a >= 250 and min(r, g, b) >= 240 and max(r, g, b) - min(r, g, b) <= 14
+
+    edges = [(x, 0) for x in range(width)] + [(x, height - 1) for x in range(width)]
+    edges += [(0, y) for y in range(1, height - 1)]
+    edges += [(width - 1, y) for y in range(1, height - 1)]
+    if sum(near_white(x, y) for x, y in edges) < len(edges) * 0.995:
+        raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: border is not uniformly white")
+    seen = bytearray(width * height)
+    queue: deque[tuple[int, int]] = deque(edges)
+    removed = 0
+    while queue:
+        x, y = queue.popleft()
+        index = y * width + x
+        if seen[index] or not near_white(x, y):
+            continue
+        seen[index] = 1
+        removed += 1
+        if x:
+            queue.append((x - 1, y))
+        if x + 1 < width:
+            queue.append((x + 1, y))
+        if y:
+            queue.append((x, y - 1))
+        if y + 1 < height:
+            queue.append((x, y + 1))
+    if removed < width * height * 0.15 or removed > width * height * 0.95:
+        raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: exterior coverage is implausible")
+    alpha = bytearray(image.getchannel("A").tobytes())
+    for index, selected in enumerate(seen):
+        if selected:
+            alpha[index] = 0
+    image.putalpha(Image.frombytes("L", (width, height), bytes(alpha)))
+    return _validate_transparent_source(_png_bytes(image), "image/png")
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _prepared_source(data: bytes, mime_type: str, provider: ImageProvider) -> Image.Image:
+    if provider.provider == "qwen_comfyui":
+        return _prepare_qwen_white_background(data, mime_type)
+    return _validate_transparent_source(data, mime_type)
 
 
 def normalize(image: Image.Image) -> Image.Image:
@@ -261,7 +356,9 @@ def generate(
         stage = Path(dirname)
         trusted = AssetStore(config.data_root, store.database, generated_source_roots=[stage])
         for object_key in OBJECT_KEYS:
-            spec = _spec(object_key, brand_id)
+            spec = _spec(
+                object_key, brand_id, white_background=configured.provider == "qwen_comfyui"
+            )
             provider_calls += 1
             result = configured.generate(spec, (), on_remote_start=lambda: None)
             suffix = SOURCE_SUFFIXES.get(result.mime_type)
@@ -287,7 +384,7 @@ def generate(
             )
             _pending(trusted, source.identity.artifact_id)
             normalized = normalize(
-                _validate_transparent_source(result.image_bytes, result.mime_type)
+                _prepared_source(result.image_bytes, result.mime_type, configured)
             )
             normalized_path = stage / f"{object_key}.png"
             normalized.save(normalized_path, format="PNG", optimize=False)
@@ -403,7 +500,9 @@ def generate_candidates(
         trusted = AssetStore(config.data_root, store.database, generated_source_roots=[stage])
         for object_key in OBJECT_KEYS:
             for candidate_index in range(1, candidates_per_object + 1):
-                spec = _spec(object_key, brand_id).model_copy(update={"attempt": candidate_index})
+                spec = _spec(
+                    object_key, brand_id, white_background=configured.provider == "qwen_comfyui"
+                ).model_copy(update={"attempt": candidate_index})
                 local_request_id = spec.fingerprint()
                 audit = _request_audit_entry(object_key, candidate_index, local_request_id)
                 requests.append(audit)
@@ -412,17 +511,19 @@ def generate_candidates(
                     entry["remote_started"] = True
 
                 try:
-                    result = configured.generate(
-                        spec, (), on_remote_start=mark_remote_started
-                    )
+                    result = configured.generate(spec, (), on_remote_start=mark_remote_started)
                 except ProviderFailure as exc:
                     audit["outcome"] = exc.outcome
                     audit["provider_request_id"] = exc.provider_request_id
                     audit["diagnostics"] = exc.diagnostics
-                    if object_key == "red_apple" and candidate_index == 1 and (
-                        exc.outcome == "terminal_failure"
-                        or exc.diagnostics.get("http_status") == 403
-                        or exc.diagnostics.get("canonical_status") == "PERMISSION_DENIED"
+                    if (
+                        object_key == "red_apple"
+                        and candidate_index == 1
+                        and (
+                            exc.outcome == "terminal_failure"
+                            or exc.diagnostics.get("http_status") == 403
+                            or exc.diagnostics.get("canonical_status") == "PERMISSION_DENIED"
+                        )
                     ):
                         raise
                     continue
@@ -460,7 +561,7 @@ def generate_candidates(
                 rejection_reason = None
                 try:
                     normalized = normalize(
-                        _validate_transparent_source(result.image_bytes, result.mime_type)
+                        _prepared_source(result.image_bytes, result.mime_type, configured)
                     )
                 except ValueError as exc:
                     rejection_reason = str(exc)
@@ -498,24 +599,19 @@ def generate_candidates(
                             normalized_record.identity.artifact_id if normalized_record else None
                         ),
                         source_sha256=source.sha256,
-                        normalized_sha256=(
-                            normalized_record.sha256 if normalized_record else None
-                        ),
+                        normalized_sha256=(normalized_record.sha256 if normalized_record else None),
                         provider=configured.provider,
                         model=configured.model,
                         location=str(getattr(configured, "location", "unknown")),
-                        requested_resolution=str(
-                            getattr(configured, "image_size", "unknown")
-                        ),
+                        requested_resolution=str(getattr(configured, "image_size", "unknown")),
                         provider_request_id=result.provider_request_id,
                         local_request_id=local_request_id,
                         source_dimensions=source_dimensions,
                         normalized_dimensions=CANVAS if normalized_record else None,
                         mime_type=result.mime_type,
                         usage_metadata=result.usage,
-                        technical_validation_status=(
-                            "valid" if normalized_record else "rejected"
-                        ),
+                        generation_metadata=result.response_metadata,
+                        technical_validation_status=("valid" if normalized_record else "rejected"),
                         technical_rejection_reason=rejection_reason,
                         generation_timestamp=generated_at,
                     )
@@ -528,9 +624,7 @@ def generate_candidates(
             "candidates": [item.model_dump(mode="json") for item in candidates],
         }
         manifest_path = stage / "lesson-object-candidates-v2.json"
-        manifest_path.write_text(
-            json.dumps(manifest_data, sort_keys=True), encoding="utf-8"
-        )
+        manifest_path.write_text(json.dumps(manifest_data, sort_keys=True), encoding="utf-8")
         manifest = trusted.ingest(
             manifest_path,
             owner_scope="brand",
@@ -543,8 +637,7 @@ def generate_candidates(
                 provider="tovitunes.lesson_objects.candidates",
                 model=LESSON_OBJECT_STYLE_VERSION,
                 input_artifact_ids=tuple(
-                    item.normalized_artifact_id or item.source_artifact_id
-                    for item in candidates
+                    item.normalized_artifact_id or item.source_artifact_id for item in candidates
                 ),
             ),
             dependencies=[
@@ -561,16 +654,12 @@ def generate_candidates(
         "remote_started": sum(bool(item["remote_started"]) for item in requests),
         "succeeded": sum(item["outcome"] == "succeeded" for item in requests),
         "terminal_failure": sum(item["outcome"] == "terminal_failure" for item in requests),
-        "retryable_failure": sum(
-            item["outcome"] == "retryable_failure" for item in requests
-        ),
+        "retryable_failure": sum(item["outcome"] == "retryable_failure" for item in requests),
         "ambiguous": sum(item["outcome"] == "ambiguous" for item in requests),
         "technically_rejected_after_success": sum(
             bool(item["technically_rejected_after_success"]) for item in requests
         ),
-        "actual_live_image_requests": sum(
-            bool(item["remote_started"]) for item in requests
-        ),
+        "actual_live_image_requests": sum(bool(item["remote_started"]) for item in requests),
     }
     return {
         "style_version": LESSON_OBJECT_STYLE_VERSION,
@@ -615,16 +704,16 @@ def contact_sheet(config: RuntimeConfig, generation: dict[str, object], output: 
     candidate_mode = "candidates" in generation
     cards: list[tuple[str, Image.Image]] = [
         (
-            "SWATCH — Legacy",
+            "SWATCH - Legacy",
             prop_image("red_swatch", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
-        ("SWATCH — V2 deterministic", deterministic_swatch(420)),
+        ("SWATCH - V2 deterministic", deterministic_swatch(420)),
         (
-            "APPLE — Legacy",
+            "APPLE - Legacy",
             prop_image("red_apple", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
         (
-            "BALL — Legacy",
+            "BALL - Legacy",
             prop_image("red_ball", 420, style_version=LEGACY_PROP_STYLE_VERSION),
         ),
     ]
@@ -642,7 +731,7 @@ def contact_sheet(config: RuntimeConfig, generation: dict[str, object], output: 
         index = int(item.get("candidate_index", 1))
         generated_cards[object_key].append(
             (
-                f"{object_key.removeprefix('red_').upper()} — Candidate {index:02d}",
+                f"{object_key.removeprefix('red_').upper()} - Candidate {index:02d}",
                 prop_image(
                     object_key,
                     420,
@@ -653,11 +742,10 @@ def contact_sheet(config: RuntimeConfig, generation: dict[str, object], output: 
         )
     if not candidate_mode:
         generated_cards["red_apple"][0] = (
-            "APPLE — Candidate 01", generated_cards["red_apple"][0][1]
+            "APPLE - Candidate 01",
+            generated_cards["red_apple"][0][1],
         )
-        generated_cards["red_ball"][0] = (
-            "BALL — Candidate 01", generated_cards["red_ball"][0][1]
-        )
+        generated_cards["red_ball"][0] = ("BALL - Candidate 01", generated_cards["red_ball"][0][1])
     ordered_cards = cards[:2]
     ordered_cards.extend([cards[2], *generated_cards["red_apple"]])
     ordered_cards.extend([cards[3], *generated_cards["red_ball"]])
@@ -668,7 +756,7 @@ def contact_sheet(config: RuntimeConfig, generation: dict[str, object], output: 
     draw = ImageDraw.Draw(sheet)
     font = ImageFont.load_default(size=22)
     title_font = ImageFont.load_default(size=38)
-    draw.text((60, 35), "ToviTunes Prop Art V2 — Human Review", fill="#243047", font=title_font)
+    draw.text((60, 35), "ToviTunes Prop Art V2 - Human Review", fill="#243047", font=title_font)
     for index, (label, image) in enumerate(ordered_cards):
         column, row = index % columns, index // columns
         x, y = 40 + column * 345, 105 + row * 420

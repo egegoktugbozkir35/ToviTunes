@@ -9,6 +9,19 @@ environment_generation:
   model: gemini-3-pro-image
   location: global
   image_size: 2K
+lesson_object_generation:
+  provider: qwen_comfyui
+  model: qwen-image-2.1-q8
+  base_url: http://127.0.0.1:8188
+  workflow_path: workflows/qwen_image_2_1_t2i_api.json
+  width: 1024
+  height: 1024
+  steps: 20
+  cfg: 1.0
+  sampler: euler
+  scheduler: simple
+  timeout_seconds: 600
+  poll_interval_seconds: 1
 creative_llm:
   provider: nvidia
   model: moonshotai/kimi-k3

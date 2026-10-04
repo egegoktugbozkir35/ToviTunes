@@ -19,6 +19,7 @@ from tovitunes.render.composition import (
 )
 from tovitunes.render.lesson_objects import (
     OBJECT_KEYS,
+    _prepare_qwen_white_background,
     contact_sheet,
     generate,
     generate_candidates,
@@ -249,3 +250,58 @@ def test_first_terminal_access_failure_stops_candidate_run(tmp_path: Path) -> No
     with pytest.raises(ProviderFailure, match="PERMISSION_DENIED"):
         generate_candidates(runtime(tmp_path), confirmed=True, provider=provider)
     assert provider.calls == ["red_apple"]
+
+
+def test_qwen_raw_source_is_retained_and_exterior_white_becomes_alpha(tmp_path: Path) -> None:
+    image = Image.new("RGB", (256, 256), "white")
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((44, 35, 211, 220), fill=(220, 42, 40))
+    draw.ellipse((100, 90, 125, 115), fill=(252, 252, 252))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    raw = buffer.getvalue()
+    prepared = _prepare_qwen_white_background(raw, "image/png")
+    assert prepared.getpixel((0, 0))[3] == 0
+    assert prepared.getpixel((112, 102))[3] == 255
+
+    class OpaqueQwen(FakeTransparentProvider):
+        provider = "qwen_comfyui"
+        model = "qwen-image-2.1-q8"
+
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            self.calls.append(spec.case_id)
+            if on_remote_start:
+                on_remote_start()
+            return ProviderResult(
+                image_bytes=raw,
+                mime_type="image/png",
+                provider_request_id=f"local-{spec.case_id}",
+                response_metadata={"seed": spec.attempt, "workflow_sha256": "f" * 64},
+            )
+
+    config = runtime(tmp_path)
+    result = generate_candidates(
+        config, confirmed=True, candidates_per_object=1, provider=OpaqueQwen()
+    )
+    store = AssetStore(config.data_root, Database(config.database_path), initialize=False)
+    assert result["audit"]["actual_live_image_requests"] == 2
+    for candidate in result["candidates"]:
+        assert candidate["source_sha256"] == sha256(raw).hexdigest()
+        assert store.path_for(candidate["source_artifact_id"]).read_bytes() == raw
+        assert candidate["technical_validation_status"] == "valid"
+        assert candidate["review_status"] == "pending"
+        assert candidate["rights_status"] == "review_required"
+        assert candidate["generation_metadata"]["workflow_sha256"] == "f" * 64
+        with Image.open(store.path_for(candidate["normalized_artifact_id"])) as normalized:
+            assert normalized.mode == "RGBA"
+            assert normalized.size == (1024, 1024)
+            assert normalized.getpixel((0, 0))[3] == 0
+
+
+def test_qwen_unsafe_background_fails_closed() -> None:
+    image = Image.new("RGB", (256, 256), (220, 224, 230))
+    ImageDraw.Draw(image).ellipse((50, 50, 200, 200), fill=(220, 42, 40))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    with pytest.raises(ValueError, match="LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE"):
+        _prepare_qwen_white_background(buffer.getvalue(), "image/png")
