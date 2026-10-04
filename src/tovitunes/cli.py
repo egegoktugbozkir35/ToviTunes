@@ -122,6 +122,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     lesson_candidates.add_argument(
         "--output", type=Path, default=Path("outputs/PROP_ART_V2_REVIEW.png")
     )
+    lesson_finalize = lesson_object_commands.add_parser("finalize-review")
+    lesson_finalize.add_argument("--apple-candidate-id", required=True)
+    lesson_finalize.add_argument("--ball-candidate-id", required=True)
+    lesson_finalize.add_argument("--actor", required=True)
+    lesson_finalize.add_argument("--reason", required=True)
     for command in ("plan", "status"):
         sub = subcommands.add_parser(command)
         sub.add_argument("episode_id")
@@ -240,12 +245,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = load_config(args.config)
     if args.command == "lesson-objects":
-        from tovitunes.render.lesson_objects import contact_sheet, generate, generate_candidates
+        from tovitunes.render.lesson_objects import (
+            contact_sheet,
+            finalize_review,
+            generate,
+            generate_candidates,
+        )
         from tovitunes.render.lesson_objects import plan as plan_lesson_objects
 
         try:
             if args.lesson_object_command == "plan":
                 lesson_result = plan_lesson_objects(config)
+            elif args.lesson_object_command == "finalize-review":
+                lesson_result = finalize_review(
+                    config,
+                    apple_candidate_id=args.apple_candidate_id,
+                    ball_candidate_id=args.ball_candidate_id,
+                    actor=args.actor,
+                    reason=args.reason,
+                )
             elif args.lesson_object_command == "generate-candidates":
                 lesson_result = generate_candidates(
                     config,

@@ -1,0 +1,44 @@
+{
+  "actor": "human:tovitunes-reviewer",
+  "assets": [
+    {
+      "candidate_artifact_id": "5f976552-0d62-45ed-89ab-fbd6801056f3",
+      "candidate_sha256": "0c8a2d7e3c57042e618e2fbebbe688165779e7d10d152c3edde31a686eb848b0",
+      "canonical_artifact_id": "d9d2adb6-3753-4c63-86ca-7a7954b8ec6e",
+      "canonical_sha256": "0c8a2d7e3c57042e618e2fbebbe688165779e7d10d152c3edde31a686eb848b0",
+      "object_key": "red_apple",
+      "provider_request_id": "31741d02-520c-4bb6-8dcb-4570af05444b",
+      "review_status": "approved",
+      "rights_status": "review_required",
+      "seed": 6991517165705311736,
+      "selected": true,
+      "source_artifact_id": "2a4bdf50-1985-4817-8c7d-5914f07ed908",
+      "source_sha256": "2da9d6061712061e45ce2255599e696f9bb77f91662f20140127e899d54cf2b2"
+    },
+    {
+      "candidate_artifact_id": "ea342196-5aa1-473b-ad34-a1929f0b2ba7",
+      "candidate_sha256": "fa15e44535a885602c963f97183f6284c827b9e090a53b01cfc58dd703de165a",
+      "canonical_artifact_id": "2999861d-41aa-4479-acba-b1d405527f13",
+      "canonical_sha256": "fa15e44535a885602c963f97183f6284c827b9e090a53b01cfc58dd703de165a",
+      "object_key": "red_ball",
+      "provider_request_id": "8c00f181-28a9-4283-b8ac-80f3ad1f6805",
+      "review_status": "approved",
+      "rights_status": "review_required",
+      "seed": 16821418618149460837,
+      "selected": true,
+      "source_artifact_id": "1623fb15-6c0b-4b1c-99c2-10c33e8d2ff4",
+      "source_sha256": "6f1c5bfb3af891287adc03053c3b1b4aea9780f6ef327579e8098d3bd52f495e"
+    }
+  ],
+  "candidate_review_manifest_id": "69a105a0-7151-4aa9-83bb-264af9c3a3b7",
+  "canonical_manifest_artifact_id": "2e5b6568-3126-4ae8-9580-2b2b22c89507",
+  "canonical_manifest_sha256": "bd7fa0db33b3797997c3dcf57acd728705472e74a8560bf3be9be389e7854613",
+  "human_review_policy_version": "lesson_object_human_v1",
+  "image_generation_calls": 0,
+  "review_reason": "Human visual review selected Apple Candidate 02 and Ball Candidate 02 for the ToviTunes Colors-Red pilot. Both provide clear preschool-readable silhouettes, strong dominant lesson-red identity, and improved material and semantic readability over the legacy procedural props.",
+  "review_status": "approved",
+  "rights_status": "review_required",
+  "selected": true,
+  "style_version": "lesson_object_assets_v2",
+  "timestamp": "2026-10-04T17:19:18.905124+00:00"
+}

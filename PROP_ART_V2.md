@@ -243,3 +243,54 @@ normalized RGBA candidates passed SHA and asset-store integrity checks. Each is 
 human review with `review_required` rights and no selected pointer. The local AssetStore contains
 the immutable full-resolution source and normalized artifacts. Human choice and rights clearance
 are outstanding.
+
+## Human-reviewed canonical selection — 2026-10-04
+
+Human review chose `red_apple_candidate_02` and `red_ball_candidate_02`. The explicit
+`lesson-objects finalize-review` command validated both pinned candidates, sources, SHA-256 values,
+PNG/RGBA dimensions, alpha bounds, bottom contact, Qwen provenance, candidate-manifest membership,
+and source dependencies before selecting anything. It then selected each source, candidate, and
+byte-for-byte canonical copy in dependency order. The selected canonical manifest activates
+`lesson_object_assets_v2` in the existing renderer. The exact decision and actor/reason are in
+`review/PROP_ART_V2_FINAL_SELECTION.json`; the earlier review sheet, audit, and candidate manifest
+remain unchanged.
+
+| Object | Reviewed source ID / SHA-256 | Reviewed candidate ID / SHA-256 | Canonical ID / SHA-256 |
+| --- | --- | --- | --- |
+| Red apple | `2a4bdf50-1985-4817-8c7d-5914f07ed908` / `2da9d6061712061e45ce2255599e696f9bb77f91662f20140127e899d54cf2b2` | `5f976552-0d62-45ed-89ab-fbd6801056f3` / `0c8a2d7e3c57042e618e2fbebbe688165779e7d10d152c3edde31a686eb848b0` | `d9d2adb6-3753-4c63-86ca-7a7954b8ec6e` / `0c8a2d7e3c57042e618e2fbebbe688165779e7d10d152c3edde31a686eb848b0` |
+| Red ball | `1623fb15-6c0b-4b1c-99c2-10c33e8d2ff4` / `6f1c5bfb3af891287adc03053c3b1b4aea9780f6ef327579e8098d3bd52f495e` | `ea342196-5aa1-473b-ad34-a1929f0b2ba7` / `fa15e44535a885602c963f97183f6284c827b9e090a53b01cfc58dd703de165a` | `2999861d-41aa-4479-acba-b1d405527f13` / `fa15e44535a885602c963f97183f6284c827b9e090a53b01cfc58dd703de165a` |
+
+The selected canonical manifest is `2e5b6568-3126-4ae8-9580-2b2b22c89507`, SHA-256
+`bd7fa0db33b3797997c3dcf57acd728705472e74a8560bf3be9be389e7854613`.
+The source, candidate, canonical object, and canonical manifest each have an appended human visual
+approval under `lesson_object_human_v1`. Every one of them retains rights `review_required`.
+Commercial-use clearance and release remain separate. This finalization made **zero** new image
+generation or provider calls.
+
+### Frozen Colors–Red V4 smoke
+
+The local candidate store initially had no episode. The frozen episode, selected music/storyboard,
+Tovi pack, and selected V4 environment were copied from the existing local production store into
+this branch's AssetStore without regenerating them. The original production store and its older
+render outputs remain intact. A backup of the candidate store precedes the local merge. Existing
+derived render versions were left in that older store because their dependency pins belong to the
+legacy prop selection; the new V4 artifacts were rendered from the frozen inputs and the selected
+canonical lesson objects.
+
+`production render-v4 --episode-key colors-red-001` passed media QA at 1080 × 1920 for 38.165
+seconds. The final MP4 is `outputs/TOVITUNES_COLORS_RED_001_PILOT_V4.mp4`, artifact
+`bdda4b54-c487-429c-837e-94e52e7d4af3`, SHA-256
+`e0ce789eb49a40471dd1927ef19d9d9239e4b031fd052893fa25b30afebffafa`.
+Render manifest `ddf6f790-86fa-479d-9318-88c3f077ce0e`, SHA-256
+`982d116c052a2432ab0b6e0e0262bcf22039c4449527073c979addf88388e9e3`, pins the
+canonical manifest. Scene PNG metadata records `lesson_object_assets_v2` and the exact canonical
+IDs/SHAs: apple in `lyric_03`, `lyric_05`–`lyric_07`, and `outro`; ball in `lyric_04`–`lyric_07`
+and `outro`. The red swatch records `deterministic_swatch` in its scenes. The representative
+`outputs/TOVITUNES_COLORS_RED_001_PILOT_V4_SCENE_CONTACT_SHEET.png` shows all nine scenes;
+`review/PROP_ART_V2_PILOT_V4_SCENE_CONTACT_SHEET.png` is its checked-in review copy.
+
+A second run through the default `config.example.yaml` reused every render artifact, passed QA,
+and recorded `provider_calls: 0`. No Qwen `/prompt`, Google, Azure, OpenAI, NVIDIA image, or other
+image-provider call occurred during finalization or rendering. Visual review is approved; all four
+lesson-object artifact levels retain `review_required` rights. Publication remains blocked until
+commercial rights and the wider release gates are cleared.

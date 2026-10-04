@@ -1,6 +1,7 @@
 """Lesson-object v2 stays deterministic, review-gated, and provider-free in tests."""
 
 import io
+from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -13,12 +14,15 @@ from tovitunes.benchmark.providers import ProviderFailure, ProviderResult
 from tovitunes.config import EnvironmentGenerationConfig, RuntimeConfig
 from tovitunes.domain.review import ApprovalDecision, RightsDecision
 from tovitunes.persistence.db import Database
+from tovitunes.render import lesson_objects
 from tovitunes.render.composition import (
     LEGACY_PROP_STYLE_VERSION,
     LESSON_OBJECT_STYLE_VERSION,
 )
 from tovitunes.render.lesson_objects import (
     OBJECT_KEYS,
+    ReviewedChoice,
+    _checked_review_choice,
     _prepare_qwen_white_background,
     contact_sheet,
     generate,
@@ -305,3 +309,235 @@ def test_qwen_unsafe_background_fails_closed() -> None:
     image.save(buffer, format="PNG")
     with pytest.raises(ValueError, match="LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE"):
         _prepare_qwen_white_background(buffer.getvalue(), "image/png")
+
+
+class FakeReviewedQwen(FakeTransparentProvider):
+    provider = "qwen_comfyui"
+    model = "qwen-image-2.1-q8"
+
+    def generate(self, spec, reference_paths, *, on_remote_start=None):
+        assert not reference_paths
+        if on_remote_start:
+            on_remote_start()
+        self.calls.append(spec.case_id)
+        image = Image.new("RGB", (256, 256), "white")
+        ImageDraw.Draw(image).ellipse((42, 38, 214, 222), fill=LESSON_RED)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return ProviderResult(
+            image_bytes=buffer.getvalue(),
+            mime_type="image/png",
+            provider_request_id=f"fake-{spec.case_id}",
+            response_metadata={"seed": spec.attempt},
+        )
+
+
+@pytest.fixture
+def review_setup(tmp_path: Path, monkeypatch):
+    config = runtime(tmp_path)
+    provider = FakeReviewedQwen()
+    generated = generate_candidates(
+        config, confirmed=True, candidates_per_object=2, provider=provider
+    )
+    choices = {}
+    for object_key in OBJECT_KEYS:
+        item = next(
+            c
+            for c in generated["candidates"]
+            if c["object_key"] == object_key and c["candidate_index"] == 2
+        )
+        choices[object_key] = ReviewedChoice(
+            object_key=object_key,
+            candidate_id=item["normalized_artifact_id"],
+            candidate_sha256=item["normalized_sha256"],
+            source_id=item["source_artifact_id"],
+            source_sha256=item["source_sha256"],
+            provider_request_id=item["provider_request_id"],
+            seed=2,
+        )
+    monkeypatch.setattr(lesson_objects, "REVIEWED_CHOICES", choices)
+    monkeypatch.setattr(lesson_objects, "REVIEW_MANIFEST_ID", generated["manifest_artifact_id"])
+    store = AssetStore(config.data_root, Database(config.database_path), initialize=False)
+    brand_id = store.get(generated["manifest_artifact_id"]).identity.owner_id
+    return config, provider, generated, choices, store, brand_id
+
+
+def _finalize_fake(config, choices):
+    return lesson_objects.finalize_review(
+        config,
+        apple_candidate_id=choices["red_apple"].candidate_id,
+        ball_candidate_id=choices["red_ball"].candidate_id,
+        actor="human:test-reviewer",
+        reason="Human visual review chose candidate 02 for the pilot.",
+    )
+
+
+def test_finalization_selects_dependencies_and_preserves_exact_bytes(review_setup, monkeypatch):
+    config, provider, generated, choices, store, brand_id = review_setup
+    before_calls = list(provider.calls)
+    selection_order = []
+    original_select = AssetStore.select
+
+    def recorded_select(self, artifact_id):
+        record = self.get(artifact_id)
+        selection_order.append((record.identity.kind, record.identity.slot_key))
+        return original_select(self, artifact_id)
+
+    monkeypatch.setattr(AssetStore, "select", recorded_select)
+    report = _finalize_fake(config, choices)
+    assert provider.calls == before_calls  # no provider generation during finalization
+    assert report["image_generation_calls"] == 0
+    assert selection_order == [
+        ("lesson_object_source", "red_apple_candidate_02"),
+        ("lesson_object_candidate", "red_apple_candidate_02"),
+        ("lesson_object", "red_apple"),
+        ("lesson_object_source", "red_ball_candidate_02"),
+        ("lesson_object_candidate", "red_ball_candidate_02"),
+        ("lesson_object", "red_ball"),
+        ("lesson_object_manifest", "lesson_object_assets_v2"),
+    ]
+    for item in report["assets"]:
+        key = item["object_key"]
+        canonical = store.get(item["canonical_artifact_id"])
+        assert canonical.identity.slot_key == key
+        assert canonical.sha256 == choices[key].candidate_sha256
+        assert (
+            store.path_for(canonical.identity.artifact_id).read_bytes()
+            == store.path_for(choices[key].candidate_id).read_bytes()
+        )
+        assert store.selected("brand", brand_id, "lesson_object", key) == canonical
+        assert lesson_objects._current_review_state(store, canonical.identity.artifact_id) == (
+            "approved",
+            "review_required",
+        )
+        for dependency_id in (choices[key].source_id, choices[key].candidate_id):
+            assert lesson_objects._current_review_state(store, dependency_id) == (
+                "approved",
+                "review_required",
+            )
+    manifest = store.selected(
+        "brand", brand_id, "lesson_object_manifest", "lesson_object_assets_v2"
+    )
+    assert manifest.identity.artifact_id == report["canonical_manifest_artifact_id"]
+    assert manifest.provenance.input_artifact_ids == tuple(
+        item["canonical_artifact_id"] for item in report["assets"]
+    )
+    assert lesson_objects._current_review_state(store, manifest.identity.artifact_id) == (
+        "approved",
+        "review_required",
+    )
+    assert set(resolve_reviewed_assets(store, brand_id)) == set(OBJECT_KEYS)
+    assert (
+        store.read_json(generated["manifest_artifact_id"])["candidates"] == generated["candidates"]
+    )
+
+
+@pytest.mark.parametrize("wrong_key", ["red_apple", "red_ball"])
+def test_finalization_rejects_wrong_candidate_id(review_setup, wrong_key):
+    config, _, _, choices, store, brand_id = review_setup
+    other_key = "red_ball" if wrong_key == "red_apple" else "red_apple"
+    ids = {key: choice.candidate_id for key, choice in choices.items()}
+    ids[wrong_key] = choices[other_key].candidate_id
+    with pytest.raises(ValueError, match="pinned human choices"):
+        lesson_objects.finalize_review(
+            config,
+            apple_candidate_id=ids["red_apple"],
+            ball_candidate_id=ids["red_ball"],
+            actor="human:test-reviewer",
+            reason="reviewed",
+        )
+    assert (
+        store.selected("brand", brand_id, "lesson_object_manifest", "lesson_object_assets_v2")
+        is None
+    )
+
+
+@pytest.mark.parametrize("object_key", OBJECT_KEYS)
+def test_review_validation_rejects_wrong_candidate_slot(review_setup, object_key):
+    _, _, generated, choices, store, brand_id = review_setup
+    other = "red_ball" if object_key == "red_apple" else "red_apple"
+    with pytest.raises(ValueError, match="candidate identity or bytes differ"):
+        _checked_review_choice(
+            store,
+            brand_id,
+            replace(choices[object_key], object_key=other),
+            generated["candidates"],
+        )
+
+
+@pytest.mark.parametrize("problem", ["sha", "source", "rejected", "rights_blocked"])
+def test_review_validation_fails_closed(review_setup, problem):
+    _, _, generated, choices, store, brand_id = review_setup
+    choice = choices["red_apple"]
+    if problem == "sha":
+        choice = replace(choice, candidate_sha256="0" * 64)
+    elif problem == "source":
+        choice = replace(choice, source_id=choices["red_ball"].source_id)
+    elif problem == "rejected":
+        store.record_approval(
+            ApprovalDecision(
+                target_id=choice.candidate_id,
+                target_kind="artifact",
+                status="rejected",
+                actor="human:test-reviewer",
+                reason="rejected",
+                policy_version="test",
+                decided_at=datetime.now(UTC),
+            )
+        )
+    else:
+        store.record_rights(
+            RightsDecision(
+                artifact_id=choice.candidate_id,
+                status="blocked",
+                actor="human:test-reviewer",
+                policy_version="test",
+                decided_at=datetime.now(UTC),
+            )
+        )
+    with pytest.raises(ValueError):
+        _checked_review_choice(store, brand_id, choice, generated["candidates"])
+
+
+def test_review_validation_rejects_missing_source_dependency(review_setup):
+    config, _, generated, choices, store, brand_id = review_setup
+    choice = choices["red_apple"]
+    original = store.get(choice.candidate_id)
+    stage = config.database_path.parent / "candidate-without-dependency.png"
+    stage.write_bytes(store.path_for(choice.candidate_id).read_bytes())
+    trusted = AssetStore(config.data_root, store.database, generated_source_roots=[stage.parent])
+    detached = trusted.ingest(
+        stage,
+        owner_scope="brand",
+        owner_id=brand_id,
+        kind="lesson_object_candidate",
+        slot_key="red_apple_candidate_02",
+        provenance=original.provenance,
+        expected_media_type="image/png",
+    )
+    with pytest.raises(ValueError, match="source dependency differs"):
+        _checked_review_choice(
+            trusted,
+            brand_id,
+            replace(choice, candidate_id=detached.identity.artifact_id),
+            generated["candidates"],
+        )
+
+
+def test_manifest_not_selected_when_canonical_object_selection_fails(review_setup, monkeypatch):
+    config, _, _, choices, store, brand_id = review_setup
+    original_select = AssetStore.select
+
+    def fail_ball(self, artifact_id):
+        record = self.get(artifact_id)
+        if record.identity.kind == "lesson_object" and record.identity.slot_key == "red_ball":
+            raise ValueError("ball canonical selection failed")
+        return original_select(self, artifact_id)
+
+    monkeypatch.setattr(AssetStore, "select", fail_ball)
+    with pytest.raises(ValueError, match="ball canonical selection failed"):
+        _finalize_fake(config, choices)
+    assert (
+        store.selected("brand", brand_id, "lesson_object_manifest", "lesson_object_assets_v2")
+        is None
+    )

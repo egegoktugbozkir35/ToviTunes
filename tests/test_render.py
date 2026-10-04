@@ -1,6 +1,7 @@
 """Network-free unit checks and a two-second real portrait composition/mux."""
 
 import io
+import json
 import shutil
 import sqlite3
 import sys
@@ -20,7 +21,7 @@ from tovitunes.artifacts.store import AssetStore, InputDependency
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
-from tovitunes.domain.review import ApprovalDecision
+from tovitunes.domain.review import ApprovalDecision, RightsDecision
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedScene, TimedStoryboard
 from tovitunes.persistence.db import Database
 from tovitunes.render import production
@@ -54,6 +55,7 @@ def no_external_calls(monkeypatch):
         "tovitunes.benchmark.runner.BenchmarkRunner.run",
         "tovitunes.benchmark.providers.GeminiImageProvider.generate",
         "tovitunes.benchmark.providers.OpenAIImageProvider.generate",
+        "tovitunes.benchmark.providers.QwenComfyUIImageProvider.generate",
         "tovitunes.pipeline.creative.FakeDraftGenerator.episode_spec",
     ):
         monkeypatch.setattr(target, forbidden)
@@ -471,6 +473,10 @@ def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
     assert first["mp4_sha256"] == second["mp4_sha256"]
     assert rows_snapshot(config.database_path) == before
     manifest = RenderManifest.model_validate(store.read_json(first["render_manifest_id"]))
+    lesson = next(scene for scene in manifest.scenes if scene.scene_id == "lesson")
+    with Image.open(store.path_for(lesson.scene_image_artifact_id)) as scene_image:
+        metadata = json.loads(scene_image.info["tovitunes_composition"])
+    assert metadata["prop_style_version"] == "preschool_soft_v1"
     assert "environment_set_artifact_id" not in manifest.model_dump(mode="json")
     assert "visual_story_plan_artifact_id" not in manifest.model_dump(mode="json")
     for scene in manifest.scenes:
@@ -510,6 +516,118 @@ def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
         canonical(manifest.model_dump(mode="json"))
         == store.path_for(first["render_manifest_id"]).read_bytes()
     )
+
+
+@pytest.mark.parametrize("activate_manifest", [False, True])
+def test_selected_lesson_manifest_switches_renderer_to_reviewed_props(
+    render_fixture, activate_manifest
+):
+    config, store, storyboard = render_fixture
+    brand_id = store.database.get_episode(storyboard.episode_id).brand_revision_id
+    image = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    ImageDraw.Draw(image).ellipse((170, 180, 854, 1023), fill="#E8302A")
+    stage = config.database_path.parent / "reviewed-prop.png"
+    image.save(stage)
+    prop_ids = {}
+    for object_key in ("red_apple", "red_ball"):
+        record = store.ingest(
+            stage,
+            owner_scope="brand",
+            owner_id=brand_id,
+            kind="lesson_object",
+            slot_key=object_key,
+            provenance=Provenance(
+                source_kind="deterministic",
+                acquired_at=datetime.now(UTC),
+                provider="fixture",
+            ),
+            expected_media_type="image/png",
+        )
+        prop_ids[object_key] = record.identity.artifact_id
+        store.record_approval(
+            ApprovalDecision(
+                target_id=record.identity.artifact_id,
+                target_kind="artifact",
+                status="approved",
+                actor="human:fixture",
+                policy_version="fixture",
+                decided_at=datetime.now(UTC),
+            )
+        )
+        store.record_rights(
+            RightsDecision(
+                artifact_id=record.identity.artifact_id,
+                status="review_required",
+                actor="human:fixture",
+                policy_version="fixture",
+                decided_at=datetime.now(UTC),
+            )
+        )
+        store.select(record.identity.artifact_id)
+    manifest_path = config.database_path.parent / "reviewed-props.json"
+    manifest_path.write_text(json.dumps({"style_version": "lesson_object_assets_v2"}))
+    reviewed_manifest = store.ingest(
+        manifest_path,
+        owner_scope="brand",
+        owner_id=brand_id,
+        kind="lesson_object_manifest",
+        slot_key="lesson_object_assets_v2",
+        provenance=Provenance(
+            source_kind="deterministic",
+            acquired_at=datetime.now(UTC),
+            provider="fixture",
+            input_artifact_ids=tuple(prop_ids.values()),
+        ),
+        dependencies=[InputDependency(artifact_id, key) for key, artifact_id in prop_ids.items()],
+        expected_media_type="application/json",
+    )
+    store.record_approval(
+        ApprovalDecision(
+            target_id=reviewed_manifest.identity.artifact_id,
+            target_kind="artifact",
+            status="approved",
+            actor="human:fixture",
+            policy_version="fixture",
+            decided_at=datetime.now(UTC),
+        )
+    )
+    store.record_rights(
+        RightsDecision(
+            artifact_id=reviewed_manifest.identity.artifact_id,
+            status="review_required",
+            actor="human:fixture",
+            policy_version="fixture",
+            decided_at=datetime.now(UTC),
+        )
+    )
+
+    def lesson_metadata(result):
+        render_manifest = RenderManifest.model_validate(
+            store.read_json(result["render_manifest_id"])
+        )
+        lesson = next(scene for scene in render_manifest.scenes if scene.scene_id == "lesson")
+        with Image.open(store.path_for(lesson.scene_image_artifact_id)) as scene_image:
+            return json.loads(scene_image.info["tovitunes_composition"]), render_manifest
+
+    renderer = ProductionRenderer(config, canvas=(270, 480))
+    assert (
+        store.selected("brand", brand_id, "lesson_object_manifest", "lesson_object_assets_v2")
+        is None
+    )
+    if activate_manifest:
+        store.select(reviewed_manifest.identity.artifact_id)
+    reviewed_metadata, render_manifest = lesson_metadata(renderer.render("colors-red-001"))
+    ball = next(prop for prop in reviewed_metadata["props"] if prop["type"] == "red_ball")
+    if not activate_manifest:
+        assert reviewed_metadata["prop_style_version"] == "preschool_soft_v1"
+        assert "asset_artifact_id" not in ball
+        assert reviewed_manifest.identity.artifact_id not in render_manifest.dependency_sha256
+        return
+    assert reviewed_metadata["prop_style_version"] == "lesson_object_assets_v2"
+    assert ball["asset_artifact_id"] == prop_ids["red_ball"]
+    assert ball["asset_sha256"] == store.get(prop_ids["red_ball"]).sha256
+    assert reviewed_manifest.identity.artifact_id in render_manifest.dependency_sha256
+    assert set(prop_ids.values()) <= set(render_manifest.dependency_sha256)
 
 
 def test_tiny_v4_render_uses_reviewed_fixture_environment(render_fixture, monkeypatch):

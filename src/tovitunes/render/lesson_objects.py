@@ -4,6 +4,8 @@ import io
 import json
 import tempfile
 from collections import deque
+from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -12,7 +14,7 @@ from typing import Any, Literal, cast
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import Field
 
-from tovitunes.artifacts.store import AssetStore, InputDependency
+from tovitunes.artifacts.store import ArtifactRecord, AssetStore, InputDependency
 from tovitunes.benchmark.models import CanonicalImageSpec
 from tovitunes.benchmark.providers import (
     GeminiImageProvider,
@@ -34,6 +36,41 @@ OBJECT_KEYS = ("red_apple", "red_ball")
 CANVAS = (1024, 1024)
 ANCHORS = {"red_apple": "bottom_center", "red_ball": "bottom_center"}
 SOURCE_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+HUMAN_REVIEW_POLICY = "lesson_object_human_v1"
+REVIEW_MANIFEST_ID = "69a105a0-7151-4aa9-83bb-264af9c3a3b7"
+
+
+@dataclass(frozen=True)
+class ReviewedChoice:
+    object_key: str
+    candidate_id: str
+    candidate_sha256: str
+    source_id: str
+    source_sha256: str
+    provider_request_id: str
+    seed: int
+
+
+REVIEWED_CHOICES = {
+    "red_apple": ReviewedChoice(
+        "red_apple",
+        "5f976552-0d62-45ed-89ab-fbd6801056f3",
+        "0c8a2d7e3c57042e618e2fbebbe688165779e7d10d152c3edde31a686eb848b0",
+        "2a4bdf50-1985-4817-8c7d-5914f07ed908",
+        "2da9d6061712061e45ce2255599e696f9bb77f91662f20140127e899d54cf2b2",
+        "31741d02-520c-4bb6-8dcb-4570af05444b",
+        6991517165705311736,
+    ),
+    "red_ball": ReviewedChoice(
+        "red_ball",
+        "ea342196-5aa1-473b-ad34-a1929f0b2ba7",
+        "fa15e44535a885602c963f97183f6284c827b9e090a53b01cfc58dd703de165a",
+        "1623fb15-6c0b-4b1c-99c2-10c33e8d2ff4",
+        "6f1c5bfb3af891287adc03053c3b1b4aea9780f6ef327579e8098d3bd52f495e",
+        "8c00f181-28a9-4283-b8ac-80f3ad1f6805",
+        16821418618149460837,
+    ),
+}
 
 OBJECT_BRIEFS = {
     "red_apple": (
@@ -669,6 +706,290 @@ def generate_candidates(
         "candidates": [item.model_dump(mode="json") for item in candidates],
         "manifest_artifact_id": manifest.identity.artifact_id,
     }
+
+
+def _current_review_state(store: AssetStore, artifact_id: str) -> tuple[str | None, str | None]:
+    with closing(store.database.connect()) as connection:
+        approval = connection.execute(
+            "SELECT status FROM approval_decisions WHERE artifact_id = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (artifact_id,),
+        ).fetchone()
+        rights = connection.execute(
+            "SELECT status FROM rights_decisions WHERE artifact_id = ? ORDER BY rowid DESC LIMIT 1",
+            (artifact_id,),
+        ).fetchone()
+    return (
+        str(approval["status"]) if approval else None,
+        str(rights["status"]) if rights else None,
+    )
+
+
+def _checked_review_choice(
+    store: AssetStore,
+    brand_id: str,
+    choice: ReviewedChoice,
+    manifest_candidates: list[dict[str, Any]],
+) -> tuple[ArtifactRecord, ArtifactRecord]:
+    candidate = store.get(choice.candidate_id)
+    source = store.get(choice.source_id)
+    expected_slot = _candidate_slot(choice.object_key, 2)
+    if (
+        candidate.identity.owner_scope != "brand"
+        or candidate.identity.owner_id != brand_id
+        or candidate.identity.kind != "lesson_object_candidate"
+        or candidate.identity.slot_key != expected_slot
+        or candidate.sha256 != choice.candidate_sha256
+        or candidate.mime_type != "image/png"
+        or not store.inspect(choice.candidate_id).valid
+    ):
+        raise ValueError(f"reviewed {choice.object_key} candidate identity or bytes differ")
+    if (
+        source.identity.owner_scope != "brand"
+        or source.identity.owner_id != brand_id
+        or source.identity.kind != "lesson_object_source"
+        or source.identity.slot_key != expected_slot
+        or source.sha256 != choice.source_sha256
+        or source.mime_type != "image/png"
+        or not store.inspect(choice.source_id).valid
+        or source.provenance.source_kind != "provider"
+        or source.provenance.provider != "qwen_comfyui"
+        or source.provenance.model != "qwen-image-2.1-q8"
+        or source.provenance.request_id != choice.provider_request_id
+    ):
+        raise ValueError(f"reviewed {choice.object_key} source or provider provenance differs")
+    if (
+        candidate.provenance.source_kind != "deterministic"
+        or candidate.provenance.provider != "tovitunes.lesson_objects.normalize"
+        or candidate.provenance.input_artifact_ids != (choice.source_id,)
+    ):
+        raise ValueError(f"reviewed {choice.object_key} candidate provenance differs")
+    with closing(store.database.connect()) as connection:
+        dependencies = connection.execute(
+            "SELECT input_artifact_id, input_sha256, purpose FROM artifact_dependencies "
+            "WHERE consumer_artifact_id = ?",
+            (choice.candidate_id,),
+        ).fetchall()
+    if len(dependencies) != 1 or tuple(dependencies[0]) != (
+        choice.source_id,
+        choice.source_sha256,
+        "provider_source",
+    ):
+        raise ValueError(f"reviewed {choice.object_key} source dependency differs")
+    for artifact_id in (choice.source_id, choice.candidate_id):
+        approval, rights = _current_review_state(store, artifact_id)
+        if approval not in {"pending", "approved"} or rights != "review_required":
+            raise ValueError(f"reviewed {choice.object_key} has rejected or blocked state")
+    matching = [
+        item
+        for item in manifest_candidates
+        if item.get("normalized_artifact_id") == choice.candidate_id
+    ]
+    if len(matching) != 1:
+        raise ValueError(f"reviewed {choice.object_key} missing from candidate manifest")
+    item = matching[0]
+    if (
+        item.get("object_key") != choice.object_key
+        or item.get("candidate_index") != 2
+        or item.get("candidate_slot") != expected_slot
+        or item.get("normalized_sha256") != choice.candidate_sha256
+        or item.get("source_artifact_id") != choice.source_id
+        or item.get("source_sha256") != choice.source_sha256
+        or item.get("provider") != "qwen_comfyui"
+        or item.get("provider_request_id") != choice.provider_request_id
+        or item.get("generation_metadata", {}).get("seed") != choice.seed
+        or item.get("technical_validation_status") != "valid"
+        or item.get("review_status") != "pending"
+        or item.get("rights_status") != "review_required"
+    ):
+        raise ValueError(f"reviewed {choice.object_key} manifest evidence differs")
+    with Image.open(store.path_for(choice.candidate_id)) as image:
+        image.load()
+        if image.mode != "RGBA" or image.size != CANVAS:
+            raise ValueError(f"reviewed {choice.object_key} RGBA canvas differs")
+        alpha = image.getchannel("A")
+        bounds = alpha.getbbox()
+        if (
+            bounds is None
+            or bounds[3] != CANVAS[1]
+            or any(
+                alpha.getpixel(point) != 0
+                for point in (
+                    (0, 0),
+                    (CANVAS[0] - 1, 0),
+                    (0, CANVAS[1] - 1),
+                    (CANVAS[0] - 1, CANVAS[1] - 1),
+                )
+            )
+        ):
+            raise ValueError(f"reviewed {choice.object_key} alpha or bottom contact differs")
+    return source, candidate
+
+
+def _approve_visual_use(store: AssetStore, artifact_id: str, actor: str, reason: str) -> None:
+    now = datetime.now(UTC)
+    store.record_approval(
+        ApprovalDecision(
+            target_id=artifact_id,
+            target_kind="artifact",
+            status="approved",
+            actor=actor,
+            reason=reason,
+            policy_version=HUMAN_REVIEW_POLICY,
+            decided_at=now,
+        )
+    )
+    store.record_rights(
+        RightsDecision(
+            artifact_id=artifact_id,
+            status="review_required",
+            actor=actor,
+            rationale="Visual approval does not clear commercial-use rights.",
+            policy_version=HUMAN_REVIEW_POLICY,
+            decided_at=now,
+        )
+    )
+
+
+def finalize_review(
+    config: RuntimeConfig,
+    *,
+    apple_candidate_id: str,
+    ball_candidate_id: str,
+    actor: str,
+    reason: str,
+) -> dict[str, object]:
+    """Promote only the two pinned human choices, without provider calls."""
+    if not actor.startswith("human:") or not reason.strip():
+        raise ValueError("finalization requires an explicit human actor and review reason")
+    if (apple_candidate_id, ball_candidate_id) != (
+        REVIEWED_CHOICES["red_apple"].candidate_id,
+        REVIEWED_CHOICES["red_ball"].candidate_id,
+    ):
+        raise ValueError("finalization candidate IDs differ from pinned human choices")
+    store, brand_id = _store(config)
+    review_manifest = store.get(REVIEW_MANIFEST_ID)
+    if (
+        review_manifest.identity.owner_scope != "brand"
+        or review_manifest.identity.owner_id != brand_id
+        or review_manifest.identity.kind != "lesson_object_candidate_manifest"
+        or review_manifest.identity.slot_key != LESSON_OBJECT_STYLE_VERSION
+        or not store.inspect(REVIEW_MANIFEST_ID).valid
+    ):
+        raise ValueError("candidate review manifest identity or bytes differ")
+    manifest_data = store.read_json(REVIEW_MANIFEST_ID)
+    if (
+        not isinstance(manifest_data, dict)
+        or manifest_data.get("style_version") != LESSON_OBJECT_STYLE_VERSION
+    ):
+        raise ValueError("candidate review manifest content differs")
+    raw_candidates = manifest_data.get("candidates")
+    if not isinstance(raw_candidates, list) or not all(isinstance(x, dict) for x in raw_candidates):
+        raise ValueError("candidate review manifest lacks candidates")
+    manifest_candidates = cast(list[dict[str, Any]], raw_candidates)
+    checked = {}
+    for object_key in OBJECT_KEYS:
+        choice = REVIEWED_CHOICES[object_key]
+        if choice.candidate_id not in review_manifest.provenance.input_artifact_ids:
+            raise ValueError(f"{object_key} is not a pinned manifest dependency")
+        checked[object_key] = _checked_review_choice(store, brand_id, choice, manifest_candidates)
+        if store.selected("brand", brand_id, "lesson_object", object_key) is not None:
+            raise ValueError(f"canonical {object_key} is already selected")
+    if store.selected("brand", brand_id, "lesson_object_manifest", LESSON_OBJECT_STYLE_VERSION):
+        raise ValueError("canonical lesson-object manifest is already selected")
+
+    working = config.data_root / ".lesson-object-working"
+    working.mkdir(exist_ok=True)
+    promoted: list[dict[str, object]] = []
+    with tempfile.TemporaryDirectory(dir=working) as dirname:
+        stage = Path(dirname)
+        trusted = AssetStore(config.data_root, store.database, generated_source_roots=[stage])
+        for object_key in OBJECT_KEYS:
+            choice = REVIEWED_CHOICES[object_key]
+            source, candidate = checked[object_key]
+            _approve_visual_use(trusted, source.identity.artifact_id, actor, reason)
+            trusted.select(source.identity.artifact_id)
+            _approve_visual_use(trusted, candidate.identity.artifact_id, actor, reason)
+            trusted.select(candidate.identity.artifact_id)
+            canonical_path = stage / f"{object_key}.png"
+            canonical_path.write_bytes(store.path_for(candidate.identity.artifact_id).read_bytes())
+            canonical = trusted.ingest(
+                canonical_path,
+                owner_scope="brand",
+                owner_id=brand_id,
+                kind="lesson_object",
+                slot_key=object_key,
+                provenance=Provenance(
+                    source_kind="deterministic",
+                    acquired_at=datetime.now(UTC),
+                    provider="tovitunes.lesson_objects.finalize",
+                    model=LESSON_OBJECT_STYLE_VERSION,
+                    input_artifact_ids=(candidate.identity.artifact_id,),
+                ),
+                dependencies=[
+                    InputDependency(candidate.identity.artifact_id, "reviewed_candidate")
+                ],
+                expected_media_type="image/png",
+            )
+            if canonical.sha256 != choice.candidate_sha256:
+                raise ValueError(f"promoted {object_key} bytes differ from reviewed candidate")
+            _approve_visual_use(trusted, canonical.identity.artifact_id, actor, reason)
+            trusted.select(canonical.identity.artifact_id)
+            promoted.append(
+                {
+                    "object_key": object_key,
+                    "source_artifact_id": source.identity.artifact_id,
+                    "source_sha256": source.sha256,
+                    "candidate_artifact_id": candidate.identity.artifact_id,
+                    "candidate_sha256": candidate.sha256,
+                    "canonical_artifact_id": canonical.identity.artifact_id,
+                    "canonical_sha256": canonical.sha256,
+                    "provider_request_id": choice.provider_request_id,
+                    "seed": choice.seed,
+                    "review_status": "approved",
+                    "rights_status": "review_required",
+                    "selected": True,
+                }
+            )
+        report: dict[str, object] = {
+            "style_version": LESSON_OBJECT_STYLE_VERSION,
+            "human_review_policy_version": HUMAN_REVIEW_POLICY,
+            "actor": actor,
+            "review_reason": reason,
+            "candidate_review_manifest_id": REVIEW_MANIFEST_ID,
+            "assets": promoted,
+            "review_status": "approved",
+            "rights_status": "review_required",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "image_generation_calls": 0,
+        }
+        manifest_path = stage / "lesson-object-final-selection.json"
+        manifest_path.write_text(json.dumps(report, sort_keys=True), encoding="utf-8")
+        canonical_manifest = trusted.ingest(
+            manifest_path,
+            owner_scope="brand",
+            owner_id=brand_id,
+            kind="lesson_object_manifest",
+            slot_key=LESSON_OBJECT_STYLE_VERSION,
+            provenance=Provenance(
+                source_kind="deterministic",
+                acquired_at=datetime.now(UTC),
+                provider="tovitunes.lesson_objects.finalize",
+                model=LESSON_OBJECT_STYLE_VERSION,
+                input_artifact_ids=tuple(str(item["canonical_artifact_id"]) for item in promoted),
+            ),
+            dependencies=[
+                InputDependency(str(item["canonical_artifact_id"]), str(item["object_key"]))
+                for item in promoted
+            ],
+            expected_media_type="application/json",
+        )
+        _approve_visual_use(trusted, canonical_manifest.identity.artifact_id, actor, reason)
+        trusted.select(canonical_manifest.identity.artifact_id)
+        report["canonical_manifest_artifact_id"] = canonical_manifest.identity.artifact_id
+        report["canonical_manifest_sha256"] = canonical_manifest.sha256
+        report["selected"] = True
+    return report
 
 
 def resolve_reviewed_assets(
