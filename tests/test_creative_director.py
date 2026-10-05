@@ -539,7 +539,7 @@ def test_pure_prompts_include_version_pins_safety_and_preschool_rules():
     "values",
     [
         {"provider": "ollama"},
-        {"model": "another/model"},
+        {"model": ""},
         {"api_key": "secret"},
         {"timeout_seconds": 0},
         {"timeout_seconds": float("nan")},

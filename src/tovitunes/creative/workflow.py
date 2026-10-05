@@ -14,7 +14,7 @@ from uuid import uuid4
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.catalog import BrandCatalog, load_brand
 from tovitunes.config import RuntimeConfig
-from tovitunes.creative.director import NvidiaCreativeDirector, pinned_facts
+from tovitunes.creative.director import CreativeDirector, pinned_facts
 from tovitunes.creative.models import CreativeSubjectCandidate, CreativeSubjectPool
 from tovitunes.creative.prompts import SUBJECT_PROMPT, subject_messages
 from tovitunes.creative.provider import (
@@ -23,6 +23,7 @@ from tovitunes.creative.provider import (
     canonical,
     fingerprint,
 )
+from tovitunes.creative.resilience import generation_audit
 from tovitunes.creative.validation import treatment, validate_subject
 from tovitunes.domain.episode import Episode
 from tovitunes.persistence.db import Database
@@ -288,7 +289,7 @@ class CreativeWorkflow:
             raise ValueError("Production V1 requires English and the selected Tovi-only brand")
         lease = self.leases.acquire(
             f"creative-planning:{self.catalog.definition.brand_id}",
-            duration_seconds=self.config.creative_llm.timeout_seconds * 8 + 600,
+            duration_seconds=self.config.creative_llm.generation_budget_seconds(4),
         )
 
         def assert_owner() -> None:
@@ -356,6 +357,7 @@ class CreativeWorkflow:
                     db.commit()
                 result["run_id"] = row["run_id"]
             result["provider_calls"] = call_report(self.database, before)
+            result["generation_attempts"] = generation_audit(self.database, episode.episode_id)
             return result
         finally:
             self.leases.release(lease)
@@ -366,7 +368,7 @@ class CreativeWorkflow:
         digest: str,
         assert_owner: Callable[[], None],
     ) -> dict[str, Any]:
-        director = NvidiaCreativeDirector(
+        director = CreativeDirector(
             self.catalog, self.database, self.provider, assert_owner=assert_owner
         )
         service = CreativeDraftService(self.store, self.generated, director)

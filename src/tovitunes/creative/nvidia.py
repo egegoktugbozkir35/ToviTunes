@@ -1,4 +1,4 @@
-"""First-party donor NIM transport adapted without fallback or hidden retries."""
+"""First-party donor NIM transport adapted with typed terminal failures and no hidden retries."""
 
 import json
 import os
@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from tovitunes.config import CreativeLLMConfig
-from tovitunes.creative.provider import ChatResponse, Message, ProviderError
+from tovitunes.creative.provider import ChatResponse, FailureCategory, Message, ProviderError
 
 
 class NvidiaNIMClient:
@@ -18,16 +18,22 @@ class NvidiaNIMClient:
         self.config = config
         self.model_name: str = config.model
         self._owns_client = client is None
-        self._client = client or httpx.Client(
-            timeout=config.timeout_seconds, transport=httpx.HTTPTransport(retries=0)
-        )
+        self._client = client
 
     @property
     def settings(self) -> dict[str, object]:
-        return self.config.model_dump(exclude={"api_key_env"})
+        # Preserve pre-fallback fingerprints so existing receipts remain reusable.
+        return self.config.model_dump(
+            exclude={
+                "api_key_env",
+                "fallback_models",
+                "fallback_to_ollama_on_endpoint_failure",
+                "ollama",
+            }
+        )
 
     def close(self) -> None:
-        if self._owns_client:
+        if self._owns_client and self._client is not None:
             self._client.close()
 
     def check_ready(self) -> None:
@@ -47,10 +53,37 @@ class NvidiaNIMClient:
     def _provider_error(body: dict[str, Any]) -> None:
         if body.get("error") is not None:
             # Do not echo arbitrary remote error bodies (they may contain request secrets).
-            raise ProviderError("NVIDIA NIM returned a provider error; model unavailable")
+            error = body["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+            category = (
+                FailureCategory.MODEL_UNAVAILABLE
+                if code in {"model_not_found", "model_unavailable", "model_not_supported"}
+                else FailureCategory.PROVIDER_REJECTED
+            )
+            raise ProviderError("NVIDIA NIM returned a provider error", category=category)
+
+    @staticmethod
+    def _finish(finish: object) -> None:
+        if not isinstance(finish, str) or finish not in {
+            "stop",
+            "length",
+            "content_filter",
+            "tool_calls",
+            "function_call",
+        }:
+            raise ProviderError(
+                "NVIDIA NIM unknown completion marker; do not resend", ambiguous=True
+            )
+        if finish != "stop":
+            raise ProviderError(
+                "NVIDIA NIM completed with unusable finish reason",
+                category=FailureCategory.INCOMPLETE_ANSWER,
+            )
 
     @staticmethod
     def _text(content: object) -> str:
+        if content is None:
+            return ""
         if isinstance(content, str):
             return content
         if isinstance(content, list) and all(
@@ -63,7 +96,12 @@ class NvidiaNIMClient:
         self, messages: Sequence[Message], *, record_identity: Callable[[str], None]
     ) -> ChatResponse:
         headers = self._headers()
+        if self._client is None:
+            self._client = httpx.Client(
+                timeout=self.config.timeout_seconds, transport=httpx.HTTPTransport(retries=0)
+            )
         remote_id: str | None = None
+        response_started = False
 
         def identity(body: dict[str, Any]) -> None:
             nonlocal remote_id
@@ -86,15 +124,29 @@ class NvidiaNIMClient:
                 },
                 timeout=self.config.timeout_seconds,
             ) as response:
+                response_started = True
                 for name in ("x-request-id", "request-id", "x-nvidia-request-id"):
                     if response.headers.get(name):
                         remote_id = response.headers[name]
                         record_identity(remote_id)
                         break
                 if response.status_code >= 400:
+                    if response.status_code in {400, 404, 422}:
+                        response.read()
+                        try:
+                            error_body = response.json()
+                        except ValueError:
+                            error_body = None
+                        if isinstance(error_body, dict):
+                            self._provider_error(error_body)
                     raise ProviderError(
                         f"NVIDIA NIM HTTP {response.status_code} for {self.model_name}",
-                        ambiguous=response.status_code >= 500,
+                        ambiguous=response.status_code >= 500 or response.status_code == 408,
+                        category=(
+                            FailureCategory.AUTHENTICATION
+                            if response.status_code in {401, 403}
+                            else FailureCategory.PROVIDER_REJECTED
+                        ),
                     )
                 if "text/event-stream" not in response.headers.get("content-type", "").casefold():
                     response.read()
@@ -104,6 +156,9 @@ class NvidiaNIMClient:
                     identity(body)
                     self._provider_error(body)
                     try:
+                        finish = body["choices"][0].get("finish_reason")
+                        if finish is not None:
+                            self._finish(finish)
                         content = self._text(body["choices"][0]["message"]["content"])
                     except (KeyError, IndexError, TypeError) as exc:
                         raise ProviderError("NVIDIA NIM response has no answer content") from exc
@@ -115,11 +170,12 @@ class NvidiaNIMClient:
                             continue
                         data = line.removeprefix("data:").strip()
                         if data == "[DONE]":
-                            complete = True
                             break
                         event = json.loads(data)
                         if not isinstance(event, dict):
-                            raise ProviderError("NVIDIA NIM returned a non-object streaming event")
+                            raise ProviderError(
+                                "NVIDIA NIM returned a non-object streaming event", ambiguous=True
+                            )
                         identity(event)
                         self._provider_error(event)
                         choices = event.get("choices")
@@ -127,32 +183,67 @@ class NvidiaNIMClient:
                         if choices == [] and "usage" in event:
                             continue
                         if not isinstance(choices, list) or not choices:
-                            raise ProviderError("NVIDIA NIM returned malformed streaming choices")
+                            raise ProviderError(
+                                "NVIDIA NIM returned malformed streaming choices", ambiguous=True
+                            )
                         choice = choices[0]
                         if not isinstance(choice, dict):
-                            raise ProviderError("NVIDIA NIM returned malformed streaming choice")
+                            raise ProviderError(
+                                "NVIDIA NIM returned malformed streaming choice", ambiguous=True
+                            )
                         delta = choice.get("delta", choice.get("message"))
                         if not isinstance(delta, dict):
-                            raise ProviderError("NVIDIA NIM returned malformed streaming delta")
+                            raise ProviderError(
+                                "NVIDIA NIM returned malformed streaming delta", ambiguous=True
+                            )
                         if delta.get("content") is not None:
-                            parts.append(self._text(delta["content"]))
+                            try:
+                                parts.append(self._text(delta["content"]))
+                            except ProviderError as exc:
+                                raise ProviderError(
+                                    "malformed streaming content", ambiguous=True
+                                ) from exc
                         # reasoning_content is deliberately never collected.
                         finish = choice.get("finish_reason")
                         if finish is not None:
-                            if finish != "stop":
-                                raise ProviderError(f"NVIDIA NIM incomplete answer: {finish}")
+                            self._finish(finish)
                             complete = True
+                            break
                     if not complete:
                         raise ProviderError(
                             "NVIDIA NIM stream ended without completion", ambiguous=True
                         )
                     content = "".join(parts)
+        except httpx.ConnectError as exc:
+            # Only a typed DNS/refused cause proves no remote interaction could begin.
+            import socket
+
+            cause: BaseException | None = exc
+            safe = False
+            seen: set[int] = set()
+            while cause is not None and id(cause) not in seen:
+                seen.add(id(cause))
+                if isinstance(cause, (socket.gaierror, ConnectionRefusedError)):
+                    safe = not response_started
+                    break
+                cause = cause.__cause__
+            raise ProviderError(
+                "NVIDIA endpoint unreachable before interaction"
+                if safe
+                else "NVIDIA connection outcome uncertain; do not resend",
+                ambiguous=not safe,
+                category=FailureCategory.ENDPOINT_UNREACHABLE,
+            ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(
                 f"NVIDIA NIM transport {type(exc).__name__}; do not resend", ambiguous=True
             ) from exc
         except (ValueError, UnicodeError) as exc:
-            raise ProviderError("NVIDIA NIM returned malformed transport JSON") from exc
+            raise ProviderError(
+                "NVIDIA NIM returned malformed transport JSON", ambiguous=True
+            ) from exc
         if not content.strip():
-            raise ProviderError("NVIDIA NIM returned empty answer content")
+            raise ProviderError(
+                "NVIDIA NIM returned empty answer content", category=FailureCategory.EMPTY_ANSWER
+            )
         return ChatResponse(content, remote_id)

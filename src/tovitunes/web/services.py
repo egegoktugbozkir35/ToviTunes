@@ -10,9 +10,9 @@ from typing import Any
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
+from tovitunes.creative.factory import creative_generator
 from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.provider import DurableStructuredGenerator
 from tovitunes.creative.workflow import CreativeWorkflow, eligibility
 from tovitunes.persistence.db import Database
 from tovitunes.publication.preflight import evaluate_release
@@ -206,12 +206,13 @@ def generate_publication_metadata(config: RuntimeConfig, episode_key: str) -> di
         raise ValueError("Selected final render is not ready for publication metadata")
     transport = NvidiaNIMClient(config.creative_llm)
     try:
-        workflow = CreativeWorkflow(
-            config, DurableStructuredGenerator(Database(config.database_path), transport)
-        )
-        result = MetadataWriter(workflow).generate(episode_key)
-        result["preflight"] = evaluate_release(config, episode_key).as_dict()
-        return result
+        with creative_generator(
+            Database(config.database_path), config.creative_llm, transport
+        ) as generator:
+            workflow = CreativeWorkflow(config, generator)
+            result = MetadataWriter(workflow).generate(episode_key)
+            result["preflight"] = evaluate_release(config, episode_key).as_dict()
+            return result
     finally:
         transport.close()
 

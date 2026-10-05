@@ -10,6 +10,7 @@ from tovitunes.creative.director import pinned_facts, validate_pins
 from tovitunes.creative.models import EpisodePublicationMetadata
 from tovitunes.creative.prompts import METADATA_PROMPT, metadata_messages
 from tovitunes.creative.provider import GenerationContext, canonical
+from tovitunes.creative.resilience import generation_audit
 from tovitunes.creative.validation import validate_episode_spec, validate_lyrics, validate_metadata
 from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot, episode_by_key
 from tovitunes.domain.artifact import Provenance
@@ -139,7 +140,7 @@ class MetadataWriter:
         episode = episode_by_key(workflow.database, episode_key)
         lease = workflow.leases.acquire(
             f"creative-planning:{workflow.catalog.definition.brand_id}",
-            duration_seconds=workflow.config.creative_llm.timeout_seconds * 2 + 600,
+            duration_seconds=workflow.config.creative_llm.generation_budget_seconds(1),
         )
         try:
             workflow.leases.assert_owner(lease)
@@ -199,6 +200,7 @@ class MetadataWriter:
                     "final_render_sha256": final["sha256"],
                     "metadata": output.model_dump(mode="json"),
                     "provider_calls": call_report(workflow.database, before),
+                    "generation_attempts": generation_audit(workflow.database, episode.episode_id),
                 }
             draft = workflow.provider.generate(
                 EpisodePublicationMetadata,
@@ -283,6 +285,7 @@ class MetadataWriter:
                 "final_render_sha256": final["sha256"],
                 "metadata": draft.output.model_dump(mode="json"),
                 "provider_calls": call_report(workflow.database, before),
+                "generation_attempts": generation_audit(workflow.database, episode.episode_id),
             }
         finally:
             workflow.leases.release(lease)
@@ -364,6 +367,7 @@ class MetadataWriter:
                 "final_render_sha256": final["sha256"],
                 "metadata": metadata.model_dump(mode="json"),
                 "provider_calls": call_report(workflow.database, before),
+                "generation_attempts": generation_audit(workflow.database, episode.episode_id),
             }
         finally:
             workflow.leases.release(lease)

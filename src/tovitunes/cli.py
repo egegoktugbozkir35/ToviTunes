@@ -36,9 +36,9 @@ from tovitunes.benchmark.runner import (
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
+from tovitunes.creative.factory import creative_generator
 from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.provider import DurableStructuredGenerator
 from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot, eligibility
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import AnalysisConfig
@@ -397,6 +397,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "provider": config.creative_llm.provider,
                         "model": config.creative_llm.model,
+                        "primary_model": config.creative_llm.model,
+                        "fallback_models": config.creative_llm.fallback_models,
+                        "ollama_endpoint_fallback_enabled": (
+                            config.creative_llm.fallback_to_ollama_on_endpoint_failure
+                        ),
                         "timeout_seconds": config.creative_llm.timeout_seconds,
                         "key_configured": bool(
                             os.getenv(config.creative_llm.api_key_env, "").strip()
@@ -420,15 +425,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         before = call_snapshot(database)
         transport = NvidiaNIMClient(config.creative_llm)
         try:
-            workflow = CreativeWorkflow(
-                config, DurableStructuredGenerator(database, transport), catalog=catalog
-            )
-            if args.creative_command == "metadata":
-                creative_result = MetadataWriter(workflow).generate(args.episode_key)
-            else:
-                creative_result = workflow.generate_next(
-                    run_id=args.run_id, episode_key=args.episode_key
-                )
+            with creative_generator(database, config.creative_llm, transport) as generator:
+                workflow = CreativeWorkflow(config, generator, catalog=catalog)
+                if args.creative_command == "metadata":
+                    creative_result = MetadataWriter(workflow).generate(args.episode_key)
+                else:
+                    creative_result = workflow.generate_next(
+                        run_id=args.run_id, episode_key=args.episode_key
+                    )
         except (ValueError, KeyError, OSError, RuntimeError) as exc:
             print(
                 json.dumps({"provider_calls": call_report(database, before)}, sort_keys=True),

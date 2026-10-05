@@ -4,8 +4,10 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from hashlib import sha256
-from typing import Any, Protocol, TypeVar
+from sqlite3 import Row
+from typing import Any, Protocol, TypedDict, TypeVar
 
 from pydantic import BaseModel
 
@@ -55,10 +57,63 @@ class ChatResponse:
     request_id: str | None = None
 
 
+class FailureCategory(StrEnum):
+    EMPTY_ANSWER = "empty_answer"
+    MODEL_UNAVAILABLE = "model_unavailable"
+    INCOMPLETE_ANSWER = "incomplete_answer"
+    STRUCTURED_OUTPUT = "structured_output"
+    ENDPOINT_UNREACHABLE = "endpoint_unreachable"
+    AUTHENTICATION = "authentication"
+    CONFIGURATION = "configuration"
+    PROVIDER_REJECTED = "provider_rejected"
+    AMBIGUOUS = "ambiguous"
+
+
+MODEL_FAILURES = {
+    FailureCategory.EMPTY_ANSWER,
+    FailureCategory.MODEL_UNAVAILABLE,
+    FailureCategory.INCOMPLETE_ANSWER,
+    FailureCategory.STRUCTURED_OUTPUT,
+}
+
+
+def stored_failure(row: Row) -> FailureCategory:
+    if row["status"] == "ambiguous":
+        return FailureCategory.AMBIGUOUS
+    # Compatibility with the exact old transport's conclusive empty-answer terminal error.
+    # Never infer safety from substrings, generic ProviderError, or ambiguous rows.
+    if (
+        row["status"] == "failed"
+        and row["provider"] == "nvidia"
+        and row["error_kind"] == "ProviderError"
+        and row["error_reason"] == "NVIDIA NIM returned empty answer content"
+    ):
+        return FailureCategory.EMPTY_ANSWER
+    try:
+        return FailureCategory(row["error_kind"])
+    except (ValueError, TypeError):
+        return FailureCategory.CONFIGURATION
+
+
+class RequestAudit(TypedDict):
+    requested_provider: str | None
+    requested_model: str | None
+    fallback_reason: str | None
+    fallback_index: int
+    previous_attempt_id: str | None
+
+
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, ambiguous: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        ambiguous: bool = False,
+        category: FailureCategory = FailureCategory.CONFIGURATION,
+    ) -> None:
         super().__init__(message)
         self.ambiguous = ambiguous
+        self.category = FailureCategory.AMBIGUOUS if ambiguous else category
 
 
 class StructuredOutputError(ValueError):
@@ -93,9 +148,26 @@ class StructuredGenerator(Protocol):
 class DurableStructuredGenerator:
     """One initial POST and at most one auditable schema/domain repair, never transport retry."""
 
-    def __init__(self, database: Database, transport: ChatTransport) -> None:
+    def __init__(
+        self,
+        database: Database,
+        transport: ChatTransport,
+        *,
+        requested_provider: str | None = None,
+        requested_model: str | None = None,
+        fallback_reason: str | None = None,
+        fallback_index: int = 0,
+        previous_attempt_id: str | None = None,
+    ) -> None:
         self.ledger = CreativeRequestLedger(database)
         self.transport = transport
+        self.audit: RequestAudit = dict(
+            requested_provider=requested_provider,
+            requested_model=requested_model,
+            fallback_reason=fallback_reason,
+            fallback_index=fallback_index,
+            previous_attempt_id=previous_attempt_id,
+        )
 
     def generate(
         self,
@@ -129,6 +201,7 @@ class DurableStructuredGenerator:
                 prompt_version=context.prompt_version,
                 input_fingerprint=digest,
                 messages_json=canonical(enriched),
+                **self.audit,
             )
         parent: str | None = None
         current_messages = enriched
@@ -154,8 +227,16 @@ class DurableStructuredGenerator:
                     messages_json=canonical(current_messages),
                     attempt=2,
                     parent_request_id=parent,
+                    **self.audit,
                 )
             request_id = str(row["request_id"])
+            if (
+                row["provider"] != self.transport.provider_name
+                or row["model"] != self.transport.model_name
+                or row["prompt_version"] != context.prompt_version
+                or row["messages_json"] != canonical(current_messages)
+            ):
+                raise ProviderError("durable request contract differs; operator recovery required")
             content = row["response_content"]
             if (
                 content is not None
@@ -163,9 +244,13 @@ class DurableStructuredGenerator:
             ):
                 raise ProviderError("durable response hash differs; operator recovery required")
             if row["status"] in {"ambiguous", "failed"}:
+                category = stored_failure(row)
                 raise ProviderError(
-                    f"creative request {request_id} is {row['status']}; explicit recovery required",
+                    f"creative request {request_id} is {row['status']}; "
+                    "explicit recovery required; "
+                    "inspect the ledger and reconcile provider evidence; do not resend",
                     ambiguous=row["status"] == "ambiguous",
+                    category=category,
                 )
             if content is None:
                 if row["status"] != "prepared":
@@ -191,8 +276,16 @@ class DurableStructuredGenerator:
                     self.ledger.finish(
                         request_id,
                         "ambiguous" if ambiguous else "failed",
-                        error_kind=type(exc).__name__,
-                        error_reason=str(exc),
+                        error_kind=(
+                            exc.category.value
+                            if isinstance(exc, ProviderError)
+                            else FailureCategory.AMBIGUOUS.value
+                        ),
+                        error_reason=(
+                            str(exc)
+                            if isinstance(exc, ProviderError)
+                            else "local failure after remote start; reconcile receipt"
+                        ),
                     )
                     raise
             try:
@@ -204,7 +297,7 @@ class DurableStructuredGenerator:
                 self.ledger.finish(
                     request_id,
                     "succeeded_response_invalid",
-                    error_kind=type(exc).__name__,
+                    error_kind=FailureCategory.STRUCTURED_OUTPUT.value,
                     error_reason=str(exc),
                 )
                 if attempt == 2:

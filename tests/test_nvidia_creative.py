@@ -179,7 +179,7 @@ def test_malformed_or_empty_stream_fails_explicitly_without_repair(request_owner
         with pytest.raises(ProviderError):
             provider.generate(Answer, [], context=context)
     assert len(calls) == 1
-    assert rows(request_owner[0])[0]["status"] == "failed"
+    assert rows(request_owner[0])[0]["status"] == "ambiguous"
 
 
 @pytest.mark.parametrize("status", [401, 404, 429, 500, 503])
