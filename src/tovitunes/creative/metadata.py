@@ -286,3 +286,84 @@ class MetadataWriter:
             }
         finally:
             workflow.leases.release(lease)
+
+    def record_operator_approved(
+        self,
+        episode_key: str,
+        metadata: EpisodePublicationMetadata,
+        *,
+        actor: str,
+        source_uri: str,
+    ) -> dict[str, Any]:
+        """Select human-approved copy from pinned facts without a provider call."""
+        if not actor.strip() or not source_uri.strip():
+            raise ValueError("operator identity and reviewed source URI are required")
+        workflow = self.workflow
+        before = call_snapshot(workflow.database)
+        episode = episode_by_key(workflow.database, episode_key)
+        lease = workflow.leases.acquire(
+            f"creative-planning:{workflow.catalog.definition.brand_id}",
+            duration_seconds=600,
+        )
+        try:
+            facts, deps = self._facts(episode.episode_id)
+            final = facts["final_render"]
+            authoritative = canonical(
+                {"storyboard": facts["timed_storyboard"], "lyrics": facts["lyrics"]}
+            )
+            validate_metadata(
+                episode,
+                metadata,
+                final["artifact_id"],
+                final["sha256"],
+                [c.concept_id for c in workflow.catalog.curriculum.concepts],
+                authoritative,
+            )
+            workflow.leases.assert_owner(lease)
+            if self._facts(episode.episode_id) != (facts, deps):
+                raise ValueError("final render facts changed before metadata was recorded")
+            path = workflow.generated / f"{uuid4()}.json"
+            path.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
+            try:
+                record = self.store.ingest(
+                    path,
+                    owner_scope="episode",
+                    owner_id=episode.episode_id,
+                    kind="publication_metadata",
+                    slot_key="main",
+                    provenance=Provenance(
+                        source_kind="manual",
+                        acquired_at=datetime.now(UTC),
+                        operator=actor,
+                        source_uri=source_uri,
+                        input_artifact_ids=deps,
+                    ),
+                    dependencies=[InputDependency(d, "metadata_input") for d in deps],
+                    expected_media_type="application/json",
+                )
+            finally:
+                path.unlink(missing_ok=True)
+            self.store.record_approval(
+                ApprovalDecision(
+                    target_id=record.identity.artifact_id,
+                    target_kind="artifact",
+                    status="approved",
+                    actor=actor,
+                    reason=f"Operator approved exact publication copy in {source_uri}",
+                    policy_version="operator_publication_metadata_v1",
+                    decided_at=datetime.now(UTC),
+                )
+            )
+            workflow.leases.assert_owner(lease)
+            self.store.select(record.identity.artifact_id)
+            return {
+                "episode_id": episode.episode_id,
+                "episode_key": episode_key,
+                "publication_metadata_artifact_id": record.identity.artifact_id,
+                "final_render_artifact_id": final["artifact_id"],
+                "final_render_sha256": final["sha256"],
+                "metadata": metadata.model_dump(mode="json"),
+                "provider_calls": call_report(workflow.database, before),
+            }
+        finally:
+            workflow.leases.release(lease)

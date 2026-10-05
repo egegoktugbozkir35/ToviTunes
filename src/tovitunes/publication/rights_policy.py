@@ -25,6 +25,10 @@ _DIRECT_CREATIVE_KINDS = frozenset(
 
 def is_direct_rights_root(record: ArtifactRecord) -> bool:
     """Return whether independent external/source rights enter at this artifact."""
+    if record.identity.kind == "publication_metadata":
+        # Operator-written copy is reviewed and SHA-pinned, but has no external
+        # provider licence to clear. Provider output remains a direct root.
+        return record.provenance.source_kind == "provider"
     return record.identity.kind in _DIRECT_CREATIVE_KINDS and record.provenance.source_kind in {
         "provider",
         "manual",
