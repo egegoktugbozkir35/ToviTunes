@@ -16,6 +16,7 @@ from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import TimedScene, TimedStoryboard
+from tovitunes.publication.rights_policy import is_direct_rights_root
 from tovitunes.render.models import RenderManifest, SceneRender
 
 workflow = creative_workflow_fixture
@@ -194,6 +195,93 @@ def test_same_render_reuses_metadata_even_if_provider_configuration_changes(fini
     )
     second = writer.generate(creative["episode_key"])
     assert second["publication_metadata_artifact_id"] == first["publication_metadata_artifact_id"]
+
+
+def test_operator_metadata_replaces_provider_selection_without_provider_or_render(
+    finished, monkeypatch
+):
+    flow, fake, creative, final, _ = finished
+    writer = MetadataWriter(flow)
+    old = writer.generate(creative["episode_key"])
+    old_id = old["publication_metadata_artifact_id"]
+    before_calls = tuple(fake.calls)
+    with closing(flow.database.connect()) as db:
+        before_render_count = db.execute(
+            "SELECT count(*) FROM artifact_versions WHERE kind='final_render'"
+        ).fetchone()[0]
+    monkeypatch.setattr(flow.provider, "generate", lambda *a, **k: pytest.fail("provider call"))
+    replacement = EpisodePublicationMetadata.model_validate(
+        {
+            **old["metadata"],
+            "youtube_title": "Learn Red with Tovi | ToviTunes Preschool Short",
+        }
+    )
+    result = writer.record_operator_approved(
+        creative["episode_key"],
+        replacement,
+        actor="human:operator",
+        source_uri="repo://docs/rights/COLORS_RED_OPERATOR_METADATA.md",
+    )
+    new_id = result["publication_metadata_artifact_id"]
+    assert new_id != old_id and tuple(fake.calls) == before_calls
+    assert all(value == 0 for value in result["provider_calls"].values())
+    assert result["final_render_sha256"] == final.sha256
+    assert flow.store.get(old_id).provenance.source_kind == "provider"
+    assert (
+        flow.store.selected(
+            "episode", creative["episode_id"], "publication_metadata", "main"
+        ).identity.artifact_id
+        == new_id
+    )
+    record = flow.store.get(new_id)
+    assert record.provenance.source_kind == "manual" and not is_direct_rights_root(record)
+    assert is_direct_rights_root(flow.store.get(old_id))
+    with closing(flow.database.connect()) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM artifact_versions WHERE kind='final_render'"
+            ).fetchone()[0]
+            == before_render_count
+        )
+        assert (
+            db.execute(
+                "SELECT count(*) FROM artifact_versions WHERE artifact_id=?", (old_id,)
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            db.execute(
+                "SELECT status FROM approval_decisions WHERE artifact_id=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (new_id,),
+            ).fetchone()[0]
+            == "approved"
+        )
+        assert (
+            db.execute(
+                "SELECT input_sha256 FROM artifact_dependencies "
+                "WHERE consumer_artifact_id=? AND input_artifact_id=?",
+                (new_id, final.identity.artifact_id),
+            ).fetchone()[0]
+            == final.sha256
+        )
+
+
+def test_frozen_storyboard_without_creative_pair_supplies_metadata_facts(finished):
+    flow, _, creative, final, manifest = finished
+    with closing(flow.database.connect()) as db:
+        db.execute(
+            "DELETE FROM artifact_selections WHERE owner_id=? "
+            "AND kind IN ('episode_spec','lyrics')",
+            (creative["episode_id"],),
+        )
+        db.commit()
+    facts, dependencies = MetadataWriter(flow)._facts(creative["episode_id"])
+    assert facts["episode_spec"]["basis"] == "selected_timed_storyboard"
+    assert facts["lyrics"]["lines"]
+    assert facts["final_render"]["sha256"] == final.sha256
+    assert manifest.identity.artifact_id in dependencies
+    assert creative["episode_spec_artifact_id"] not in dependencies
 
 
 def test_human_objective_hold_blocks_post_render_metadata(finished):

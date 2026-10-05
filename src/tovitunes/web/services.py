@@ -10,7 +10,10 @@ from typing import Any
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
-from tovitunes.creative.workflow import eligibility
+from tovitunes.creative.metadata import MetadataWriter
+from tovitunes.creative.nvidia import NvidiaNIMClient
+from tovitunes.creative.provider import DurableStructuredGenerator
+from tovitunes.creative.workflow import CreativeWorkflow, eligibility
 from tovitunes.persistence.db import Database
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
@@ -154,6 +157,15 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
         except (KeyError, ValueError, OSError):
             pass
     manifest: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    if selected["publication_metadata"]:
+        metadata_id = selected["publication_metadata"][0]["artifact_id"]
+        try:
+            value = AssetStore(config.data_root, database, initialize=False).read_json(metadata_id)
+            if isinstance(value, dict):
+                metadata = value
+        except (KeyError, ValueError, OSError):
+            pass
     full_manifest: dict[str, Any] | None = None
     if selected["render_manifest"]:
         try:
@@ -184,7 +196,24 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
         "video_url": media,
         "manifest_summary": manifest,
         "render_manifest": full_manifest,
+        "publication_metadata": metadata,
     }
+
+
+def generate_publication_metadata(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
+    """Use the same durable provider and MetadataWriter as the creative CLI."""
+    if not evaluate_release(config, episode_key).render_ready:
+        raise ValueError("Selected final render is not ready for publication metadata")
+    transport = NvidiaNIMClient(config.creative_llm)
+    try:
+        workflow = CreativeWorkflow(
+            config, DurableStructuredGenerator(Database(config.database_path), transport)
+        )
+        result = MetadataWriter(workflow).generate(episode_key)
+        result["preflight"] = evaluate_release(config, episode_key).as_dict()
+        return result
+    finally:
+        transport.close()
 
 
 def episodes(config: RuntimeConfig) -> list[dict[str, Any]]:
@@ -237,6 +266,7 @@ def system_status(config: RuntimeConfig, active_job: dict[str, Any] | None) -> d
         "youtube_enabled": yt.enabled,
         "youtube_credentials_present": yt.credentials_file.is_file(),
         "youtube_token_present": yt.token_file.is_file(),
+        "youtube_contains_synthetic_media": yt.contains_synthetic_media,
         "expected_channel_id": config.expected_youtube_channel_id,
         "creative_eligibility": creative,
         "active_job": active_job,

@@ -25,7 +25,11 @@ class MetadataWriter:
         self.store = workflow.store
 
     def _selected(self, episode_id: str, kind: str) -> ArtifactRecord:
-        record = self.store.selected("episode", episode_id, kind, "main")
+        record = (
+            self.store.selected("episode", episode_id, kind, "main_v4")
+            if kind in {"final_render", "render_manifest"}
+            else None
+        ) or self.store.selected("episode", episode_id, kind, "main")
         if record is None:
             raise ValueError(f"metadata requires selected {kind}")
         return record
@@ -34,20 +38,40 @@ class MetadataWriter:
         episode = self.store.database.get_episode(episode_id)
         validate_pins(episode, self.workflow.catalog)
         final = self._selected(episode_id, "final_render")
-        spec_record = self._selected(episode_id, "episode_spec")
-        lyrics_record = self._selected(episode_id, "lyrics")
+        spec_record = self.store.selected("episode", episode_id, "episode_spec", "main")
+        lyrics_record = self.store.selected("episode", episode_id, "lyrics", "main")
         storyboard_record = self._selected(episode_id, "timed_storyboard")
         manifest_record = self._selected(episode_id, "render_manifest")
-        spec = EpisodeSpec.model_validate(self.store.read_json(spec_record.identity.artifact_id))
-        lyrics = LyricsSpec.model_validate(self.store.read_json(lyrics_record.identity.artifact_id))
+        if (spec_record is None) != (lyrics_record is None):
+            raise ValueError("metadata requires a complete selected creative pair")
         storyboard = TimedStoryboard.model_validate(
             self.store.read_json(storyboard_record.identity.artifact_id)
         )
         manifest = RenderManifest.model_validate(
             self.store.read_json(manifest_record.identity.artifact_id)
         )
-        validate_episode_spec(episode, spec)
-        validate_lyrics(episode, lyrics, spec_record.identity.artifact_id)
+        if spec_record and lyrics_record:
+            spec = EpisodeSpec.model_validate(
+                self.store.read_json(spec_record.identity.artifact_id)
+            )
+            lyrics = LyricsSpec.model_validate(
+                self.store.read_json(lyrics_record.identity.artifact_id)
+            )
+            validate_episode_spec(episode, spec)
+            validate_lyrics(episode, lyrics, spec_record.identity.artifact_id)
+            spec_facts: dict[str, Any] = spec.model_dump(mode="json")
+            lyrics_facts: dict[str, Any] = lyrics.model_dump(mode="json")
+        else:
+            # The frozen production-handoff pilot predates CreativeWorkflow specs.
+            # Its selected timed storyboard is the approved final creative evidence.
+            spec_facts = {"basis": "selected_timed_storyboard"}
+            lyrics_facts = {
+                "lines": [
+                    {"text": scene.lyric_text}
+                    for scene in storyboard.scenes
+                    if scene.kind == "lyric"
+                ]
+            }
         with closing(self.store.database.connect()) as db:
             approval = db.execute(
                 "SELECT status FROM approval_decisions WHERE episode_id=? "
@@ -75,15 +99,18 @@ class MetadataWriter:
             or manifest.dependency_sha256.get(storyboard_record.identity.artifact_id)
             != storyboard_record.sha256
             or manifest.duration_seconds != storyboard.duration_seconds
-            or tuple(s.lyric_text for s in storyboard.scenes if s.kind == "lyric")
-            != tuple(line.text for line in lyrics.lines)
+            or (
+                lyrics_record is not None
+                and tuple(s.lyric_text for s in storyboard.scenes if s.kind == "lyric")
+                != tuple(line["text"] for line in lyrics_facts["lines"])
+            )
         ):
             raise ValueError("selected final render, storyboard and creative facts differ")
         facts = {
             **pinned_facts(self.workflow.catalog),
             "episode": episode.model_dump(mode="json"),
-            "episode_spec": spec.model_dump(mode="json"),
-            "lyrics": lyrics.model_dump(mode="json"),
+            "episode_spec": spec_facts,
+            "lyrics": lyrics_facts,
             "timed_storyboard": storyboard.model_dump(mode="json"),
             "known_lesson_props_and_scene_intents": [
                 s.model_dump(mode="json") for s in storyboard.scenes
@@ -97,13 +124,14 @@ class MetadataWriter:
             "language": "en",
             "made_for_kids": True,
         }
-        return facts, (
+        input_ids = [
             final.identity.artifact_id,
-            spec_record.identity.artifact_id,
-            lyrics_record.identity.artifact_id,
             storyboard_record.identity.artifact_id,
             manifest_record.identity.artifact_id,
-        )
+        ]
+        if spec_record and lyrics_record:
+            input_ids.extend((spec_record.identity.artifact_id, lyrics_record.identity.artifact_id))
+        return facts, tuple(input_ids)
 
     def generate(self, episode_key: str) -> dict[str, Any]:
         workflow = self.workflow
@@ -150,21 +178,28 @@ class MetadataWriter:
                 )
             if prior_selection and prior_deps == {d: self.store.get(d).sha256 for d in deps}:
                 existing = self._selected(episode.episode_id, "publication_metadata")
-                if existing.provenance.prompt_version == METADATA_PROMPT:
-                    output = EpisodePublicationMetadata.model_validate(
-                        self.store.read_json(existing.identity.artifact_id)
-                    )
-                    validate(output)
-                    workflow.leases.assert_owner(lease)
-                    return {
-                        "episode_id": episode.episode_id,
-                        "episode_key": episode.external_key,
-                        "publication_metadata_artifact_id": existing.identity.artifact_id,
-                        "final_render_artifact_id": final["artifact_id"],
-                        "final_render_sha256": final["sha256"],
-                        "metadata": output.model_dump(mode="json"),
-                        "provider_calls": call_report(workflow.database, before),
-                    }
+                output = EpisodePublicationMetadata.model_validate(
+                    self.store.read_json(existing.identity.artifact_id)
+                )
+                validate(output)
+                with closing(workflow.database.connect()) as db:
+                    approval = db.execute(
+                        "SELECT status FROM approval_decisions WHERE artifact_id=? "
+                        "ORDER BY rowid DESC LIMIT 1",
+                        (existing.identity.artifact_id,),
+                    ).fetchone()
+                if approval is None or approval[0] != "approved":
+                    raise PermissionError("selected publication metadata needs approval")
+                workflow.leases.assert_owner(lease)
+                return {
+                    "episode_id": episode.episode_id,
+                    "episode_key": episode.external_key,
+                    "publication_metadata_artifact_id": existing.identity.artifact_id,
+                    "final_render_artifact_id": final["artifact_id"],
+                    "final_render_sha256": final["sha256"],
+                    "metadata": output.model_dump(mode="json"),
+                    "provider_calls": call_report(workflow.database, before),
+                }
             draft = workflow.provider.generate(
                 EpisodePublicationMetadata,
                 metadata_messages(facts),
@@ -247,6 +282,87 @@ class MetadataWriter:
                 "final_render_artifact_id": final["artifact_id"],
                 "final_render_sha256": final["sha256"],
                 "metadata": draft.output.model_dump(mode="json"),
+                "provider_calls": call_report(workflow.database, before),
+            }
+        finally:
+            workflow.leases.release(lease)
+
+    def record_operator_approved(
+        self,
+        episode_key: str,
+        metadata: EpisodePublicationMetadata,
+        *,
+        actor: str,
+        source_uri: str,
+    ) -> dict[str, Any]:
+        """Select human-approved copy from pinned facts without a provider call."""
+        if not actor.strip() or not source_uri.strip():
+            raise ValueError("operator identity and reviewed source URI are required")
+        workflow = self.workflow
+        before = call_snapshot(workflow.database)
+        episode = episode_by_key(workflow.database, episode_key)
+        lease = workflow.leases.acquire(
+            f"creative-planning:{workflow.catalog.definition.brand_id}",
+            duration_seconds=600,
+        )
+        try:
+            facts, deps = self._facts(episode.episode_id)
+            final = facts["final_render"]
+            authoritative = canonical(
+                {"storyboard": facts["timed_storyboard"], "lyrics": facts["lyrics"]}
+            )
+            validate_metadata(
+                episode,
+                metadata,
+                final["artifact_id"],
+                final["sha256"],
+                [c.concept_id for c in workflow.catalog.curriculum.concepts],
+                authoritative,
+            )
+            workflow.leases.assert_owner(lease)
+            if self._facts(episode.episode_id) != (facts, deps):
+                raise ValueError("final render facts changed before metadata was recorded")
+            path = workflow.generated / f"{uuid4()}.json"
+            path.write_text(metadata.model_dump_json(indent=2), encoding="utf-8")
+            try:
+                record = self.store.ingest(
+                    path,
+                    owner_scope="episode",
+                    owner_id=episode.episode_id,
+                    kind="publication_metadata",
+                    slot_key="main",
+                    provenance=Provenance(
+                        source_kind="manual",
+                        acquired_at=datetime.now(UTC),
+                        operator=actor,
+                        source_uri=source_uri,
+                        input_artifact_ids=deps,
+                    ),
+                    dependencies=[InputDependency(d, "metadata_input") for d in deps],
+                    expected_media_type="application/json",
+                )
+            finally:
+                path.unlink(missing_ok=True)
+            self.store.record_approval(
+                ApprovalDecision(
+                    target_id=record.identity.artifact_id,
+                    target_kind="artifact",
+                    status="approved",
+                    actor=actor,
+                    reason=f"Operator approved exact publication copy in {source_uri}",
+                    policy_version="operator_publication_metadata_v1",
+                    decided_at=datetime.now(UTC),
+                )
+            )
+            workflow.leases.assert_owner(lease)
+            self.store.select(record.identity.artifact_id)
+            return {
+                "episode_id": episode.episode_id,
+                "episode_key": episode_key,
+                "publication_metadata_artifact_id": record.identity.artifact_id,
+                "final_render_artifact_id": final["artifact_id"],
+                "final_render_sha256": final["sha256"],
+                "metadata": metadata.model_dump(mode="json"),
                 "provider_calls": call_report(workflow.database, before),
             }
         finally:

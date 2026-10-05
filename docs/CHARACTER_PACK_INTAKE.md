@@ -161,8 +161,10 @@ user, to the extent permitted by law. This supports the project's provider
 output use gate. It does not establish copyrightability, uniqueness, trademark
 clearance, or rights in any input reference.
 
-`original_profile` and `original_banner` remain `unknown`: their OpenAI
-generation provenance is not documented. They are provenance/reference inputs,
+`original_profile` and `original_banner` were subsequently confirmed by the
+operator as ChatGPT / OpenAI image outputs and cleared for the public release
+gate in the [original source attestation](rights/TOVI_ORIGINAL_SOURCE_ATTESTATION.md).
+They are provenance/reference inputs,
 not selected production role artifacts. The existing pack readiness policy
 checks evidence-backed rights for selected role artifacts; it does not require
 commercial clearance of every upstream reference. Dependency IDs and hashes

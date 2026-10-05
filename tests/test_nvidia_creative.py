@@ -66,7 +66,7 @@ def test_explicit_model_bearer_schema_timeout_and_json_fallback(request_owner):
         assert payload["model"] == "moonshotai/kimi-k3"
         assert payload["stream"] is True
         assert payload["temperature"] == 0.7
-        assert payload["max_tokens"] == 8192
+        assert payload["max_tokens"] == 16384
         assert "JSON Schema" in payload["messages"][0]["content"]
         assert "no Markdown" in payload["messages"][0]["content"]
         return response(headers={"x-request-id": "nim-header-id"})

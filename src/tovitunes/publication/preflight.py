@@ -9,11 +9,15 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from typing import Any
 
-from tovitunes.artifacts.store import AssetStore
+from tovitunes.artifacts.store import ArtifactRecord, AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.models import EpisodePublicationMetadata
 from tovitunes.persistence.db import Database
+from tovitunes.publication.rights_policy import (
+    evaluate_inherited_rights,
+    is_direct_rights_root,
+)
 from tovitunes.render.models import RenderManifest
 
 
@@ -126,17 +130,24 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
 
         graph: set[str] = set()
         visiting: set[str] = set()
+        records: dict[str, ArtifactRecord] = {}
+        dependencies: dict[str, list[str]] = {}
+        local_integrity: dict[str, bool] = {}
 
         def visit(aid: str, technical_scope: str = "technical") -> None:
             if aid in graph:
                 return
             if aid in visiting:
                 add("dependency_cycle", False, technical_scope, "Artifact dependency cycle", aid)
+                local_integrity[aid] = False
                 return
             visiting.add(aid)
+            local_integrity[aid] = True
             try:
                 rec = store.get(aid)
+                records[aid] = rec
                 valid = store.inspect(aid)
+                local_integrity[aid] = local_integrity[aid] and valid.valid
                 add(
                     "immutable_sha",
                     valid.valid,
@@ -157,6 +168,7 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                     ),
                 ).fetchone()
                 is_selected = bool(selection and selection[0] == aid)
+                local_integrity[aid] = local_integrity[aid] and is_selected
                 add(
                     "dependency_selection",
                     is_selected,
@@ -174,31 +186,21 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                     f"Current approval: {approval or 'missing'}",
                     aid,
                 )
-                rights = _latest(db, "rights_decisions", aid)
-                add(
-                    "rights_not_blocked",
-                    rights is not None and rights != "blocked",
-                    "rights_private",
-                    f"Current rights: {rights or 'missing'}",
-                    aid,
-                )
-                add(
-                    "commercial_rights",
-                    rights == "commercial_use_confirmed",
-                    "rights_public",
-                    f"Current rights: {rights or 'missing'}",
-                    aid,
-                )
                 for dep in db.execute(
                     "SELECT input_artifact_id, input_sha256 FROM artifact_dependencies "
                     "WHERE consumer_artifact_id=?",
                     (aid,),
                 ).fetchall():
+                    dependency_id = str(dep[0])
+                    dependencies.setdefault(aid, []).append(dependency_id)
                     try:
-                        source = store.get(str(dep[0]))
+                        source = store.get(dependency_id)
                         pinned = source.sha256 == dep[1]
+                        source_exists = True
                     except KeyError:
                         pinned = False
+                        source_exists = False
+                    local_integrity[aid] = local_integrity[aid] and pinned
                     add(
                         "dependency_sha",
                         pinned,
@@ -206,11 +208,12 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                         "Pinned dependency SHA matches"
                         if pinned
                         else "Pinned dependency is missing or changed",
-                        str(dep[0]),
+                        dependency_id,
                     )
-                    if pinned:
-                        visit(str(dep[0]), technical_scope)
+                    if source_exists:
+                        visit(dependency_id, technical_scope)
             except (KeyError, ValueError, OSError) as exc:
+                local_integrity[aid] = False
                 add(
                     "artifact_record",
                     False,
@@ -401,6 +404,55 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                     "Publication metadata invalid",
                     metadata_id,
                 )
+
+        latest_rights = {aid: _latest(db, "rights_decisions", aid) for aid in records}
+        for aid in sorted(records):
+            status = latest_rights[aid]
+            add(
+                "rights_not_blocked",
+                status != "blocked",
+                "rights_private",
+                f"Current rights: {status or 'missing'}",
+                aid,
+            )
+            if is_direct_rights_root(records[aid]):
+                add(
+                    "commercial_rights_direct",
+                    status == "commercial_use_confirmed",
+                    "rights_public",
+                    f"Direct rights root; current rights: {status or 'missing'}",
+                    aid,
+                )
+                continue
+            inherited = evaluate_inherited_rights(
+                aid,
+                records=records,
+                dependencies=dependencies,
+                latest_rights=latest_rights,
+                local_integrity=local_integrity,
+            )
+            if not inherited.dependency_graph_valid:
+                reason = "Inherited rights blocked: dependency graph is invalid"
+            elif inherited.blocked_artifacts:
+                reason = "Inherited rights blocked by: " + ", ".join(inherited.blocked_artifacts)
+            elif not inherited.commercially_cleared:
+                uncleared = [
+                    root
+                    for root in inherited.direct_roots
+                    if latest_rights.get(root) != "commercial_use_confirmed"
+                ]
+                reason = "Inherited rights await direct roots: " + ", ".join(uncleared)
+            else:
+                reason = "Inherited from cleared direct roots: " + (
+                    ", ".join(inherited.direct_roots) or "none"
+                )
+            add(
+                "commercial_rights_inherited",
+                inherited.commercially_cleared,
+                "rights_public",
+                reason,
+                aid,
+            )
 
     technical = all(c.passed for c in checks if c.scope == "technical")
     approval = all(c.passed for c in checks if c.scope == "approval")
