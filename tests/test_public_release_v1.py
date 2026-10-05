@@ -105,6 +105,57 @@ def test_public_requires_private_upload_and_rights(ready):
         PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
 
 
+def test_operator_metadata_uses_new_fingerprint_without_external_rights_root(ready):
+    (config, db, episode, store), render, _, old = ready
+    first = evaluate_release(config, "colors-red")
+    assert first.metadata_artifact_id == old.identity.artifact_id
+    assert not any(
+        check.name == "commercial_rights_direct" and check.artifact_id == old.identity.artifact_id
+        for check in first.checks
+    )
+    payload = store.read_json(old.identity.artifact_id)
+    assert isinstance(payload, dict)
+    replacement = artifact(
+        ready[0],
+        "publication_metadata",
+        {**payload, "youtube_title": "Learn the Color Red with Tovi | ToviTunes Short"},
+        (render,),
+    )
+    clear_graph(ready)
+    report = evaluate_release(config, "colors-red")
+    assert report.render_artifact_id == first.render_artifact_id
+    assert report.render_sha256 == first.render_sha256
+    assert report.metadata_artifact_id == replacement.identity.artifact_id
+    assert report.metadata_fingerprint != first.metadata_fingerprint
+    assert (
+        report.render_ready and report.private_test_upload_allowed and report.public_release_allowed
+    )
+    snapshot = reviewed_graph_template(config, "colors-red")
+    assert replacement.identity.artifact_id not in snapshot["direct_rights_roots"]
+    assert not snapshot["decisions"]
+    with db.connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM artifact_versions WHERE artifact_id=?",
+                (old.identity.artifact_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM artifact_versions WHERE kind='final_render'"
+            ).fetchone()[0]
+            == 1
+        )
+    record_upload(ready)
+    client = FakeClient()
+    result = PublicationService(config, client_factory=lambda: client).publish_public("colors-red")
+    assert result["youtube_video_id"] == "video-123" and client.calls == 1
+    assert (
+        store.selected("episode", episode.episode_id, "publication_metadata", "main") == replacement
+    )
+
+
 @pytest.mark.parametrize("status", ["unknown", "review_required", "blocked"])
 def test_direct_source_status_blocks_public_release(ready, status):
     (config, _, episode, store), _, _, _ = ready
@@ -406,6 +457,55 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
             connection.execute(
                 "SELECT count(*) FROM rights_decisions WHERE artifact_id=?",
                 (unrelated.identity.artifact_id,),
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_two_attested_character_roots_clear_append_only(ready):
+    (config, db, _, store), render, _, old_metadata = ready
+    profile = artifact(
+        ready[0],
+        "character_reference",
+        {"fixture": "operator-attested profile"},
+        slot_key="source_original_profile",
+    )
+    banner = artifact(
+        ready[0],
+        "character_reference",
+        {"fixture": "operator-attested banner"},
+        slot_key="source_original_banner",
+    )
+    content = store.read_json(old_metadata.identity.artifact_id)
+    replacement = artifact(ready[0], "publication_metadata", content, (render, profile, banner))
+    evidence = reviewed_graph_template(config, "colors-red")
+    assert {profile.identity.artifact_id, banner.identity.artifact_id} <= set(evidence["decisions"])
+    assert replacement.identity.artifact_id not in evidence["direct_rights_roots"]
+    for detail in evidence["decisions"].values():
+        detail.update(
+            actor="human:operator",
+            evidence_uri="repo://docs/rights/TOVI_ORIGINAL_SOURCE_ATTESTATION.md",
+            rationale="Operator attested and approved the exact source for commercial release",
+            decided_at=datetime.now(UTC).isoformat(),
+        )
+    changes = closeout_rights(config, evidence)
+    assert {profile.identity.artifact_id, banner.identity.artifact_id} <= {
+        change["artifact_id"] for change in changes
+    }
+    assert evaluate_release(config, "colors-red").public_release_allowed
+    with db.connect() as connection:
+        for record in (profile, banner):
+            assert [
+                row[0]
+                for row in connection.execute(
+                    "SELECT status FROM rights_decisions WHERE artifact_id=? ORDER BY rowid",
+                    (record.identity.artifact_id,),
+                )
+            ] == ["unknown", "commercial_use_confirmed"]
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM artifact_versions WHERE artifact_id=?",
+                (old_metadata.identity.artifact_id,),
             ).fetchone()[0]
             == 1
         )

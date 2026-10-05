@@ -8,6 +8,12 @@ machine metadata approval, and selects the artifact. The frozen V4 pilot uses
 its selected timed storyboard as the creative source because it predates
 `EpisodeSpec` and `LyricsSpec`; no creative or media artifact is regenerated.
 
+For the frozen `colors-red-001` release, the operator-approved replacement
+[publication metadata](rights/COLORS_RED_OPERATOR_METADATA.md) is now selected.
+It carries manual provenance, the same render and dependency SHA pins, and an
+explicit artifact approval. The historical NVIDIA/Kimi version is retained but
+unselected. No provider or renderer was called for this replacement.
+
 `POST /api/episodes/{episode_key}/youtube/upload-private` remains the only
 upload action. It inserts a new video with `privacyStatus=private`,
 `selfDeclaredMadeForKids=true`, and the configured synthetic-media setting.
@@ -47,5 +53,7 @@ Use `--snapshot colors-red-001` to export a read-only exact graph template for
 review after metadata is selected. The snapshot freezes all graph SHAs and the
 direct/derived classification, but requests decisions only for uncleared direct
 roots. The [rights evidence record](rights/COLORS_RED_RELEASE_RIGHTS.md)
-describes the current unresolved sources. Public release remains blocked until
-all direct roots are commercially cleared and every inherited check passes.
+documents the current cleared graph. All 20 direct roots are commercially
+cleared, the unresolved count is zero, and provider-free public release
+preflight passes. Private upload, processing verification, and same-video
+`videos.update(part="status")` public promotion remain the operator flow.

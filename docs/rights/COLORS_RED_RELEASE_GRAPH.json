@@ -2,14 +2,15 @@
   "episode_key": "colors-red-001",
   "render_artifact_id": "bdda4b54-c487-429c-837e-94e52e7d4af3",
   "render_sha256": "e0ce789eb49a40471dd1927ef19d9d9239e4b031fd052893fa25b30afebffafa",
-  "metadata_artifact_id": "f79159eb-ab40-4b75-bdbb-ddd839e76350",
-  "metadata_fingerprint": "ce4f332bd9acf452afea920730a02a07afa7277bca73466bf85a542f99bc4162",
+  "metadata_artifact_id": "0eca2f8e-eda2-4b52-bd06-a063a6681253",
+  "metadata_fingerprint": "3b5f04dcddba55ed211bb56a1a2a0b367bbe538d10f8b278f61ed090d1baa2a3",
   "graph_sha256": {
     "00928181-1f74-4ecb-96fa-a81f5e0e4ffd": "5b3f93f770b564543e535d40f8009fed8b1bd1e5a2bb78a3e288a4f1916fbd21",
     "06e31d66-d6da-4e47-8068-570fa93f0a17": "773240fe199f744b0ee6c074a02a311ddb71ac61380a4826a0f21baf9574c724",
     "0ae4c139-b1ed-49dc-8758-e95a2d429a15": "ef75adf4c91afe41038d19db2ea54c6fc866cae896447acfe2f2ccf0c14fd645",
     "0c3a811a-68f6-4c14-8675-d6c0be6c2e65": "f525bce1d3bbafb4afc050487eb5361a71133b559ecd549d563ccb9b13fcc25d",
     "0c531e68-4abf-4b91-8d62-d1e22137778e": "7bfa780cfe6d621be5c8d3b3871e113d5ef91982df7415761cb899f1d1623921",
+    "0eca2f8e-eda2-4b52-bd06-a063a6681253": "b4cbda8d575920f9ee7b453424700f94a7717246e2f1655d1c32b6e5cffadd7e",
     "0efc98c4-584e-4017-b96f-e4e74e963a48": "a4a93a78a7327bce5fa6ecbd3aca42f13111c6c3d60c8e9cb13f5930a38c3ee8",
     "10a92c61-c890-46a9-b272-8d9a77e08630": "bc59f08cdcdc2ed696ed8e785c674dedbe2cae9d7343cddeae002c6a111cfc7c",
     "12eaeecb-b482-428d-89b9-0028dcd63668": "98e83725d07201da86d7abe904c355d828ad5e63baf4ea0d48489cbbf8856f17",
@@ -93,7 +94,6 @@
     "eede5b87-2088-4c19-818d-35bc47333128": "abc9407e31213647e1b14c1ab7de56968a872d1954d05c26ab60b6567dbd4b7e",
     "ef8be5b2-2bef-47a1-9322-cc07ceab8f9b": "e0f197256beb70e77e3581a2683037763542d76d709f1630ad5b39b379c589e2",
     "f46e4c77-87a9-4b1b-8dd3-9f0c29f82550": "1ea83719c2f8b1a6b4b3df1768dce76f3ddaf78911bc197e26de4ff0ed5f3d3e",
-    "f79159eb-ab40-4b75-bdbb-ddd839e76350": "5ed0ec45e6b2baf1d10532006964c65ee089f1174de72ac7019af56803b1cacc",
     "fafe1c9b-b229-43d3-a826-bb62f2bed161": "12ee9032be474cb8467c022bad63010b237f983b6693a323caf72e062e8bd273",
     "fc31e875-f0d0-4f38-a9ac-b128e7493c83": "250beaa5e8aac4f29df9aa1a8f094c534051e40bfbd89a92cad63782de635e44",
     "fea4f70a-2a84-4b58-be7b-c4ad95d62e21": "3c51c7e6f1d8e52e04cd16352b98ca3fc48f91aff8f2269932cdc3f79dea0360"
@@ -219,12 +219,6 @@
       "kind": "environment_source_plate",
       "slot_key": "play_path",
       "source_kind": "provider"
-    },
-    "f79159eb-ab40-4b75-bdbb-ddd839e76350": {
-      "sha256": "5ed0ec45e6b2baf1d10532006964c65ee089f1174de72ac7019af56803b1cacc",
-      "kind": "publication_metadata",
-      "slot_key": "main",
-      "source_kind": "provider"
     }
   },
   "derived_artifact_ids": [
@@ -232,6 +226,7 @@
     "0ae4c139-b1ed-49dc-8758-e95a2d429a15",
     "0c3a811a-68f6-4c14-8675-d6c0be6c2e65",
     "0c531e68-4abf-4b91-8d62-d1e22137778e",
+    "0eca2f8e-eda2-4b52-bd06-a063a6681253",
     "10a92c61-c890-46a9-b272-8d9a77e08630",
     "12eaeecb-b482-428d-89b9-0028dcd63668",
     "18af564f-3615-40d1-95bf-9ad27545c136",
@@ -300,33 +295,5 @@
     "fc31e875-f0d0-4f38-a9ac-b128e7493c83",
     "fea4f70a-2a84-4b58-be7b-c4ad95d62e21"
   ],
-  "decisions": {
-    "db50d001-33ea-4f1c-8c0d-36e2760a2c7a": {
-      "sha256": "13bb72b1297f5a354736fbb28aae108247a377145658ef5b88f47ed0c8f2d3f1",
-      "kind": "character_reference",
-      "slot_key": "source_original_profile",
-      "actor": "",
-      "evidence_uri": "",
-      "rationale": "",
-      "decided_at": ""
-    },
-    "de41c057-abc7-45f4-a06f-e7359ff1f350": {
-      "sha256": "c191f268f6b1e97e3ab5f70ef208b9d579b274d8fa2abdfdcaaff4f64cf12030",
-      "kind": "character_reference",
-      "slot_key": "source_original_banner",
-      "actor": "",
-      "evidence_uri": "",
-      "rationale": "",
-      "decided_at": ""
-    },
-    "f79159eb-ab40-4b75-bdbb-ddd839e76350": {
-      "sha256": "5ed0ec45e6b2baf1d10532006964c65ee089f1174de72ac7019af56803b1cacc",
-      "kind": "publication_metadata",
-      "slot_key": "main",
-      "actor": "",
-      "evidence_uri": "",
-      "rationale": "",
-      "decided_at": ""
-    }
-  }
+  "decisions": {}
 }

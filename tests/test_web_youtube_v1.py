@@ -69,7 +69,7 @@ def context(tmp_path):
     return config, db, episode, store
 
 
-def artifact(context, kind, content, deps=()):
+def artifact(context, kind, content, deps=(), *, slot_key="main"):
     config, _, episode, store = context
     suffix = ".mp4" if kind == "final_render" else ".json"
     source = config.database_path.parent / f"{kind}{suffix}"
@@ -79,7 +79,7 @@ def artifact(context, kind, content, deps=()):
         owner_scope="episode",
         owner_id=episode.episode_id,
         kind=kind,
-        slot_key="main",
+        slot_key=slot_key,
         provenance=Provenance.manual("fixture", f"local://{kind}"),
         dependencies=[InputDependency(item.identity.artifact_id, "fixture") for item in deps],
     )
