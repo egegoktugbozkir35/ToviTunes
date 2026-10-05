@@ -234,7 +234,7 @@ class ImageProvider(Protocol):
 
 
 class QwenComfyUIImageProvider:
-    """Temporary local adapter for the saved, proven Qwen 2.1 API workflow."""
+    """Shared local Qwen 2.1 text-to-image adapter for caller-owned prompts."""
 
     provider = "qwen_comfyui"
     model = "qwen-image-2.1-q8"
@@ -261,6 +261,7 @@ class QwenComfyUIImageProvider:
         cfg: float = 1.0,
         sampler: str = "euler",
         scheduler: str = "simple",
+        purpose: Literal["general", "lesson_object", "environment"] = "general",
         timeout_seconds: float = 600,
         poll_interval_seconds: float = 1,
         transport: httpx.BaseTransport | None = None,
@@ -272,6 +273,7 @@ class QwenComfyUIImageProvider:
         self.width, self.height = width, height
         self.steps, self.cfg = steps, cfg
         self.sampler, self.scheduler = sampler, scheduler
+        self.purpose = purpose
         self.image_size = f"{width}x{height}"
         self.timeout_seconds = timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
@@ -283,7 +285,7 @@ class QwenComfyUIImageProvider:
         return ProviderCapabilities(
             reference_images=False,
             maximum_reference_images=0,
-            portrait_9_16=False,
+            portrait_9_16=abs(self.width / self.height - 9 / 16) <= 0.025,
             requested_size=self.image_size,
             api_contract="local ComfyUI /prompt, /history, /view",
         )
@@ -330,9 +332,7 @@ class QwenComfyUIImageProvider:
             )
         workflow, workflow_hash = self._workflow()
         seed = int.from_bytes(hashlib.sha256(spec.fingerprint().encode()).digest()[:8], "big")
-        workflow["459:452"]["inputs"]["prompt"] = (
-            spec.prompt() + " Clean plain white background for deterministic exterior removal."
-        )
+        workflow["459:452"]["inputs"]["prompt"] = spec.prompt()
         workflow["459:452"]["inputs"]["resolution"] = max(self.width, self.height)
         workflow["459:456"]["inputs"].update(width=self.width, height=self.height)
         workflow["459:458"]["inputs"].update(
@@ -342,11 +342,11 @@ class QwenComfyUIImageProvider:
             sampler_name=self.sampler,
             scheduler=self.scheduler,
         )
-        workflow["461"]["inputs"]["filename_prefix"] = "ToviTunes_prop_art_v2"
+        workflow["461"]["inputs"]["filename_prefix"] = f"ToviTunes_{self.purpose}"
         return (
             TranslatedRequest(
                 endpoint=f"{self.base_url}/prompt",
-                body={"prompt": workflow, "client_id": "tovitunes-prop-art-v2"},
+                body={"prompt": workflow, "client_id": f"tovitunes-{self.purpose}"},
                 supplied_reference_artifact_ids=(),
             ),
             workflow_hash,
@@ -354,6 +354,27 @@ class QwenComfyUIImageProvider:
 
     def translate(self, spec: CanonicalImageSpec) -> TranslatedRequest:
         return self._translated(spec)[0]
+
+    def health(self) -> dict[str, str]:
+        """Read-only workflow and ComfyUI availability check."""
+        try:
+            self._workflow()
+        except ProviderFailure:
+            return {"status": "misconfigured", "provider": self.provider}
+        try:
+            with httpx.Client(transport=self._transport, timeout=5, trust_env=False) as client:
+                response = client.get(f"{self.base_url}/system_stats")
+        except httpx.HTTPError:
+            return {"status": "unavailable", "provider": self.provider}
+        if response.status_code != 200:
+            return {"status": "unavailable", "provider": self.provider}
+        try:
+            body = response.json()
+        except ValueError:
+            return {"status": "misconfigured", "provider": self.provider}
+        if not isinstance(body, dict) or "system" not in body:
+            return {"status": "misconfigured", "provider": self.provider}
+        return {"status": "available", "provider": self.provider}
 
     def generate(
         self,
@@ -450,6 +471,7 @@ class QwenComfyUIImageProvider:
                                     "scheduler": self.scheduler,
                                     "workflow_sha256": workflow_hash,
                                     "workflow_file": self.workflow_path.name,
+                                    "purpose": self.purpose,
                                     "output_filename": output["filename"],
                                 },
                             )

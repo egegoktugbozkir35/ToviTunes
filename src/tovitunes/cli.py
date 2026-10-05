@@ -26,6 +26,7 @@ from tovitunes.benchmark.providers import (
     ImageProvider,
     OpenAIImageProvider,
     ProviderFailure,
+    QwenComfyUIImageProvider,
 )
 from tovitunes.benchmark.runner import (
     BenchmarkRunner,
@@ -39,13 +40,14 @@ from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
 from tovitunes.creative.provider import DurableStructuredGenerator
 from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot, eligibility
+from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.analysis_runtime import prepare_models, runtime_doctor
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.music.models import MusicReview, TimingAnalysis, load_brief, load_lyrics
 from tovitunes.music.models import load_rubric as load_music_rubric
-from tovitunes.music.providers import FakeMusicProvider
+from tovitunes.music.providers import FakeMusicProvider, MusicProvider
 from tovitunes.music.timing_runtime import prepare_timing
 from tovitunes.music.vertex_lyria import VertexLyriaProvider
 from tovitunes.persistence.db import Database
@@ -57,6 +59,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tovitunes")
     parser.add_argument("--config", type=Path, required=True)
     subcommands = parser.add_subparsers(dest="command", required=True)
+    local_generation = subcommands.add_parser("local-generation")
+    local_generation.add_subparsers(dest="local_generation_command", required=True).add_parser(
+        "doctor"
+    )
     creative = subcommands.add_parser("creative")
     creative_commands = creative.add_subparsers(dest="creative_command", required=True)
     creative_commands.add_parser("eligible")
@@ -161,6 +167,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_run.add_argument("--provider", choices=("google",))
     music_run.add_argument("--dry-run", action="store_true")
     music_run.add_argument("--attempt", type=int)
+    music_spec = music_commands.add_parser("run-spec")
+    music_spec.add_argument("--brief-file", type=Path, required=True)
+    music_spec.add_argument("--lyrics-file", type=Path, required=True)
+    music_spec.add_argument("--attempt", type=int, default=1)
+    music_spec.add_argument("--confirm-provider-generation", action="store_true")
     music_provider_resume = music_commands.add_parser("provider-resume")
     music_provider_resume.add_argument("--request-id", required=True)
     audio_analysis = music_commands.add_parser("analyze-audio")
@@ -293,6 +304,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (ValueError, KeyError, OSError, RuntimeError) as exc:
             parser.error(str(exc))
         print(json.dumps(lesson_result, sort_keys=True))
+        return 0
+    if args.command == "local-generation":
+        status: dict[str, object] = {}
+        for name, generation in (
+            ("environment", config.environment_generation),
+            ("lesson_object", config.lesson_object_generation),
+        ):
+            if generation.provider == "qwen_comfyui":
+                status[name] = QwenComfyUIImageProvider(
+                    generation.workflow_path,
+                    base_url=generation.base_url,
+                    purpose="environment" if name == "environment" else "lesson_object",
+                ).health()
+            else:
+                status[name] = {"status": "legacy_provider", "provider": generation.provider}
+        status["music"] = (
+            AceStepLocalProvider(config.music_generation).health()
+            if config.music_generation.provider == "ace_step_local"
+            else {"status": "legacy_provider", "provider": config.music_generation.provider}
+        )
+        print(json.dumps(status, sort_keys=True))
         return 0
     if args.command == "environment":
         from tovitunes.render.environment_sets import (
@@ -428,6 +460,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(handoff_result, sort_keys=True))
         return 0
     if args.command == "music-benchmark":
+        if args.music_command == "run-spec":
+            if not args.confirm_provider_generation:
+                parser.error("run-spec requires --confirm-provider-generation")
+            if config.music_generation.provider != "ace_step_local":
+                parser.error("run-spec requires ace_step_local music_generation")
+            music_provider = AceStepLocalProvider(config.music_generation)
+            brief = load_brief(args.brief_file)
+            lyrics = load_lyrics(args.lyrics_file)
+            music_plans = plan_music(brief, lyrics, [music_provider], attempt=args.attempt)
+            database = Database(config.database_path)
+            database.migrate()
+            benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
+            results = [benchmark.run(item, music_provider) for item in music_plans]
+            print(
+                json.dumps(
+                    {"provider": music_provider.provider, "results": results}, sort_keys=True
+                )
+            )
+            return 0 if all(r["status"] == "succeeded" for r in results) else 1
         if args.music_command in {"analysis-doctor", "analysis-models"}:
             cache_root = config.data_root / "music-benchmark" / ".analysis-models"
             with redirect_stdout(sys.stderr):
@@ -544,11 +595,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.music_command == "provider-resume":
             request = benchmark.request(args.request_id)
-            if (request["provider"], request["model"]) != ("google", VertexLyriaProvider.model):
-                parser.error("provider-resume supports stored Vertex Lyria 3 Pro requests")
+            if (request["provider"], request["model"]) == ("google", VertexLyriaProvider.model):
+                resume_provider: MusicProvider = VertexLyriaProvider()
+            elif (request["provider"], request["model"]) == (
+                "ace_step_local",
+                AceStepLocalProvider.model,
+            ):
+                resume_provider = AceStepLocalProvider(
+                    config.music_generation
+                    if config.music_generation.provider == "ace_step_local"
+                    else None
+                )
+            else:
+                parser.error("provider-resume does not support the stored provider")
             print(
                 json.dumps(
-                    benchmark.provider_resume(args.request_id, VertexLyriaProvider()),
+                    benchmark.provider_resume(args.request_id, resume_provider),
                     sort_keys=True,
                 )
             )

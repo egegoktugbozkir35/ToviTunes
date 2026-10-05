@@ -43,20 +43,64 @@ class CreativeLLMConfig(BaseModel):
 class EnvironmentGenerationConfig(BaseModel):
     """Approved production image-model choices for reviewed environment sets."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    provider: Literal["google"] = "google"
-    model: Literal["gemini-3.1-flash-image", "gemini-3-pro-image"] = "gemini-3.1-flash-image"
+    provider: Literal["google", "qwen_comfyui"] = "qwen_comfyui"
+    model: str = "qwen-image-2.1-q8"
     location: Literal["global", "us", "eu"] = "global"
     image_size: Literal["1K", "2K", "4K"] = "1K"
+    base_url: str = "http://127.0.0.1:8188"
+    workflow_path: Path = Path("workflows/qwen_image_2_1_t2i_api.json")
+    width: int = Field(default=768, ge=64)
+    height: int = Field(default=1376, ge=64)
+    steps: int = Field(default=20, ge=1)
+    cfg: float = Field(default=1.0, gt=0)
+    sampler: str = "euler"
+    scheduler: str = "simple"
+    timeout_seconds: float = Field(default=600, gt=0)
+    poll_interval_seconds: float = Field(default=1, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_google_defaults(cls, value: object) -> object:
+        if isinstance(value, dict):
+            raw = dict(value)
+            if "provider" not in raw and str(raw.get("model", "")).startswith("gemini-"):
+                raw["provider"] = "google"
+            if raw.get("provider") == "google" and "model" not in raw:
+                raw["model"] = "gemini-3.1-flash-image"
+            return raw
+        return value
 
     @model_validator(mode="after")
     def supported_contract(self) -> "EnvironmentGenerationConfig":
-        if self.model == "gemini-3-pro-image" and self.location != "global":
-            raise ValueError("gemini-3-pro-image is available only at the global location")
-        if self.model == "gemini-3.1-flash-image" and self.image_size != "1K":
-            raise ValueError("the admitted Flash environment contract is pinned to 1K")
+        if self.provider == "qwen_comfyui":
+            if self.model != "qwen-image-2.1-q8" or not _local_http_url(self.base_url):
+                raise ValueError("Qwen environments require qwen-image-2.1-q8 and local HTTP")
+            if abs(self.width / self.height - 9 / 16) > 0.025:
+                raise ValueError("Qwen environment source must be portrait 9:16")
+        else:
+            if self.model not in {"gemini-3.1-flash-image", "gemini-3-pro-image"}:
+                raise ValueError("unsupported Google environment model")
+            if self.model == "gemini-3-pro-image" and self.location != "global":
+                raise ValueError("gemini-3-pro-image is available only at the global location")
+            if self.model == "gemini-3.1-flash-image" and self.image_size != "1K":
+                raise ValueError("the admitted Flash environment contract is pinned to 1K")
         return self
+
+
+def _local_http_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname in {"127.0.0.1", "localhost"}
+        and parsed.port is not None
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.path in {"", "/"}
+    )
 
 
 class LessonObjectGenerationConfig(BaseModel):
@@ -64,8 +108,8 @@ class LessonObjectGenerationConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    provider: Literal["google", "qwen_comfyui"] = "google"
-    model: str = "gemini-3-pro-image"
+    provider: Literal["google", "qwen_comfyui"] = "qwen_comfyui"
+    model: str = "qwen-image-2.1-q8"
     location: str = "global"
     image_size: Literal["2K"] = "2K"
     base_url: str = "http://127.0.0.1:8188"
@@ -79,6 +123,18 @@ class LessonObjectGenerationConfig(BaseModel):
     timeout_seconds: float = Field(default=600, gt=0)
     poll_interval_seconds: float = Field(default=1, gt=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_google_defaults(cls, value: object) -> object:
+        if isinstance(value, dict):
+            raw = dict(value)
+            if "provider" not in raw and str(raw.get("model", "")).startswith("gemini-"):
+                raw["provider"] = "google"
+            if raw.get("provider") == "google" and "model" not in raw:
+                raw["model"] = "gemini-3-pro-image"
+            return raw
+        return value
+
     @model_validator(mode="after")
     def supported_contract(self) -> "LessonObjectGenerationConfig":
         if self.provider == "google":
@@ -89,20 +145,49 @@ class LessonObjectGenerationConfig(BaseModel):
             ):
                 raise ValueError("Google lesson objects require gemini-3-pro-image/global/2K")
         else:
-            parsed = urlsplit(self.base_url)
-            if (
-                self.model != "qwen-image-2.1-q8"
-                or parsed.scheme != "http"
-                or parsed.hostname not in {"127.0.0.1", "localhost"}
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
-                or parsed.path not in {"", "/"}
-            ):
+            if self.model != "qwen-image-2.1-q8" or not _local_http_url(self.base_url):
                 raise ValueError(
                     "Qwen lesson objects require qwen-image-2.1-q8 and a local HTTP base URL"
                 )
+            if self.width != self.height:
+                raise ValueError("Qwen lesson objects require a square source")
+        return self
+
+
+class MusicGenerationConfig(BaseModel):
+    """External local ACE-Step service; Vertex remains available to older requests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    provider: Literal["ace_step_local", "google"] = "ace_step_local"
+    base_url: str = "http://127.0.0.1:8001"
+    model: str = "acestep-v15-turbo"
+    lm_model: str = "acestep-5Hz-lm-0.6B"
+    lm_backend: Literal["pt"] = "pt"
+    thinking: Literal[True] = True
+    inference_steps: int = Field(default=8, ge=1, le=20)
+    audio_format: Literal["wav"] = "wav"
+    batch_size: Literal[1] = 1
+    timeout_seconds: float = Field(default=1800, gt=0)
+    poll_interval_seconds: float = Field(default=2, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_model_default(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("provider") == "google":
+            return {"model": "lyria-3-pro-preview", **value}
+        return value
+
+    @model_validator(mode="after")
+    def supported_contract(self) -> "MusicGenerationConfig":
+        if self.provider == "ace_step_local" and (
+            self.model != "acestep-v15-turbo"
+            or self.lm_model != "acestep-5Hz-lm-0.6B"
+            or not _local_http_url(self.base_url)
+        ):
+            raise ValueError("ACE-Step requires the pinned models and local HTTP")
+        if self.provider == "google" and self.model != "lyria-3-pro-preview":
+            raise ValueError("Google music requires lyria-3-pro-preview")
         return self
 
 
@@ -150,6 +235,7 @@ class RuntimeConfig(BaseModel):
     lesson_object_generation: LessonObjectGenerationConfig = Field(
         default_factory=LessonObjectGenerationConfig
     )
+    music_generation: MusicGenerationConfig = Field(default_factory=MusicGenerationConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -190,16 +276,20 @@ def load_config(path: Path) -> RuntimeConfig:
                 if not candidate.is_absolute()
                 else candidate.resolve()
             )
-    lesson_generation = raw.get("lesson_object_generation")
-    if isinstance(lesson_generation, dict) and isinstance(
-        lesson_generation.get("workflow_path"), str
-    ):
-        candidate = Path(lesson_generation["workflow_path"])
-        lesson_generation["workflow_path"] = (
-            (config_file.parent / candidate).resolve()
-            if not candidate.is_absolute()
-            else candidate.resolve()
-        )
+    for section in ("environment_generation", "lesson_object_generation"):
+        generation = raw.setdefault(section, {})
+        if (
+            isinstance(generation, dict)
+            and generation.get("provider", "qwen_comfyui") == "qwen_comfyui"
+        ):
+            candidate = Path(
+                generation.get("workflow_path", "workflows/qwen_image_2_1_t2i_api.json")
+            )
+            generation["workflow_path"] = (
+                (config_file.parent / candidate).resolve()
+                if not candidate.is_absolute()
+                else candidate.resolve()
+            )
     publication = raw.setdefault("publication", {})
     if isinstance(publication, dict):
         youtube = publication.setdefault("youtube", {})

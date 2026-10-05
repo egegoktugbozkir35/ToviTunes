@@ -607,6 +607,7 @@ class MusicBenchmark:
     def _record_receipt(
         self, request_id: str, result: MusicResult, duration: float, codec: str
     ) -> None:
+        request = self.request(request_id)
         info = inspect_audio(result.audio_bytes, result.mime_type)
         if (duration, codec) != (info.duration_seconds, info.codec):
             raise ValueError("receipt metadata differs from original audio")
@@ -643,6 +644,15 @@ class MusicBenchmark:
                     json.dumps(
                         {
                             **result.response_metadata,
+                            **(
+                                {
+                                    "local_request_id": request_id,
+                                    "canonical_input_fingerprint": request["input_fingerprint"],
+                                    "input_artifact_ids": [],
+                                }
+                                if request["provider"] == "ace_step_local"
+                                else {}
+                            ),
                             "audio_sample_rate_hz": info.sample_rate_hz,
                             "audio_bitrate_bps": info.bitrate_bps,
                         },

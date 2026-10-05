@@ -4,12 +4,19 @@ import io
 import json
 import shutil
 from contextlib import ExitStack
+from hashlib import sha256
+from pathlib import Path
 
+import httpx
 import pytest
 from PIL import Image, ImageDraw
 
 from tovitunes.artifacts.store import AssetStore
-from tovitunes.benchmark.providers import ProviderFailure, ProviderResult
+from tovitunes.benchmark.providers import (
+    ProviderFailure,
+    ProviderResult,
+    QwenComfyUIImageProvider,
+)
 from tovitunes.config import EnvironmentGenerationConfig, RuntimeConfig
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedScene
 from tovitunes.persistence.db import Database
@@ -56,6 +63,71 @@ def picture(size=MIN_SOURCE_SIZE) -> bytes:
     output = io.BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
+
+
+def test_qwen_environment_uses_text_contract_and_exact_source_bytes(runtime):
+    config = runtime.model_copy(
+        update={
+            "environment_generation": EnvironmentGenerationConfig(
+                provider="qwen_comfyui",
+                workflow_path=Path("workflows/qwen_image_2_1_t2i_api.json").resolve(),
+            )
+        }
+    )
+    preview = plan(config)
+    assert all(request["reference_assets"] == [] for request in preview["requests"])
+    prompts = []
+    calls = []
+    source = picture((768, 1376))
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/prompt":
+            body = json.loads(request.content)
+            prompts.append(body["prompt"]["459:452"]["inputs"]["prompt"])
+            assert body["prompt"]["459:456"]["inputs"]["width"] == 768
+            assert body["prompt"]["459:456"]["inputs"]["height"] == 1376
+            return httpx.Response(200, json={"prompt_id": f"qwen-{len(prompts)}"})
+        if request.url.path.startswith("/history/"):
+            task_id = request.url.path.rsplit("/", 1)[1]
+            return httpx.Response(
+                200,
+                json={
+                    task_id: {
+                        "status": {"status_str": "success", "completed": True},
+                        "outputs": {
+                            "461": {
+                                "images": [
+                                    {"filename": "plate.png", "subfolder": "", "type": "output"}
+                                ]
+                            }
+                        },
+                    }
+                },
+            )
+        assert request.url.path == "/view"
+        return httpx.Response(200, content=source)
+
+    generation = config.environment_generation
+    provider = QwenComfyUIImageProvider(
+        generation.workflow_path,
+        width=768,
+        height=1376,
+        purpose="environment",
+        transport=httpx.MockTransport(handle),
+    )
+    result = generate_set(config, confirmed=True, provider=provider)
+    assert calls.count("/prompt") == len(ROLES)
+    assert len(prompts) == len(ROLES)
+    assert all("plain white background" not in prompt.lower() for prompt in prompts)
+    assert all("rounded shape language" in prompt for prompt in prompts)
+    manifest = inspect_set(config, result["manifest_artifact_id"])
+    store = AssetStore(config.data_root, Database(config.database_path))
+    for plate in manifest["environment_set"]["plates"]:
+        assert plate["source_references"] == []
+        assert plate["provider_request_id"].startswith("qwen-")
+        assert plate["source_sha256"] == sha256(source).hexdigest()
+        assert store.path_for(plate["source_artifact_id"]).read_bytes() == source
 
 
 def test_documented_vertex_1k_portrait_is_accepted_and_normalized():
@@ -306,6 +378,8 @@ def test_source_dimensions_survive_technical_validation_failure(runtime):
         ).fetchone()
     assert row["status"] == "terminal_failure"
     assert json.loads(row["response_metadata_json"]) == {
+        "continuity_mode": "shared_text_world_contract",
+        "reference_images_supported": True,
         "requested_image_size": "1K",
         "source_dimensions": [767, 1376],
         "technical_validation": "failed",
@@ -334,8 +408,15 @@ def test_character_like_plate_can_be_rejected_by_human(runtime):
 
 def test_missing_vertex_project_fails_before_request(runtime, monkeypatch):
     monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    legacy = runtime.model_copy(
+        update={
+            "environment_generation": EnvironmentGenerationConfig(
+                provider="google", model="gemini-3.1-flash-image"
+            )
+        }
+    )
     with pytest.raises(ProviderFailure, match="GOOGLE_CLOUD_PROJECT"):
-        generate_set(runtime, confirmed=True)
+        generate_set(legacy, confirmed=True)
     assert not runtime.database_path.exists()
 
 

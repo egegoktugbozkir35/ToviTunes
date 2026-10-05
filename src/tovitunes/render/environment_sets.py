@@ -20,6 +20,7 @@ from tovitunes.benchmark.providers import (
     ImageProvider,
     ProviderFailure,
     ProviderResult,
+    QwenComfyUIImageProvider,
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
@@ -117,8 +118,22 @@ def _store(config: RuntimeConfig) -> tuple[Database, AssetStore, str]:
     return db, AssetStore(config.data_root, db), catalog.version.revision_id
 
 
-def _configured_provider(config: RuntimeConfig) -> GeminiImageProvider:
+def _configured_provider(config: RuntimeConfig) -> ImageProvider:
     generation = config.environment_generation
+    if generation.provider == "qwen_comfyui":
+        return QwenComfyUIImageProvider(
+            workflow_path=generation.workflow_path,
+            base_url=generation.base_url,
+            width=generation.width,
+            height=generation.height,
+            steps=generation.steps,
+            cfg=generation.cfg,
+            sampler=generation.sampler,
+            scheduler=generation.scheduler,
+            timeout_seconds=generation.timeout_seconds,
+            poll_interval_seconds=generation.poll_interval_seconds,
+            purpose="environment",
+        )
     return GeminiImageProvider(
         model=generation.model,
         location=generation.location,
@@ -126,19 +141,27 @@ def _configured_provider(config: RuntimeConfig) -> GeminiImageProvider:
     )
 
 
-def _provider_settings(
-    config: RuntimeConfig, provider: ImageProvider
-) -> tuple[str, str, str, str]:
+def _provider_settings(config: RuntimeConfig, provider: ImageProvider) -> tuple[str, str, str, str]:
     generation = config.environment_generation
     location = getattr(provider, "location", generation.location)
     image_size = getattr(provider, "image_size", generation.image_size)
     return provider.provider, provider.model, str(location), str(image_size)
 
 
+def _supports_reference_images(provider: ImageProvider) -> bool:
+    capabilities = getattr(provider, "capabilities", None)
+    return bool(capabilities.reference_images) if capabilities is not None else True
+
+
 def _generation_fingerprint(
-    theme: str, provider: str, model: str, location: str, image_size: str
+    theme: str,
+    provider: str,
+    model: str,
+    location: str,
+    image_size: str,
+    qwen_profile: dict[str, object] | None = None,
 ) -> str:
-    payload = {
+    payload: dict[str, object] = {
         "theme": theme,
         "prompt_version": PROMPT_VERSION,
         "roles": ROLES,
@@ -147,7 +170,23 @@ def _generation_fingerprint(
         "location": location,
         "image_size": image_size,
     }
+    if qwen_profile is not None:
+        payload["qwen_profile"] = qwen_profile
     return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _qwen_profile(provider: ImageProvider) -> dict[str, object] | None:
+    if not isinstance(provider, QwenComfyUIImageProvider):
+        return None
+    return {
+        "workflow_sha256": provider._workflow()[1],
+        "width": provider.width,
+        "height": provider.height,
+        "steps": provider.steps,
+        "cfg": provider.cfg,
+        "sampler": provider.sampler,
+        "scheduler": provider.scheduler,
+    }
 
 
 def _set_id(theme: str, fingerprint: str) -> str:
@@ -185,7 +224,10 @@ def _spec(
             "Use the supplied master environment as a style and world continuity reference. "
             "Change only the staging region described above; do not copy any character or object."
             if reference
-            else "No reference image; establish the visual style for all following plates."
+            else (
+                "No reference image. Use the shared textual meadow world and rounded "
+                "visual style contract exactly for this role; change only the staging details."
+            )
         ),
         pack_revision_id="environment-only",
         brand_revision_id=brand_id,
@@ -214,7 +256,9 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
     brand_id = load_brand(config.brand_root).version.revision_id
     provider = _configured_provider(config)
     provider_name, model, location, image_size = _provider_settings(config, provider)
-    fingerprint = _generation_fingerprint(theme, provider_name, model, location, image_size)
+    fingerprint = _generation_fingerprint(
+        theme, provider_name, model, location, image_size, _qwen_profile(provider)
+    )
     return {
         "set_id": _set_id(theme, fingerprint),
         "theme": theme,
@@ -240,10 +284,12 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
                         sha256="0" * 64,
                         mime_type="image/png",
                     )
-                    if role != ROLES[0]
+                    if role != ROLES[0] and _supports_reference_images(provider)
                     else None,
                 ).prompt(),
-                "reference_assets": ["meadow_wide"] if role != ROLES[0] else [],
+                "reference_assets": ["meadow_wide"]
+                if role != ROLES[0] and _supports_reference_images(provider)
+                else [],
             }
             for role in ROLES
         ],
@@ -358,10 +404,14 @@ def generate_set(
         provider.preflight()
     provider_name, model, location, image_size = _provider_settings(config, provider)
     generation_fingerprint = _generation_fingerprint(
-        theme, provider_name, model, location, image_size
+        theme, provider_name, model, location, image_size, _qwen_profile(provider)
     )
     set_id = _set_id(theme, generation_fingerprint)
-    expected_source_dimensions = SOURCE_DIMENSIONS.get((model, image_size))
+    expected_source_dimensions = (
+        (provider.width, provider.height)
+        if isinstance(provider, QwenComfyUIImageProvider)
+        else SOURCE_DIMENSIONS.get((model, image_size))
+    )
     db, store, brand_id = _store(config)
     working = config.data_root / ".environment-working"
     working.mkdir(exist_ok=True)
@@ -374,7 +424,7 @@ def generate_set(
             master = plates[0] if plates else None
             master_reference_id: str | None = None
             reference: ReferenceImage | None = None
-            if master is not None:
+            if master is not None and _supports_reference_images(provider):
                 master_reference_id = master.source_artifact_id or master.artifact_id
                 reference = ReferenceImage(
                     role="world_master",
@@ -468,6 +518,12 @@ def generate_set(
                 )
                 received_result = result
                 response_metadata = _response_metadata(result)
+                response_metadata["continuity_mode"] = (
+                    "image_reference" if master_reference_id else "shared_text_world_contract"
+                )
+                response_metadata["reference_images_supported"] = _supports_reference_images(
+                    provider
+                )
                 if not started:
                     raise ValueError("provider returned without remote-start receipt")
                 with Image.open(io.BytesIO(result.image_bytes)) as source_image:
@@ -499,9 +555,7 @@ def generate_set(
                         kind="environment_source_plate",
                         slot_key=role,
                         provenance=provider_provenance,
-                        dependencies=[
-                            InputDependency(master_reference_id, "world_style_reference")
-                        ]
+                        dependencies=[InputDependency(master_reference_id, "world_style_reference")]
                         if master_reference_id
                         else [],
                         expected_media_type=result.mime_type,
@@ -663,9 +717,7 @@ def contact_sheet(store: AssetStore, environment: EnvironmentSet, output: Path) 
         with Image.open(store.path_for(plate.artifact_id)) as source:
             thumb = source.convert("RGB").resize((464, 825), Image.Resampling.LANCZOS)
             sheet.paste(thumb, (cell_x + 8, cell_y + 8))
-        draw.rectangle(
-            (cell_x + 8, cell_y + 833, cell_x + 472, cell_y + 872), fill="#1d3557"
-        )
+        draw.rectangle((cell_x + 8, cell_y + 833, cell_x + 472, cell_y + 872), fill="#1d3557")
         draw.text((cell_x + 18, cell_y + 841), plate.role, fill="white", font=font)
     output.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output)
