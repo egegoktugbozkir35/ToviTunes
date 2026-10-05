@@ -10,6 +10,7 @@ from test_web_youtube_v1 import artifact, rights
 
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.rights import closeout_rights, reviewed_graph_template
+from tovitunes.publication.rights_policy import evaluate_inherited_rights
 from tovitunes.publication.service import PublicationService
 from tovitunes.web.app import create_app
 from tovitunes.youtube.client import ChannelMismatch, UploadAmbiguous, YouTubeClient
@@ -20,7 +21,11 @@ pytest_plugins = ("test_web_youtube_v1",)
 def clear_graph(ready):
     (config, _, _, store), _, _, _ = ready
     report = evaluate_release(config, "colors-red")
-    ids = {c.artifact_id for c in report.checks if c.name == "immutable_sha"}
+    ids = {
+        c.artifact_id
+        for c in report.checks
+        if c.name == "commercial_rights_direct" and c.artifact_id
+    }
     for aid in ids:
         rights(store, store.get(aid), "commercial_use_confirmed")
     assert evaluate_release(config, "colors-red").public_release_allowed
@@ -93,9 +98,118 @@ def test_public_requires_private_upload_and_rights(ready):
     with pytest.raises(ValueError, match="No successful private"):
         PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
     record_upload(ready)
-    rights(store, render, "review_required")
+    audio = store.selected("episode", render.identity.owner_id, "audio_master", "main")
+    assert audio is not None
+    rights(store, audio, "review_required")
     with pytest.raises(ValueError, match="preflight"):
         PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
+
+
+@pytest.mark.parametrize("status", ["unknown", "review_required", "blocked"])
+def test_direct_source_status_blocks_public_release(ready, status):
+    (config, _, episode, store), _, _, _ = ready
+    clear_graph(ready)
+    audio = store.selected("episode", episode.episode_id, "audio_master", "main")
+    assert audio is not None
+    rights(store, audio, status)
+    report = evaluate_release(config, "colors-red")
+    direct = [
+        check
+        for check in report.checks
+        if check.name == "commercial_rights_direct"
+        and check.artifact_id == audio.identity.artifact_id
+    ]
+    assert len(direct) == 1 and not direct[0].passed
+    assert not report.public_release_allowed
+
+
+def test_cleared_direct_source_allows_derived_unknown_rights(ready):
+    (config, _, _, store), render, _, _ = ready
+    clear_graph(ready)
+    rights(store, render, "review_required")
+    report = evaluate_release(config, "colors-red")
+    inherited = [
+        check
+        for check in report.checks
+        if check.name == "commercial_rights_inherited"
+        and check.artifact_id == render.identity.artifact_id
+    ]
+    assert len(inherited) == 1 and inherited[0].passed
+    assert report.public_release_allowed
+
+
+def test_explicitly_blocked_derived_ancestor_blocks_release(ready):
+    (config, _, _, store), render, _, _ = ready
+    clear_graph(ready)
+    manifest = store.selected("episode", render.identity.owner_id, "render_manifest", "main")
+    assert manifest is not None
+    rights(store, manifest, "blocked")
+    report = evaluate_release(config, "colors-red")
+    assert not report.private_test_upload_allowed and not report.public_release_allowed
+    render_rights = next(
+        check
+        for check in report.checks
+        if check.name == "commercial_rights_inherited"
+        and check.artifact_id == render.identity.artifact_id
+    )
+    assert not render_rights.passed and manifest.identity.artifact_id in render_rights.reason
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected_root_kind"),
+    [
+        (
+            (
+                "lesson_object_source",
+                "lesson_object_candidate",
+                "lesson_object",
+                "lesson_object_manifest",
+            ),
+            "lesson_object_source",
+        ),
+        (
+            ("environment_source_plate", "environment_plate", "environment_set", "scene_image"),
+            "environment_source_plate",
+        ),
+        (
+            ("audio_master", "beat_analysis", "timed_storyboard", "final_render"),
+            "audio_master",
+        ),
+        (
+            ("character_reference", "character_animation", "scene_image", "final_render"),
+            "character_reference",
+        ),
+    ],
+)
+def test_rights_inherit_across_creative_derivative_chains(context, kinds, expected_root_kind):
+    records = []
+    for kind in kinds:
+        content = b"\0\0\0\x18ftypisomfixture" if kind == "final_render" else {"fixture": kind}
+        records.append(
+            artifact(
+                context,
+                kind,
+                content,
+                (records[-1],) if records else (),
+            )
+        )
+    by_id = {record.identity.artifact_id: record for record in records}
+    dependencies = {
+        record.identity.artifact_id: [records[index - 1].identity.artifact_id] if index else []
+        for index, record in enumerate(records)
+    }
+    statuses = {record.identity.artifact_id: "unknown" for record in records}
+    statuses[records[0].identity.artifact_id] = "commercial_use_confirmed"
+    result = evaluate_inherited_rights(
+        records[-1].identity.artifact_id,
+        records=by_id,
+        dependencies=dependencies,
+        latest_rights=statuses,
+        local_integrity={artifact_id: True for artifact_id in by_id},
+    )
+    assert result.commercially_cleared
+    assert result.direct_roots == (records[0].identity.artifact_id,)
+    assert by_id[result.direct_roots[0]].identity.kind == expected_root_kind
 
 
 def test_public_promotion_same_video_and_idempotent(ready):
@@ -205,6 +319,8 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
     unrelated = artifact(ready[0], "unrelated", {"fixture": "unrelated"})
     evidence = reviewed_graph_template(config, "colors-red")
     graph = evidence["graph_sha256"]
+    assert set(evidence["decisions"]) <= set(evidence["direct_rights_roots"])
+    assert not set(evidence["decisions"]) & set(evidence["derived_artifact_ids"])
     for detail in evidence["decisions"].values():
         detail.update(
             {
@@ -221,7 +337,7 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
         closeout_rights(config, {**evidence, "graph_sha256": {}})
     with pytest.raises(ValueError, match="Reviewed release inputs"):
         closeout_rights(config, {**evidence, "render_artifact_id": unrelated.identity.artifact_id})
-    with pytest.raises(ValueError, match="uncleared selected release graph"):
+    with pytest.raises(ValueError, match="direct rights roots"):
         closeout_rights(
             config,
             {
@@ -240,7 +356,19 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
                 },
             },
         )
-    with pytest.raises(ValueError):
+    direct_id = next(iter(evidence["decisions"]))
+    with pytest.raises(ValueError, match="incomplete"):
+        closeout_rights(
+            config,
+            {
+                **evidence,
+                "decisions": {
+                    **evidence["decisions"],
+                    direct_id: {**evidence["decisions"][direct_id], "evidence_uri": ""},
+                },
+            },
+        )
+    with pytest.raises(ValueError, match="direct rights roots"):
         closeout_rights(
             config,
             {
@@ -248,8 +376,13 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
                 "decisions": {
                     **evidence["decisions"],
                     render.identity.artifact_id: {
-                        **evidence["decisions"][render.identity.artifact_id],
-                        "evidence_uri": "",
+                        "sha256": render.sha256,
+                        "kind": render.identity.kind,
+                        "slot_key": render.identity.slot_key,
+                        "actor": "human:reviewer",
+                        "evidence_uri": "https://example.test/evidence",
+                        "rationale": "A derived render cannot be closed out directly",
+                        "decided_at": datetime.now(UTC).isoformat(),
                     },
                 },
             },
@@ -257,7 +390,8 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
     with db.connect() as connection:
         assert connection.execute("SELECT count(*) FROM rights_decisions").fetchone()[0] == before
     changes = closeout_rights(config, evidence)
-    assert len(changes) == len(graph)
+    assert len(changes) == len(evidence["decisions"])
+    assert len(changes) < len(graph)
     assert evaluate_release(config, "colors-red").public_release_allowed
     assert closeout_rights(config, evidence) == []
     with db.connect() as connection:
@@ -266,7 +400,7 @@ def test_rights_closeout_appends_only_reviewed_graph(ready):
                 "SELECT count(*) FROM rights_decisions WHERE artifact_id=?",
                 (render.identity.artifact_id,),
             ).fetchone()[0]
-            == 3
+            == 2
         )
         assert (
             connection.execute(

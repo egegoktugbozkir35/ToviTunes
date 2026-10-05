@@ -14,6 +14,7 @@ from tovitunes.config import RuntimeConfig, load_config
 from tovitunes.domain.review import RightsDecision
 from tovitunes.persistence.db import Database
 from tovitunes.publication.preflight import evaluate_release
+from tovitunes.publication.rights_policy import RIGHTS_APPLICABILITY_POLICY
 
 POLICY = "tovitunes_publication_rights_v1"
 
@@ -38,9 +39,24 @@ def reviewed_graph_template(config: RuntimeConfig, episode_key: str) -> dict[str
     )
     graph = {aid: store.get(aid).sha256 for aid in ids}
     uncleared = {
-        check.artifact_id for check in report.checks
-        if check.name == "commercial_rights" and not check.passed
+        check.artifact_id
+        for check in report.checks
+        if check.name == "commercial_rights_direct" and not check.passed
     }
+    direct_ids = sorted(
+        {
+            check.artifact_id
+            for check in report.checks
+            if check.name == "commercial_rights_direct" and check.artifact_id
+        }
+    )
+    derived_ids = sorted(
+        {
+            check.artifact_id
+            for check in report.checks
+            if check.name == "commercial_rights_inherited" and check.artifact_id
+        }
+    )
     return {
         "episode_key": episode_key,
         "render_artifact_id": report.render_artifact_id,
@@ -48,6 +64,17 @@ def reviewed_graph_template(config: RuntimeConfig, episode_key: str) -> dict[str
         "metadata_artifact_id": report.metadata_artifact_id,
         "metadata_fingerprint": report.metadata_fingerprint,
         "graph_sha256": graph,
+        "rights_policy_version": RIGHTS_APPLICABILITY_POLICY,
+        "direct_rights_roots": {
+            aid: {
+                "sha256": graph[aid],
+                "kind": store.get(aid).identity.kind,
+                "slot_key": store.get(aid).identity.slot_key,
+                "source_kind": store.get(aid).provenance.source_kind,
+            }
+            for aid in direct_ids
+        },
+        "derived_artifact_ids": derived_ids,
         "decisions": {
             aid: {
                 "sha256": graph[aid],
@@ -58,7 +85,8 @@ def reviewed_graph_template(config: RuntimeConfig, episode_key: str) -> dict[str
                 "rationale": "",
                 "decided_at": "",
             }
-            for aid in ids if aid in uncleared
+            for aid in ids
+            if aid in uncleared
         },
     }
 
@@ -91,17 +119,30 @@ def closeout_rights(config: RuntimeConfig, evidence: dict[str, Any]) -> list[dic
     graph = {aid: store.get(aid).sha256 for aid in ids if aid is not None}
     if evidence.get("graph_sha256") != graph:
         raise ValueError("Reviewed dependency graph differs from selected release graph")
+    current_template = reviewed_graph_template(config, key)
+    if (
+        evidence.get("rights_policy_version") != RIGHTS_APPLICABILITY_POLICY
+        or evidence.get("direct_rights_roots") != current_template["direct_rights_roots"]
+        or evidence.get("derived_artifact_ids") != current_template["derived_artifact_ids"]
+    ):
+        raise ValueError("Reviewed rights applicability differs from selected release graph")
     decisions = evidence.get("decisions")
+    direct_roots = {
+        check.artifact_id
+        for check in report.checks
+        if check.name == "commercial_rights_direct" and check.artifact_id
+    }
     uncleared = {
-        check.artifact_id for check in report.checks
-        if check.name == "commercial_rights" and not check.passed
+        check.artifact_id
+        for check in report.checks
+        if check.name == "commercial_rights_direct" and not check.passed
     }
     if (
         not isinstance(decisions, dict)
         or not uncleared.issubset(decisions)
-        or not set(decisions).issubset(graph)
+        or not set(decisions).issubset(direct_roots)
     ):
-        raise ValueError("Rights evidence must cover the uncleared selected release graph")
+        raise ValueError("Rights evidence must cover only uncleared direct rights roots")
     prepared: list[RightsDecision] = []
     for aid, detail in decisions.items():
         if not isinstance(detail, dict) or not isinstance(aid, str):

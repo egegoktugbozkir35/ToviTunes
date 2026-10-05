@@ -217,6 +217,38 @@ def test_all_commercial_rights_clear_public_gate(ready):
     assert report.private_test_upload_allowed and report.public_release_allowed
 
 
+def test_complete_graph_is_inspected_and_dependency_sha_drift_blocks(ready):
+    (config, db, _, _), render, _, _ = ready
+    before = evaluate_release(config, "colors-red")
+    immutable_ids = {
+        check.artifact_id
+        for check in before.checks
+        if check.name == "immutable_sha" and check.artifact_id
+    }
+    rights_ids = {
+        check.artifact_id
+        for check in before.checks
+        if check.name in {"commercial_rights_direct", "commercial_rights_inherited"}
+        and check.artifact_id
+    }
+    assert rights_ids == immutable_ids
+    with db.connect() as connection:
+        connection.execute("DROP TRIGGER artifact_dependencies_no_update")
+        connection.execute(
+            "UPDATE artifact_dependencies SET input_sha256=? WHERE consumer_artifact_id=?",
+            ("0" * 64, render.identity.artifact_id),
+        )
+        connection.commit()
+    drifted = evaluate_release(config, "colors-red")
+    assert not drifted.render_ready and not drifted.public_release_allowed
+    assert any(check.name == "dependency_sha" and not check.passed for check in drifted.checks)
+    assert {
+        check.artifact_id
+        for check in drifted.checks
+        if check.name == "immutable_sha" and check.artifact_id
+    } == immutable_ids
+
+
 def test_selected_failed_media_qa_blocks_private(ready):
     context, render, _, _ = ready
     config, _, _, _ = context

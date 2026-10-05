@@ -34,9 +34,18 @@ deleted. The client retains the reported embeddable, license, and public stats
 settings while changing privacy and explicitly retaining made-for-kids and
 synthetic-media declarations.
 
-Rights decisions for the selected dependency graph are appended through
+Rights evaluation keeps the complete immutable dependency graph while applying
+independent commercial evidence only to non-deterministic creative source
+roots. Derived artifacts receive `commercial_rights_inherited` checks over
+their validated ancestor closure. Unknown or review-required decisions on a
+derived artifact do not demand duplicate evidence, while an explicit blocked
+ancestor and every technical or approval failure remain blocking.
+
+Rights decisions for direct roots in the selected dependency graph are appended through
 `python -m tovitunes.publication.rights --config config.yaml --evidence reviewed.json`.
 Use `--snapshot colors-red-001` to export a read-only exact graph template for
-review after metadata is selected. The [rights evidence record](rights/COLORS_RED_RELEASE_RIGHTS.md)
-describes the current unresolved sources. Public release remains blocked while
-any current rights decision is below `commercial_use_confirmed`.
+review after metadata is selected. The snapshot freezes all graph SHAs and the
+direct/derived classification, but requests decisions only for uncleared direct
+roots. The [rights evidence record](rights/COLORS_RED_RELEASE_RIGHTS.md)
+describes the current unresolved sources. Public release remains blocked until
+all direct roots are commercially cleared and every inherited check passes.
