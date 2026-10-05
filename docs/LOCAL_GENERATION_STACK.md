@@ -50,7 +50,9 @@ sample mode, and requests a deterministic seed. It uses `/health`,
 `/release_task`, `/query_result`, and `/v1/audio` on the configured origin.
 The returned task ID is committed before polling. On an uncertain outcome,
 `music-benchmark provider-resume` only queries that task; it cannot submit
-another one. Downloaded WAV bytes pass the existing audio inspector and then
+another one. A queued/running task reports `existing_interaction_pending`
+without changing its stored status or task ID; repeat resume later. Downloaded
+WAV bytes pass the existing audio inspector and then
 the normal ASR, lyric, timing, beat, review, selection, and rights gates.
 
 ## Operator steps after merge

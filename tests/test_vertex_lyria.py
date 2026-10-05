@@ -687,6 +687,7 @@ def test_queued_post_resumes_with_gets_until_completed(tmp_path: Path) -> None:
     for expected_methods in (["POST", "GET"], ["POST", "GET", "GET"]):
         pending = store.provider_resume(request_id, provider)
         assert pending["status"] == "ambiguous"
+        assert pending["action"] == "existing_interaction_not_complete"
         assert store.request(request_id)["provider_request_id"] == "vertex-interaction-123"
         assert methods == expected_methods
         assert store.run(item, provider)["action"] == "manual_reconciliation_required"

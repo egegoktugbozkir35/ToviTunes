@@ -12,7 +12,12 @@ import httpx
 from tovitunes.config import MusicGenerationConfig
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import CanonicalMusicSpec
-from tovitunes.music.providers import MusicCapabilities, MusicFailure, MusicResult
+from tovitunes.music.providers import (
+    MusicCapabilities,
+    MusicFailure,
+    MusicResult,
+    MusicTaskPending,
+)
 
 
 class AceStepLocalProvider:
@@ -215,7 +220,7 @@ class AceStepLocalProvider:
         if task.get("task_id") != task_id:
             raise MusicFailure("ACE-Step task identity mismatch", "terminal_failure", task_id)
         if task.get("status") == 0:
-            raise MusicFailure("ACE-Step task is still running", "retryable_failure", task_id)
+            raise MusicTaskPending(task_id)
         if task.get("status") == 2:
             raise MusicFailure("ACE-Step task failed", "terminal_failure", task_id)
         if task.get("status") != 1:

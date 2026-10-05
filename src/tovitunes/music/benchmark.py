@@ -35,7 +35,7 @@ from tovitunes.music.models import (
     TimingAnalysis,
     fingerprint,
 )
-from tovitunes.music.providers import MusicFailure, MusicProvider, MusicResult
+from tovitunes.music.providers import MusicFailure, MusicProvider, MusicResult, MusicTaskPending
 from tovitunes.persistence.db import Database
 
 
@@ -513,6 +513,14 @@ class MusicBenchmark:
             result = retrieve(
                 row["provider_request_id"], json.loads(row["translated_request_json"])
             )
+        except MusicTaskPending as exc:
+            if exc.provider_request_id != row["provider_request_id"]:
+                raise ValueError("pending provider task identity differs from stored interaction")
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "existing_interaction_pending",
+            }
         except MusicFailure as exc:
             if exc.outcome == "retryable_failure":
                 return {

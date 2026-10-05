@@ -14,7 +14,7 @@ from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.audio import inspect_audio
 from tovitunes.music.benchmark import MusicBenchmark, plan
 from tovitunes.music.models import CanonicalMusicSpec, load_brief, load_lyrics
-from tovitunes.music.providers import MusicFailure
+from tovitunes.music.providers import MusicFailure, MusicTaskPending
 from tovitunes.persistence.db import Database
 
 
@@ -158,6 +158,8 @@ def test_retrieve_running_and_failed_never_submit(status: int, expected: str) ->
     with pytest.raises(MusicFailure) as failure:
         provider.retrieve("known", provider.translate(_spec()))
     assert failure.value.outcome == expected
+    if status == 0:
+        assert isinstance(failure.value, MusicTaskPending)
     assert calls == ["/query_result"]
 
 
@@ -236,16 +238,22 @@ def test_connection_failure_at_release_has_no_task_id() -> None:
 
 def test_benchmark_resume_uses_existing_task_only(tmp_path: Path) -> None:
     calls: list[str] = []
+    queries = 0
 
     def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal queries
         calls.append(request.url.path)
         if request.url.path == "/health":
             return _envelope({"status": "ok"})
         if request.url.path == "/release_task":
             return _envelope({"task_id": "known"})
         if request.url.path == "/query_result":
-            return _envelope([{"task_id": "known", "status": 0}])
-        raise AssertionError("unexpected API endpoint")
+            queries += 1
+            if queries <= 2:
+                return _envelope([{"task_id": "known", "status": 0}])
+            return _envelope([_result("known")])
+        assert request.url.path == "/v1/audio"
+        return httpx.Response(200, content=_wav())
 
     provider = AceStepLocalProvider(
         MusicGenerationConfig(timeout_seconds=1, poll_interval_seconds=1),
@@ -261,8 +269,54 @@ def test_benchmark_resume_uses_existing_task_only(tmp_path: Path) -> None:
     assert initial["status"] == "ambiguous"
     row = benchmark.request(initial["request_id"])
     assert row["provider_request_id"] == "known"
-    resumed = benchmark.provider_resume(initial["request_id"], provider)
+    durable_status = row["status"]
+    for _ in range(2):
+        calls_before_resume = len(calls)
+        resumed = benchmark.provider_resume(initial["request_id"], provider)
+        assert resumed == {
+            "request_id": initial["request_id"],
+            "status": durable_status,
+            "action": "existing_interaction_pending",
+        }
+        stored = benchmark.request(initial["request_id"])
+        assert stored["status"] == durable_status
+        assert stored["provider_request_id"] == "known"
+        assert calls[calls_before_resume:] == ["/query_result"]
+    completed = benchmark.provider_resume(initial["request_id"], provider)
+    assert completed["status"] == "succeeded"
+    assert completed["request_id"] == initial["request_id"]
+    assert benchmark.request(initial["request_id"])["provider_request_id"] == "known"
+    assert calls.count("/release_task") == 1
+
+
+def test_genuine_retryable_resume_failure_remains_local_preflight(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/health":
+            return _envelope({"status": "ok"})
+        if request.url.path == "/release_task":
+            return _envelope({"task_id": "known"})
+        raise httpx.ReadTimeout("query unavailable")
+
+    provider = AceStepLocalProvider(transport=httpx.MockTransport(handle))
+    db = Database(tmp_path / "music.db")
+    db.migrate()
+    benchmark = MusicBenchmark(db, tmp_path / "audio")
+    spec = _spec()
+    planned = plan(spec.brief, spec.lyrics, [provider], attempt=1)[0]
+    initial = benchmark.run(planned, provider)
+    assert initial["status"] == "ambiguous"
+
+    class RetryableLocalProvider(AceStepLocalProvider):
+        def retrieve(self, task_id, translated_request):  # type: ignore[no-untyped-def]
+            raise MusicFailure("local client preflight unavailable", "retryable_failure", task_id)
+
+    local_failure = RetryableLocalProvider(transport=httpx.MockTransport(handle))
+    resumed = benchmark.provider_resume(initial["request_id"], local_failure)
     assert resumed["action"] == "local_preflight_failure"
+    assert benchmark.request(initial["request_id"])["provider_request_id"] == "known"
     assert calls.count("/release_task") == 1
 
 
