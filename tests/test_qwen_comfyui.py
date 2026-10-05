@@ -26,6 +26,8 @@ def test_workflow_patch_is_explicit_deterministic_and_does_not_mutate_file() -> 
     assert first.endpoint == "http://127.0.0.1:8188/prompt"
     graph = first.body["prompt"]
     assert spec.prompt() in graph["459:452"]["inputs"]["prompt"]
+    assert graph["459:452"]["inputs"]["prompt"] == spec.prompt()
+    assert "plain white background" in spec.prompt().lower()
     assert graph["459:456"]["inputs"]["width"] == 1024
     assert graph["459:456"]["inputs"]["height"] == 1024
     sampler = graph["459:458"]["inputs"]
@@ -203,3 +205,36 @@ def test_workflow_path_is_relative_to_config_file(tmp_path: Path) -> None:
     assert load_config(config_file).lesson_object_generation.workflow_path == (
         tmp_path / "workflows" / "proven.json"
     )
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8")
+        + "environment_generation:\n"
+        + "  provider: qwen_comfyui\n"
+        + "  workflow_path: workflows/environment.json\n",
+        encoding="utf-8",
+    )
+    assert load_config(config_file).environment_generation.workflow_path == (
+        tmp_path / "workflows" / "environment.json"
+    )
+
+
+def test_comfyui_health_distinguishes_missing_workflow_and_service(tmp_path: Path) -> None:
+    assert QwenComfyUIImageProvider(tmp_path / "absent.json").health()["status"] == (
+        "misconfigured"
+    )
+    calls: list[str] = []
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        raise httpx.ConnectError("offline")
+
+    provider = QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(unavailable))
+    assert provider.health()["status"] == "unavailable"
+    assert calls == ["/system_stats"]
+
+    def available(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"system": {"os": "windows"}})
+
+    provider = QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(available))
+    assert provider.health()["status"] == "available"
+    assert calls[-1] == "/system_stats"

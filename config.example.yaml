@@ -14,10 +14,18 @@ publication:
     max_retries: 5
     contains_synthetic_media: true
 environment_generation:
-  provider: google
-  model: gemini-3-pro-image
-  location: global
-  image_size: 2K
+  provider: qwen_comfyui
+  model: qwen-image-2.1-q8
+  base_url: http://127.0.0.1:8188
+  workflow_path: workflows/qwen_image_2_1_t2i_api.json
+  width: 768
+  height: 1376
+  steps: 20
+  cfg: 1.0
+  sampler: euler
+  scheduler: simple
+  timeout_seconds: 600
+  poll_interval_seconds: 1
 lesson_object_generation:
   provider: qwen_comfyui
   model: qwen-image-2.1-q8
@@ -31,6 +39,18 @@ lesson_object_generation:
   scheduler: simple
   timeout_seconds: 600
   poll_interval_seconds: 1
+music_generation:
+  provider: ace_step_local
+  base_url: http://127.0.0.1:8001
+  model: acestep-v15-turbo
+  lm_model: acestep-5Hz-lm-0.6B
+  lm_backend: pt
+  thinking: true
+  inference_steps: 8
+  audio_format: wav
+  batch_size: 1
+  timeout_seconds: 1800
+  poll_interval_seconds: 2
 creative_llm:
   provider: nvidia
   model: moonshotai/kimi-k3

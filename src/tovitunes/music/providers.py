@@ -60,6 +60,17 @@ class MusicFailure(Exception):
         self.provider_request_id = provider_request_id
 
 
+class MusicTaskPending(MusicFailure):
+    """A known provider task is queued or running and can be queried again."""
+
+    def __init__(self, provider_request_id: str) -> None:
+        if not provider_request_id:
+            raise ValueError("pending provider task requires an identity")
+        super().__init__(
+            "provider task is still running", "retryable_failure", provider_request_id
+        )
+
+
 class MusicProvider(Protocol):
     provider: str
     model: str

@@ -156,6 +156,7 @@ def _provider(config: RuntimeConfig) -> ImageProvider:
             cfg=generation.cfg,
             sampler=generation.sampler,
             scheduler=generation.scheduler,
+            purpose="lesson_object",
             timeout_seconds=generation.timeout_seconds,
             poll_interval_seconds=generation.poll_interval_seconds,
         )
