@@ -59,4 +59,14 @@ creative_llm:
   timeout_seconds: 1800
   temperature: 0.7
   max_tokens: 16384
+  fallback_models:
+    - z-ai/glm-5.3
+    - nvidia/nemotron-3-ultra-550b-a55b
+    - deepseek-ai/deepseek-v4.1-flash
+  fallback_to_ollama_on_endpoint_failure: false
+  ollama:
+    base_url: http://127.0.0.1:11434
+    model: qwen3.8:27b-q4_K_M
+    timeout_seconds: 240
+    temperature: 0.7
 

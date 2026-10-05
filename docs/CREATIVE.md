@@ -1,6 +1,6 @@
 # Creative Director V1
 
-The committed curriculum owns educational objectives and vocabulary. Kimi chooses creative
+The committed curriculum owns educational objectives and vocabulary. The creative model chooses
 treatment from deterministic eligible concepts; it cannot invent curriculum, change Tovi's
 identity, or approve an educational claim. Existing `EpisodeSpec`, `LyricsSpec`, `MusicSpec`,
 `DraftGenerator`, and `CreativeDraftService` remain authoritative.
@@ -10,7 +10,11 @@ identity, or approve an educational claim. Existing `EpisodeSpec`, `LyricsSpec`,
 `creative_llm` in `config.example.yaml` explicitly selects NVIDIA NIM and `moonshotai/kimi-k3`,
 with `/v1/chat/completions`, temperature `0.7`, `max_tokens=16384`, and configurable `1800` second
 timeout. Credentials belong only in `NVIDIA_API_KEY` (or the configured `api_key_env`). YAML
-rejects inline keys. No alternate model/provider, Ollama, OpenAI or embeddings fallback exists.
+rejects inline keys. The default ordered chain is Kimi, `z-ai/glm-5.3`,
+`nvidia/nemotron-3-ultra-550b-a55b`, then `deepseek-ai/deepseek-v4.1-flash`.
+`fallback_models: []` explicitly disables model fallback. Optional local Ollama is disabled
+unless `fallback_to_ollama_on_endpoint_failure: true`; it is not required for normal operation.
+See [fallback and recovery](CREATIVE_FALLBACK.md) for exact failure rules and donor adaptation.
 
 Provider-free inspection:
 
@@ -31,7 +35,7 @@ uv run python -m tovitunes.cli --config config.example.yaml creative generate-ne
 `--live` documents smoke-test intent; ordinary `generate-next` also intentionally uses the real
 configured provider. Neither is invoked by CI. A successful command returns run/episode ID and key,
 three selected creative artifact IDs, and exact call counts, then stops. No music, storyboard,
-rendering, scheduling or uploading occurs. Missing key or unavailable Kimi fails clearly.
+rendering, scheduling or uploading occurs. Missing keys fail closed; model failures follow the configured chain.
 
 Targeted resume:
 
@@ -66,14 +70,14 @@ franchise/artist/celebrity imitation, abstract explanations and curriculum chang
 are conservative structural guards, not a general semantic safety/art-quality certification.
 
 If no candidate passes, the structured repair policy allows one corrected pool: at most two
-subject rounds/POSTs TOTAL, rather than two rounds times two attempts. A selected treatment reserves
+subject rounds/POSTs per model. Conclusively exhausted models may advance through the configured chain. A selected treatment reserves
 normal Episode JSON before insertion. Curriculum/concept-derived keys use collision-checked ordinals
 under the planning lease; truncated long stems include a digest. A crash recovers the reserved UUID.
 The normal database pins objective, vocabulary, language, duration, catalog and pack revisions.
 
 ## Structured generation and durable requests
 
-`NvidiaCreativeDirector` implements the existing `DraftGenerator`. Pure prompts are versioned
+`CreativeDirector` (with the existing `NvidiaCreativeDirector` compatibility alias) implements the existing `DraftGenerator`. Pure prompts are versioned
 `episode-spec-kimi-v1`, `lyrics-kimi-v1`, `music-spec-kimi-v1` and `youtube-metadata-kimi-v1`.
 Prompt behavior changes require a version bump.
 
@@ -95,13 +99,17 @@ or ingestion and check its hash on reuse. Successful identical inputs reuse the 
 
 Invalid JSON/schema/domain output records `succeeded_response_invalid`. At most one second request,
 `<kind>_repair`, has `attempt=2` and points to the original. Both prompts, responses, identities and
-errors remain inspectable. Invalid repair fails closed, including on reinvocation; no third POST.
+errors remain inspectable. Invalid repair may advance to the next configured NVIDIA model;
+there is no third POST to the same model, including on reinvocation. Both initial and repair
+receipts remain unchanged.
 
 HTTP transport retries are `0`. Timeout, connection loss, HTTP 5xx, interrupted streaming, lease
 loss during a request, or started calls without a receipt block as `ambiguous`. Changed input is
 not recovery authorization. Definitive failures and malformed complete transport results do not
-silently retry or trigger structured repair. Inspect the ledger and obtain remote evidence before
-an explicit operator action; V1 deliberately has no automatic resend/recovery CLI. Prepared requests
+silently retry or trigger structured repair. Typed model failures may prepare a new request for
+the next model; typed pre-interaction endpoint failures may use explicitly enabled local Ollama.
+Inspect the ledger and obtain remote evidence before an explicit operator action for any ambiguous
+request; there is no automatic resend or ambiguity-clearing CLI. Prepared requests
 that never started can continue. Complete saved receipts resume local validation after crashes.
 
 Existing `execution_leases` fence planning, creation, creative stages and metadata. Lease durations

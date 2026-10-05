@@ -9,18 +9,75 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+class OllamaCreativeConfig(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
+    )
+
+    base_url: str = "http://127.0.0.1:11434"
+    model: str = Field(default="qwen3.8:27b-q4_K_M", pattern=r"^\S+$")
+    timeout_seconds: float = Field(default=240, gt=0)
+    temperature: float = Field(default=0.7, ge=0, le=2)
+
+    @field_validator("base_url")
+    @classmethod
+    def local_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path
+        ):
+            raise ValueError("Ollama requires a local HTTP(S) endpoint without credentials")
+        return value
+
+
 class CreativeLLMConfig(BaseModel):
     """Explicit NIM configuration; credentials are read only from the named environment."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
+    )
 
     provider: Literal["nvidia"] = "nvidia"
-    model: Literal["moonshotai/kimi-k3"] = "moonshotai/kimi-k3"
+    model: str = Field(default="moonshotai/kimi-k3", pattern=r"^[\w.-]+/[\w.-]+$")
     base_url: str = "https://integrate.api.nvidia.com/v1"
     api_key_env: str = Field(default="NVIDIA_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     timeout_seconds: float = Field(default=1800, gt=0)
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=16384, ge=1, le=131072)
+    fallback_models: tuple[str, ...] = Field(
+        default=(
+            "z-ai/glm-5.3",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            "deepseek-ai/deepseek-v4.1-flash",
+        ),
+        max_length=8,
+    )
+    fallback_to_ollama_on_endpoint_failure: bool = False
+    ollama: OllamaCreativeConfig = Field(default_factory=OllamaCreativeConfig)
+
+    @model_validator(mode="after")
+    def valid_chain(self) -> "CreativeLLMConfig":
+        import re
+
+        chain = (self.model, *self.fallback_models)
+        if any(re.fullmatch(r"[\w.-]+/[\w.-]+", model) is None for model in chain):
+            raise ValueError("creative model names must be namespace/model identifiers")
+        if len({model.casefold() for model in chain}) != len(chain):
+            raise ValueError("creative model chain must not contain duplicates")
+        return self
+
+    def generation_budget_seconds(self, stages: int) -> float:
+        budget = self.timeout_seconds * 2 * (1 + len(self.fallback_models))
+        if self.fallback_to_ollama_on_endpoint_failure:
+            budget += self.ollama.timeout_seconds * 2
+        return stages * budget + 600
 
     @field_validator("base_url")
     @classmethod
@@ -219,7 +276,7 @@ class PublicationConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     schema_version: int = Field(default=1, ge=1, le=1)
     database_path: Path

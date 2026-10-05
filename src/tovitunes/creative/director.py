@@ -1,4 +1,4 @@
-"""Real Kimi director satisfying the existing DraftGenerator boundary."""
+"""Provider-neutral director satisfying the existing DraftGenerator boundary."""
 
 import json
 from collections.abc import Callable
@@ -46,7 +46,7 @@ def validate_pins(episode: Episode, catalog: BrandCatalog) -> None:
         )
 
 
-class NvidiaCreativeDirector:
+class CreativeDirector:
     def __init__(
         self,
         catalog: BrandCatalog,
@@ -126,3 +126,7 @@ class NvidiaCreativeDirector:
             context=self._context(episode, "music_spec", prompts.MUSIC_PROMPT),
             validate=lambda music: validate_music(episode, music, lyrics_artifact_id),
         )
+
+
+# Compatibility for callers of the original director boundary.
+NvidiaCreativeDirector = CreativeDirector

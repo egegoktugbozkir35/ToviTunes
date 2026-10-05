@@ -207,6 +207,11 @@ class CreativeRequestLedger:
         messages_json: str,
         attempt: int = 1,
         parent_request_id: str | None = None,
+        requested_provider: str | None = None,
+        requested_model: str | None = None,
+        fallback_reason: str | None = None,
+        fallback_index: int = 0,
+        previous_attempt_id: str | None = None,
     ) -> Row:
         request_id, now = str(uuid4()), datetime.now(UTC).isoformat()
         family = kind.removesuffix("_repair")
@@ -226,7 +231,9 @@ class CreativeRequestLedger:
                 db.execute(
                     "INSERT INTO generation_requests (request_id,episode_id,run_id,kind,slot_key,"
                     "provider,model,prompt_version,input_fingerprint,status,attempt,parent_request_id,"
-                    "messages_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "messages_json,created_at,updated_at,requested_provider,requested_model,"
+                    "fallback_reason,fallback_index,previous_attempt_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         request_id,
                         episode_id,
@@ -243,6 +250,11 @@ class CreativeRequestLedger:
                         messages_json,
                         now,
                         now,
+                        requested_provider or provider,
+                        requested_model or model,
+                        fallback_reason,
+                        fallback_index,
+                        previous_attempt_id,
                     ),
                 )
                 db.commit()
