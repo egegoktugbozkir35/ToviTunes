@@ -332,6 +332,10 @@ def test_lost_lease_after_music_preflight_prevents_remote_submission(case, monke
     with pytest.raises(ExecutionOwnershipLostError):
         case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
     assert "/release_task" not in case["music_events"]
+    next_owner_plan = plan_continuation(
+        case["config"], case["episode"].external_key, target=ProductionTarget.RENDER
+    )
+    assert next_owner_plan["allowed"] and next_owner_plan["next_stage"] == "MUSIC"
     with closing(case["store"].database.connect()) as db:
         assert not db.execute(
             "SELECT 1 FROM music_requests WHERE remote_started_at IS NOT NULL"

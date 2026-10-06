@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.music.analysis import (
     AnalysisConfig,
     compare_lyrics,
@@ -462,6 +463,11 @@ class MusicBenchmark:
                 result = generate_with_identity(
                     item.canonical_spec, item.translated_request, remote_start, record_identity
                 )
+        except ExecutionOwnershipError:
+            # An unstarted request stays prepared for the next legitimate owner.
+            if started:
+                self._transition(request_id, "ambiguous", category="ownership_lost")
+            raise
         except MusicTaskPending as exc:
             if not started or not identity_recorded:
                 raise ValueError("pending music task lacks durable remote identity") from exc

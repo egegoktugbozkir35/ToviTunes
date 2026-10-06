@@ -17,6 +17,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
+from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
 from tovitunes.render.lesson_objects import _prepare_qwen_white_background, _provider, normalize
 
@@ -312,6 +313,10 @@ def generate_assets(
                         ),
                     )
                     db.commit()
+            except ExecutionOwnershipError:
+                if started:
+                    ledger.transition(request_id, "ambiguous")
+                raise
             except Exception as exc:
                 outcome = exc.outcome if isinstance(exc, ProviderFailure) else "ambiguous"
                 ledger.transition(

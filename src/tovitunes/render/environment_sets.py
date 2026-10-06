@@ -28,6 +28,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import ProductionModel
+from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.db import Database
 
 PROMPT_VERSION = "environment_world_v1"
@@ -649,6 +650,10 @@ def generate_set(
                         source_dimensions=source_dimensions,
                     )
                 )
+            except ExecutionOwnershipError:
+                if started:
+                    _transition(db, request_id, "ambiguous", error="production ownership lost")
+                raise
             except ProviderFailure as exc:
                 status = (
                     exc.outcome if started or exc.outcome != "ambiguous" else "terminal_failure"

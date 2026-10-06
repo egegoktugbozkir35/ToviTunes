@@ -29,7 +29,7 @@ Associated test strategy: pure continuation tables, lazy dependencies, singleton
 
 ## State classification
 
-All existing SQL migrations remain byte-for-byte unchanged. Classification describes records, not whether a diagnostic table is physically dropped. Historical records remain available for audit.
+All existing SQL migrations remain byte-for-byte unchanged. All **48 tables** were checked against an isolated migrated database. Classification describes records, not whether a diagnostic table is physically dropped. Historical records remain available for audit.
 
 | Table | Class | Meaning |
 |---|---|---|
@@ -88,7 +88,7 @@ Old PR40 reconciliation decisions remain immutable audit evidence. Creative ambi
 
 ## Final runtime and donor deviations
 
-`orchestrator.py` owns effects and composition. CLI and FastAPI call `generate(target)` / `resume(key,target)`; recovery only repeats the saved user intent. `continuation.py` recomputes a deterministic plan under the singleton heartbeat lease before every stage. Music and image/environment remote-start callbacks assert that same owner, each image-loop iteration checks ownership, and lost owners cannot select returned media. Immutable returned provider receipts remain available for the next owner. Selected valid artifacts, immutable provider receipts and explicit remote IDs decide reuse. Jobs, stage events, history, UI counters and timing cannot decide production state. Progress/reporting/history errors are best-effort observations. Invalid saved job payloads are skipped so diagnostic corruption cannot prevent the Web application from opening.
+`orchestrator.py` owns effects and composition. CLI and FastAPI call `generate(target)` / `resume(key,target)`; recovery only repeats the saved user intent. `continuation.py` recomputes a deterministic plan under the singleton heartbeat lease before every stage. Music and image/environment remote-start callbacks assert that same owner, each image-loop iteration checks ownership, and lost owners cannot select returned media. Immutable returned provider receipts remain available for the next owner. Selected valid artifacts, immutable provider receipts and explicit remote IDs decide reuse. Jobs, stage events, history, UI counters and timing cannot decide production state. Progress/reporting/history errors are best-effort observations. Lease loss before a remote-start callback leaves the request prepared for the next legitimate owner. Invalid saved job payloads are skipped so diagnostic corruption cannot prevent the Web application from opening.
 
 The donor heartbeat ownership implementation and SQLite lease methods were ported directly, adapting imports and connection helpers. Donor strict frozen configuration, central typed errors (including YouTube/channel errors), FailureScope, ordered sticky fallback, lazy factories, typed progress, best-effort history, renderer result acceptance and publication lifecycle are adapted to the existing durable ToviTunes domain. No old production lock, planner or workflow is called through an adapter.
 
@@ -161,13 +161,13 @@ Deleted source modules: `pipeline/short_production.py`, `pipeline/planner.py`, `
 
 Deleted superseded guides: ARCHITECTURE_PROPOSAL, AUTONOMOUS_SHORT_PIPELINE_V1, CONTINUATION, CREATIVE_FALLBACK, STUDIO_V1 and WEBUI_YOUTUBE_V1. Current runtime is described here and domain-only guides retain unique contracts.
 
-Against the PR baseline, `git diff --no-renames --numstat -- src` records **3,424 source lines inserted, 3,560 removed, net −136**. The four superseded module paths contained 2,409 lines; their unique domain algorithms were moved into the specialized services, while their orchestration, locks and planner implementations were removed. Across source, tests and guides the refactor also deletes obsolete contracts and documentation. File splitting adds small domain modules; module count is not used as a substitute for measuring competing runtime responsibilities.
+Against the PR baseline, `git diff --no-renames --numstat -- src` records **3,440 source lines inserted, 3,560 removed, net −120**. The four superseded module paths contained 2,409 lines; their unique domain algorithms were moved into the specialized services, while their orchestration, locks and planner implementations were removed. Across source, tests and guides the refactor also deletes obsolete contracts and documentation. File splitting adds small domain modules; module count is not used as a substitute for measuring competing runtime responsibilities.
 
 Architecture counts after replacement: **2 normal production-effect entry points**, **1 continuation decision location**, **1 creative failure classifier**, **1 publication state-machine owner**, **1 production concurrency owner**. Non-production benchmark/intake tools retain their own local resource leases; they are not production entry points. Historical audit tables stay physically readable and do not own new production.
 
 ## Validation and screenshots
 
-Final full-suite and Windows CI results will be recorded on this PR after the exact refactor commit completes validation.
+Local validation results are recorded below. The linked PR checks run the complete offline suite on Windows for the final source; the PR description records the final run URL and result.
 
 | Check | Result |
 |---|---|
@@ -179,8 +179,10 @@ Final full-suite and Windows CI results will be recorded on this PR after the ex
 | Creative/domain fallback regressions | 132 passed |
 | Publication/Web regressions | 38 passed |
 | Observational jobs/progress regressions | 5 passed |
-| Complete offline suite | Awaiting final exact-source run |
-| Windows CI | Awaiting this PR commit |
+| Complete local offline suite | **884 passed**, 635.00 s, runtime commit `56aaad7` (the previous complete run also passed 885 before deleting one obsolete private-method test) |
+| Final singleton-fencing regressions | **2 passed**; losing ownership after music preflight prevents submission, and losing it after an image response preserves the receipt without selecting or submitting further assets |
+| Domain fencing regressions | **21 music + 6 environment passed** |
+| Windows CI | [PR #41 checks](https://github.com/egegoktugbozkir35/ToviTunes/pull/41/checks): full offline suite, Ruff, mypy and character-pack validation for the final source, including both added ownership-loss tests |
 
  Offline coverage includes public DRAFT/RENDER/PUBLISH boundaries, poisoned diagnostics, lazy provider construction, real FFmpeg media/QA, restart in separate processes at every authoritative boundary, immutable creative ambiguity with automatic forward-only fallback, renderer acceptance, channel mismatch, retained remote ID reuse and uncertain YouTube no-resend behavior. Legacy tests tied to deleted private workflow methods were replaced with application-boundary tests; domain contract/release/rights/byte-integrity tests remain.
 
@@ -194,3 +196,5 @@ Screenshots use an isolated offline Studio database and mocked provider transpor
 ![Automatic creative fallback](screenshots/mpt-automatic-fallback.jpg)
 ![Durable library](screenshots/mpt-durable-library.jpg)
 ![Retained rendered video](screenshots/mpt-retained-render.jpg)
+
+The local suite and CI use mocked provider transports and isolated databases. Rendering/QA use real FFmpeg; ASR/beat inference is replaced with deterministic offline fixtures. These checks verify application contracts and restart/reuse, not live provider quality. One third-party Starlette/httpx deprecation warning remains; it does not affect the results. No CUDA/model download, live provider request, production Red/Blue change, OAuth credential change or YouTube publication was part of validation.
