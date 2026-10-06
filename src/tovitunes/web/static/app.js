@@ -32,11 +32,14 @@ function jobCard(job) {
 }
 function renderJobs() {
   state.expanded = new Set(Array.from(document.querySelectorAll(".task-card:has(details[open])")).map(card => card.dataset.job));
-  const active = state.jobs.find(job => !terminal(job));
+  const visible = state.jobs.filter(job => !job.stopped);
+  const active = visible.find(job => !terminal(job));
+  const headline = active || visible[0];
   state.busy = Boolean(active);
+  document.body.classList.toggle("has-task", Boolean(headline));
   document.querySelectorAll("[data-create]").forEach(button => button.disabled = state.busy);
-  $("#active-task").innerHTML = active ? jobCard(active) : `<div class="empty-desk"><span>♫</span><div><h3>Ready for the next little lesson.</h3><p>Choose an action above. You can come back to saved drafts and videos anytime.</p></div></div>`;
-  $("#task-history").innerHTML = state.jobs.filter(job => terminal(job) && !job.stopped).slice(0, 5).map(jobCard).join("");
+  $("#active-task").innerHTML = headline ? jobCard(headline) : `<div class="empty-desk"><span>♫</span><div><h3>Ready for the next little lesson.</h3><p>Choose an action above. You can come back to saved drafts and videos anytime.</p></div></div>`;
+  $("#task-history").innerHTML = visible.filter(job => job !== headline).slice(0, 4).map(jobCard).join("");
 }
 async function refreshJobs() {
   try {
