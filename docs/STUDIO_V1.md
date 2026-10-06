@@ -4,6 +4,8 @@ Double-click `start-ui.bat`, choose **Draft**, **Draft + Render**, or **Draft + 
 Publish**, and watch the production desk. Use **Library** to render an existing draft or
 publish a retained video. **System** contains technical health and local startup recovery.
 No run/request/artifact identifiers or provider choices are required in the creative flow.
+After a task exists, Create compacts the introduction and keeps the latest running, paused
+or completed task as the primary production card.
 
 ## Setup once, operate in the browser
 
