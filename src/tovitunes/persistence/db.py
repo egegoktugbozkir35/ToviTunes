@@ -48,6 +48,9 @@ class Database:
             for item in files:
                 sql = item.read_text(encoding="utf-8")
                 checksum = sha256(sql.encode("utf-8")).hexdigest()
+                rebuild = item.name == "0020_editorial_memory.sql"
+                if rebuild:
+                    connection.execute("PRAGMA foreign_keys = OFF")
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     connection.execute(
@@ -69,10 +72,15 @@ class Database:
                             "VALUES (?, ?, ?)",
                             (item.name, checksum, datetime.now(UTC).isoformat()),
                         )
+                    if rebuild and connection.execute("PRAGMA foreign_key_check").fetchall():
+                        raise ValueError("editorial migration would break foreign key references")
                     connection.commit()
                 except Exception:
                     connection.rollback()
                     raise
+                finally:
+                    if rebuild:
+                        connection.execute("PRAGMA foreign_keys = ON")
 
     def register_catalog(self, catalog: BrandCatalog) -> None:
         """Register the pinned brand and pack revisions before brand-only intake."""
@@ -124,17 +132,25 @@ class Database:
             )
 
     def create_episode(self, catalog: BrandCatalog, episode: Episode) -> None:
+        if episode.learning_source == "generated_learning_brief":
+            from tovitunes.creative.director import validate_pins
+
+            validate_pins(episode, catalog, self)
         if episode.brand_revision_id != catalog.version.revision_id:
             raise ValueError("episode brand revision differs from catalog")
-        if episode.curriculum_revision_id != catalog.curriculum_revision.revision_id:
-            raise ValueError("episode curriculum revision differs from catalog")
-        concept = catalog.curriculum.get(episode.concept_id)
         if (
-            episode.objective_id != concept.objective_id
-            or episode.objective != concept.objective
-            or episode.target_vocabulary != concept.target_vocabulary
+            episode.learning_source == "legacy_curriculum"
+            and episode.curriculum_revision_id != catalog.curriculum_revision.revision_id
         ):
-            raise ValueError("episode learning objective differs from curriculum")
+            raise ValueError("episode curriculum revision differs from catalog")
+        if episode.learning_source == "legacy_curriculum":
+            concept = catalog.curriculum.get(episode.concept_id)
+            if (
+                episode.objective_id != concept.objective_id
+                or episode.objective != concept.objective
+                or episode.target_vocabulary != concept.target_vocabulary
+            ):
+                raise ValueError("episode learning objective differs from curriculum")
         expected_packs = {(p.character_id, p.revision_id) for p in catalog.pack_revisions}
         actual_packs = {(p.character_id, p.revision_id) for p in episode.character_packs}
         if expected_packs != actual_packs:
@@ -143,22 +159,38 @@ class Database:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 self._insert_catalog(connection, catalog)
+                columns = (
+                    "episode_id,external_key,brand_revision_id,curriculum_revision_id,"
+                    "concept_id,objective_id,objective,target_vocabulary_json,language,"
+                    "target_duration_seconds,lifecycle,created_at"
+                )
+                values: tuple[object, ...] = (
+                    episode.episode_id,
+                    episode.external_key,
+                    episode.brand_revision_id,
+                    episode.curriculum_revision_id,
+                    episode.concept_id,
+                    episode.objective_id,
+                    episode.objective,
+                    json.dumps(episode.target_vocabulary),
+                    episode.language,
+                    episode.target_duration_seconds,
+                    episode.lifecycle,
+                    episode.created_at.isoformat(),
+                )
+                if episode.learning_source == "generated_learning_brief":
+                    columns += (
+                        ",learning_source,learning_brief_id,learning_policy_revision_id,subject"
+                    )
+                    values += (
+                        episode.learning_source,
+                        episode.learning_brief_id,
+                        episode.learning_policy_revision_id,
+                        episode.subject,
+                    )
                 connection.execute(
-                    "INSERT INTO episodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        episode.episode_id,
-                        episode.external_key,
-                        episode.brand_revision_id,
-                        episode.curriculum_revision_id,
-                        episode.concept_id,
-                        episode.objective_id,
-                        episode.objective,
-                        json.dumps(episode.target_vocabulary),
-                        episode.language,
-                        episode.target_duration_seconds,
-                        episode.lifecycle,
-                        episode.created_at.isoformat(),
-                    ),
+                    f"INSERT INTO episodes ({columns}) VALUES ({','.join('?' for _ in values)})",
+                    values,
                 )
                 for pinned_pack in episode.character_packs:
                     connection.execute(
@@ -187,6 +219,10 @@ class Database:
                 external_key=row["external_key"],
                 brand_revision_id=row["brand_revision_id"],
                 curriculum_revision_id=row["curriculum_revision_id"],
+                learning_source=row["learning_source"],
+                learning_brief_id=row["learning_brief_id"],
+                learning_policy_revision_id=row["learning_policy_revision_id"],
+                subject=row["subject"],
                 concept_id=row["concept_id"],
                 objective_id=row["objective_id"],
                 objective=row["objective"],

@@ -9,9 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 from tovitunes.cli import main
-from tovitunes.config import CreativeLLMConfig, RuntimeConfig
+from tovitunes.config import CreativeLLMConfig, CreativeTopicsConfig, RuntimeConfig
 from tovitunes.creative import prompts
 from tovitunes.creative.fake import FakeNIMTransport
+from tovitunes.creative.learning import TopicCandidate, TopicPool
 from tovitunes.creative.models import CreativeSubjectCandidate, CreativeSubjectPool
 from tovitunes.creative.nvidia import NvidiaNIMClient
 from tovitunes.creative.provider import (
@@ -38,7 +39,10 @@ def workflow(tmp_path, catalog, brand_root, monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.setattr("socket.socket.connect", lambda *a: pytest.fail("network call"))
     config = RuntimeConfig(
-        database_path=tmp_path / "state.db", data_root=tmp_path / "data", brand_root=brand_root
+        database_path=tmp_path / "state.db",
+        data_root=tmp_path / "data",
+        brand_root=brand_root,
+        creative_topics=CreativeTopicsConfig(candidate_batch_size=3),
     )
     database = Database(config.database_path)
     database.migrate()
@@ -66,11 +70,12 @@ def candidate(**updates):
 def test_end_to_end_generates_pinned_selected_creative_only(workflow):
     flow, fake = workflow
     result = flow.generate_next()
-    assert result["episode_key"] == "colors-red-001"
-    assert fake.calls == ["CreativeSubjectPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert result["episode_key"].startswith("big-and-small-")
+    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
     episode = flow.database.get_episode(result["episode_id"])
-    assert episode.objective == flow.catalog.curriculum.get("red").objective
-    assert episode.target_vocabulary == ("red",) and episode.language == "en"
+    assert episode.objective == "Compare a big balloon with a small balloon."
+    assert episode.target_vocabulary == ("big", "small") and episode.language == "en"
+    assert episode.learning_source == "generated_learning_brief"
     assert episode.target_duration_seconds == 37
     assert episode.character_packs[0].revision_id == flow.catalog.pack_revisions[0].revision_id
     with closing(flow.database.connect()) as db:
@@ -78,8 +83,8 @@ def test_end_to_end_generates_pinned_selected_creative_only(workflow):
         requests = [dict(r) for r in db.execute("SELECT * FROM generation_requests ORDER BY rowid")]
         kinds = {r[0] for r in db.execute("SELECT kind FROM artifact_versions")}
     assert any(
-        a["actor"] == "machine:curriculum_policy"
-        and a["policy_version"] == "canonical_curriculum_v1"
+        a["actor"] == "machine:learning_policy"
+        and a["policy_version"] == episode.learning_policy_revision_id
         for a in approvals
     )
     assert sum(a["policy_version"] == "creative_structural_v1" for a in approvals) == 3
@@ -193,10 +198,10 @@ def test_crash_after_remote_receipt_before_artifact_ingest_reuses_it(workflow, m
     monkeypatch.setattr(flow.store, "ingest", interrupt)
     with pytest.raises(KeyboardInterrupt):
         flow.generate_next()
-    assert fake.calls == ["CreativeSubjectPool", "EpisodeSpec", "LyricsSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec"]
     monkeypatch.setattr(flow.store, "ingest", original)
     flow.generate_next()
-    assert fake.calls == ["CreativeSubjectPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
 
 def test_crash_after_ingest_before_selection_reuses_same_artifact(workflow, monkeypatch):
@@ -235,19 +240,16 @@ def test_crash_after_subject_reservation_recovers_same_episode_without_subject_p
         )
     monkeypatch.setattr(flow.database, "create_episode", original)
     result = flow.generate_next()
-    assert (
-        result["episode_id"] == reserved["episode_id"]
-        and fake.calls.count("CreativeSubjectPool") == 1
-    )
+    assert result["episode_id"] == reserved["episode_id"] and fake.calls.count("TopicPool") == 1
 
 
 def test_ambiguous_subject_is_never_restarted(workflow):
     flow, fake = workflow
-    fake.responses["CreativeSubjectPool"] = [ProviderError("timeout", ambiguous=True)]
+    fake.responses["TopicPool"] = [ProviderError("timeout", ambiguous=True)]
     for _ in range(2):
         with pytest.raises(ProviderError):
             flow.generate_next()
-    assert fake.calls == ["CreativeSubjectPool"]
+    assert fake.calls == ["TopicPool"]
     with flow.database.connect() as db:
         assert db.execute("SELECT count(*) FROM episodes").fetchone()[0] == 0
 
@@ -261,15 +263,15 @@ def test_used_concepts_excluded_across_revisions_and_archival(workflow):
     assert "red" not in {c["concept_id"] for c in report["eligible_concepts"]}
 
 
-def test_curriculum_exhaustion_never_calls_provider(workflow):
+def test_curriculum_exhaustion_does_not_limit_new_editorial_subjects(workflow):
     flow, fake = workflow
     for c in flow.catalog.curriculum.concepts:
         flow.database.create_episode(
             flow.catalog, Episode.create(flow.catalog, c.concept_id, c.concept_id)
         )
-    with pytest.raises(ValueError, match="CURRICULUM_EXHAUSTED"):
-        flow.generate_next()
-    assert fake.calls == []
+    result = flow.generate_next()
+    assert flow.database.get_episode(result["episode_id"]).subject == "Big and small"
+    assert fake.calls[0] == "TopicPool"
 
 
 def test_invalid_rank_one_skipped_without_another_pool_call():
@@ -322,8 +324,8 @@ def test_next_fresh_run_excludes_previous_selected_concept(workflow):
     first = flow.generate_next()
     second = flow.generate_next()
     assert first["episode_id"] != second["episode_id"]
-    assert flow.database.get_episode(second["episode_id"]).concept_id == "blue"
-    assert fake.calls.count("CreativeSubjectPool") == 2
+    assert flow.database.get_episode(second["episode_id"]).subject == "Name a leaf"
+    assert fake.calls.count("TopicPool") == 2
 
 
 def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monkeypatch):
@@ -361,7 +363,7 @@ def test_invalid_episode_spec_repair_remains_failed_closed(workflow):
     for _ in range(2):
         with pytest.raises(StructuredOutputError):
             flow.generate_next()
-    assert fake.calls == ["CreativeSubjectPool", "EpisodeSpec", "EpisodeSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeSpec", "EpisodeSpec"]
 
 
 def test_concept_revisions_do_not_reset_history_eligibility(workflow):
@@ -381,14 +383,28 @@ def test_concept_revisions_do_not_reset_history_eligibility(workflow):
     }
 
 
-def test_all_bad_candidates_get_at_most_two_subject_rounds(workflow):
+def test_all_bad_candidates_get_bounded_durable_subject_rounds(workflow):
     flow, fake = workflow
-    pool = CreativeSubjectPool(candidates=(candidate(concept_id="unknown"),) * 3)
-    fake.responses["CreativeSubjectPool"] = [pool.model_dump_json(), pool.model_dump_json()]
+    bad = TopicCandidate(
+        subject="Quantum theory",
+        domain="abstract",
+        objective="Understand quantum theory",
+        target_vocabulary=("quantum",),
+        premise="Tovi thinks about quantum theory",
+        hook="What is quantum?",
+        setting="a playroom",
+        example_objects=("quantum field",),
+        song_angle="Sing about quantum",
+        working_title="Quantum with Tovi",
+        score=10,
+        reason="An abstract idea",
+    )
+    pool = TopicPool(candidates=(bad,) * 3)
+    fake.responses["TopicPool"] = [pool.model_dump_json()] * 3
     for _ in range(2):
-        with pytest.raises(StructuredOutputError):
+        with pytest.raises(ValueError, match="TOPIC_POOLS_EXHAUSTED"):
             flow.generate_next()
-    assert fake.calls == ["CreativeSubjectPool", "CreativeSubjectPool"]
+    assert fake.calls == ["TopicPool"] * 3
 
 
 @pytest.mark.parametrize(
@@ -489,6 +505,8 @@ def test_curriculum_machine_approval_does_not_overwrite_human_rejection(workflow
 
 def test_modified_curriculum_cannot_be_machine_approved(workflow):
     flow, fake = workflow
+    legacy = Episode.create(flow.catalog, "blue", "colors-blue-001")
+    flow.database.create_episode(flow.catalog, legacy)
     flow.catalog = replace(
         flow.catalog,
         curriculum_revision=flow.catalog.curriculum_revision.model_copy(
@@ -496,7 +514,7 @@ def test_modified_curriculum_cannot_be_machine_approved(workflow):
         ),
     )
     with pytest.raises(PermissionError, match="committed"):
-        flow.generate_next()
+        flow.generate_next(episode_key=legacy.external_key)
     assert fake.calls == []
 
 

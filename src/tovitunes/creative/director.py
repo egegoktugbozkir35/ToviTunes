@@ -27,8 +27,21 @@ def pinned_facts(catalog: BrandCatalog) -> dict[str, Any]:
     }
 
 
-def validate_pins(episode: Episode, catalog: BrandCatalog) -> None:
-    expected = Episode.create(catalog, episode.concept_id, episode.external_key)
+def validate_pins(
+    episode: Episode, catalog: BrandCatalog, database: Database | None = None
+) -> None:
+    if episode.learning_source == "generated_learning_brief":
+        from tovitunes.creative.learning import LEARNING_POLICY
+        from tovitunes.creative.topic_memory import TopicMemory
+
+        if database is None or episode.learning_brief_id is None:
+            raise ValueError("generated learning pins require persisted brief evidence")
+        brief = TopicMemory(database, catalog).get(episode.learning_brief_id)
+        if brief.learning_policy_revision_id != LEARNING_POLICY.revision_id:
+            raise ValueError("restore the pinned learning policy revision")
+        expected = Episode.from_learning_brief(catalog, brief, episode.external_key)
+    else:
+        expected = Episode.create(catalog, episode.concept_id, episode.external_key)
     fields = {
         "brand_revision_id",
         "curriculum_revision_id",
@@ -39,6 +52,10 @@ def validate_pins(episode: Episode, catalog: BrandCatalog) -> None:
         "language",
         "target_duration_seconds",
         "character_packs",
+        "learning_source",
+        "learning_brief_id",
+        "learning_policy_revision_id",
+        "subject",
     }
     if episode.model_dump(include=fields) != expected.model_dump(include=fields):
         raise ValueError(
@@ -59,17 +76,27 @@ class CreativeDirector:
         self.assert_owner = assert_owner
 
     def _facts(self, episode: Episode, variant: int) -> dict[str, Any]:
-        validate_pins(episode, self.catalog)
+        validate_pins(episode, self.catalog, self.database)
         with closing(self.database.connect()) as db:
             row = db.execute(
                 "SELECT selected_subject_json FROM creative_runs WHERE episode_id=?",
                 (episode.episode_id,),
             ).fetchone()
+        brief_facts = {}
+        if episode.learning_brief_id:
+            from tovitunes.creative.topic_memory import TopicMemory
+
+            brief_facts = {
+                "selected_learning_brief": TopicMemory(self.database, self.catalog)
+                .get(episode.learning_brief_id)
+                .model_dump(mode="json")
+            }
         return {
             **pinned_facts(self.catalog),
             "episode": episode.model_dump(mode="json"),
             "selected_subject": json.loads(row[0]) if row and row[0] else None,
             "variant": variant,
+            **brief_facts,
         }
 
     def _context(self, episode: Episode, kind: str, version: str) -> GenerationContext:

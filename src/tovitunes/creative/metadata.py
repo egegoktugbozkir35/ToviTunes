@@ -38,7 +38,7 @@ class MetadataWriter:
 
     def _facts(self, episode_id: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         episode = self.store.database.get_episode(episode_id)
-        validate_pins(episode, self.workflow.catalog)
+        validate_pins(episode, self.workflow.catalog, self.store.database)
         final = self._selected(episode_id, "final_render")
         spec_record = self.store.selected("episode", episode_id, "episode_spec", "main")
         lyrics_record = self.store.selected("episode", episode_id, "lyrics", "main")
@@ -124,6 +124,14 @@ class MetadataWriter:
             "language": "en",
             "made_for_kids": True,
         }
+        if episode.learning_brief_id:
+            from tovitunes.creative.topic_memory import TopicMemory
+
+            facts["selected_learning_brief"] = (
+                TopicMemory(self.store.database, self.workflow.catalog)
+                .get(episode.learning_brief_id)
+                .model_dump(mode="json")
+            )
         input_ids = [
             final.identity.artifact_id,
             storyboard_record.identity.artifact_id,

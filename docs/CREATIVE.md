@@ -1,9 +1,10 @@
 # Creative Director V1
 
-The committed curriculum owns educational objectives and vocabulary. The creative model chooses
-treatment from deterministic eligible concepts; it cannot invent curriculum, change Tovi's
-identity, or approve an educational claim. Existing `EpisodeSpec`, `LyricsSpec`, `MusicSpec`,
-`DraftGenerator`, and `CreativeDraftService` remain authoritative.
+New autonomous episodes use [open editorial memory](OPEN_EDITORIAL_MEMORY_V1.md). The Creative
+Director invents a subject, objective, vocabulary and working title within broad versioned policy.
+Application logic selects and persists an immutable LearningBrief before EpisodeSpec. Historical
+Colors curriculum episodes retain their original facts and resume paths. `EpisodeSpec`, `LyricsSpec`,
+`MusicSpec`, `DraftGenerator` and `CreativeDraftService` remain the downstream creative contracts.
 
 ## Configuration and commands
 
@@ -21,6 +22,7 @@ Provider-free inspection:
 ```powershell
 uv run python -m tovitunes.cli --config config.example.yaml creative eligible
 uv run python -m tovitunes.cli --config config.example.yaml creative doctor
+uv run python -m tovitunes.cli --config config.example.yaml creative history
 ```
 
 `eligible` reports current brand/curriculum/pack revisions, used and eligible concepts, duration
@@ -45,35 +47,25 @@ uv run python -m tovitunes.cli --config config.example.yaml creative generate-ne
 ```
 
 Without a resume argument, an incomplete brand run resumes first. After completion, the next
-invocation plans a fresh eligible episode. A pending run with an older catalog stops for explicit
+invocation plans a fresh novel LearningBrief and generic episode. A pending run with an older catalog stops for explicit
 recovery instead of silently changing pinned inputs.
 
-## Curriculum, subject planning and duplicates
+## Open subject planning and duplicates
 
-The brand catalog pins curriculum bytes, brand/bible/safety rules and Tovi pack identity before
-provider calls. All existing episodes for the same brand and curriculum ID reserve their concept,
-including draft, held and archived episodes, across revisions. This conservative V1 rule prevents
-pending work or revision changes from resetting duplicate protection. Repeats need a future explicit
-policy. Exhaustion fails `CURRICULUM_EXHAUSTED` without a provider call.
+New runs use TopicPlanner / open-topic-planner-v1, never an eligible Colors ID list.
+The model returns a configured batch (default 15) with subject, objective, small vocabulary,
+creative treatment, provisional working title and batch-relative score. Application logic
+sorts by score and admits the first safe, bounded, novel idea. History covers persisted selected
+briefs and all historical episodes, including unpublished/failed work. Exact database uniqueness,
+educational lexical comparisons and separate treatment comparisons fence duplicates; optional
+local embeddings can supplement them. Same-run exclusions and frozen round inputs support
+bounded multi-selection and restart recovery. See [open editorial memory](OPEN_EDITORIAL_MEMORY_V1.md)
+for schemas, thresholds, migration and pinned donor adaptation.
 
-`subject-planner-v1` supplies each eligible concept's ID, objective ID, exact objective and vocabulary,
-plus history. `CreativeSubjectPool` has 3-5 ordered candidates with concept, premise, hook, setting,
-familiar example objects, song angle and reason; no scores or view predictions. Validate in response
-order and select the first acceptable candidate. Invalid rank one does not cause another call
-while a later candidate is acceptable.
-
-Exact concept exclusion is strongest. Donor `normalize_topic` and `lexical_similarity`, plus a
-small stop-word/find-discover signature, catch obvious treatment paraphrases at a `0.78` threshold.
-History includes premises, hooks and example objects where retained. Familiar physical examples
-use a V1 allowlist. Prompts forbid all specified unsafe/adult content, extra permanent characters,
-franchise/artist/celebrity imitation, abstract explanations and curriculum changes. Lexical checks
-are conservative structural guards, not a general semantic safety/art-quality certification.
-
-If no candidate passes, the structured repair policy allows one corrected pool: at most two
-subject rounds/POSTs per model. Conclusively exhausted models may advance through the configured chain. A selected treatment reserves
-normal Episode JSON before insertion. Curriculum/concept-derived keys use collision-checked ordinals
-under the planning lease; truncated long stems include a digest. A crash recovers the reserved UUID.
-The normal database pins objective, vocabulary, language, duration, catalog and pack revisions.
+Existing incomplete subject-planner-v1 runs keep their old candidate schema and committed
+curriculum path for durable recovery. Their restrictions do not govern new autonomous episodes.
+Legacy Episode JSON and prompts retain old request fingerprints. `creative eligible` remains
+an inspection command for that historical catalog.
 
 ## Structured generation and durable requests
 
@@ -118,7 +110,9 @@ transition prevent duplicate POST starts even if a caller races.
 
 ## Structural approval and human review
 
-Machine objective approval requires exact pinned identity and curriculum SHA matching committed
+Generated objective approval checks exact persisted LearningBrief pins and broad learning policy
+with actor `machine:learning_policy`; it cannot overwrite human rejection or needs_review.
+Legacy objective approval requires exact pinned identity and curriculum SHA matching committed
 Git HEAD bytes. Uncommitted curriculum, changed objective/vocabulary or conflicting review blocks.
 Actor `machine:curriculum_policy`, policy `canonical_curriculum_v1`, means only that the exact
 version-controlled objective is used; it is not an LLM judgment.
@@ -130,7 +124,7 @@ duration-based word budget, prohibit directions and limit identical-line repetit
 preserves selected lyrics, duration, vocabulary, artist prohibition, section totals and moderate
 tempo. It remains a Lyria brief; this workflow never invokes Lyria.
 
-Valid creative candidates can be selected by `creative_structural_v1`: curriculum/brand/schema
+Valid creative candidates can be selected by `creative_structural_v1`: pinned learning/brand/schema
 admission only, not artistic merit, music QA or rights. Existing human `review_objective` and
 `review_candidate` methods remain. Machine policy cannot overwrite rejection/needs_review.
 Selected successful stages are reused, and missing stages use the selected upstream artifact.
@@ -149,8 +143,8 @@ Require selected final_render, EpisodeSpec, LyricsSpec, TimedStoryboard and rend
 final dependency on that manifest, manifest storyboard ID/hash and duration, episode/concept/objective/
 pack identity and exact rendered lyric agreement. Kimi receives those facts, duration, scene props/
 intents and final artifact ID/SHA. It must never guess what was rendered. Recheck selections after
-the call. TimedStoryboard/renderer remain unchanged, including their existing red-pilot scope;
-creative support for other eligible concepts does not generalize the renderer.
+the call. The existing PR #38 Storyboard V2 and Renderer V4 consume generated episodes through
+ShortProductionWorkflow. Historical Red storyboards retain their frozen contract.
 
 `EpisodePublicationMetadata` bounds title to 100 characters, description to 1000, tags to 20
 deduplicated entries/500 aggregate characters, and pins `language=en`, `made_for_kids=true`.

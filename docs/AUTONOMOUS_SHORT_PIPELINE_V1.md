@@ -7,8 +7,9 @@ new ComfyUI client, new ACE-Step adapter or new YouTube uploader.
 
 ```mermaid
 flowchart TD
-  H[Committed curriculum and history] --> C[CreativeWorkflow and existing resilient Director]
-  C --> E[Selected EpisodeSpec, LyricsSpec, MusicSpec]
+  H[Open learning policy and persistent history] --> C[TopicPlanner and existing resilient Director]
+  C --> B[Persisted LearningBrief and generic Episode]
+  B --> E[Selected EpisodeSpec, LyricsSpec, MusicSpec]
   E --> A[Deterministic canonical music adapter]
   A --> M[MusicBenchmark and AceStepLocalProvider]
   M --> Q[Existing audio, lyric, rhythm and timing QA]
@@ -34,7 +35,7 @@ uv run --locked python -m tovitunes.cli --config config.yaml production produce 
 # Resume the existing episode; this does not create another episode.
 uv run --locked python -m tovitunes.cli --config config.yaml production produce --episode-key colors-blue-001 --confirm-provider-generation
 
-# Reserve the next creative planning run, choose an eligible lesson, and produce it.
+# Reserve the next creative planning run, invent a novel lesson, and produce it.
 uv run --locked python -m tovitunes.cli --config config.yaml production generate-next-short --confirm-provider-generation
 
 # Worker-oriented aliases for the same application service.
@@ -216,10 +217,11 @@ existing uploader. There is no second uploader or duplicate-video path.
 
 ## Future lessons and acceptance limits
 
-A future concept is committed curriculum data with an objective/vocabulary and,
-when new subject examples are needed, optional `example_entities`. Existing Colors
-V1 curriculum bytes/revision and selected older Blue creative artifacts are not
-changed. The Director then selects creative facts and a typed visual plan; new
+A future concept is a generated, persisted LearningBrief with immutable subject,
+objective and vocabulary. It passes broad versioned policy and durable duplicate
+checks; no curriculum YAML entry is required. See [open editorial memory](OPEN_EDITORIAL_MEMORY_V1.md).
+Existing Colors V1 curriculum and selected older Blue artifacts remain unchanged.
+The Director then selects creative facts and a typed visual plan; new
 keys such as a duck, triangle, grouped apples, face or tree are persisted asset
 requirements, not new Python object constants. The same adapter, generators,
 storyboard, renderer, metadata writer and gated publisher consume those facts.

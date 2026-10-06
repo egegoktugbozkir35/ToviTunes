@@ -3,6 +3,20 @@ database_path: data/tovitunes.db
 data_root: data
 brand_root: brands/tovitunes
 publication_enabled: false
+creative_topics:
+  candidate_batch_size: 15
+  recent_history_count: 100
+  max_generation_rounds: 3
+  lexical_similarity_threshold: 0.82
+  treatment_similarity_threshold: 0.80
+  semantic_similarity_threshold: 0.88
+  banned_topics: []
+  embedding:
+    enabled: false
+    provider: ollama
+    model: null
+    base_url: http://127.0.0.1:11434
+    timeout_seconds: 30
 expected_youtube_channel_id: null
 publication:
   youtube:

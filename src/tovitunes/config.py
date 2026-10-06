@@ -37,6 +37,40 @@ class OllamaCreativeConfig(BaseModel):
         return value
 
 
+class TopicEmbeddingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    enabled: bool = False
+    provider: Literal["ollama"] = "ollama"
+    model: str | None = Field(default=None, pattern=r"^\S+$")
+    base_url: str = "http://127.0.0.1:11434"
+    timeout_seconds: float = Field(default=30, gt=0, le=120)
+
+    @field_validator("base_url")
+    @classmethod
+    def local_url(cls, value: str) -> str:
+        return OllamaCreativeConfig.local_url(value)
+
+    @model_validator(mode="after")
+    def explicit_model(self) -> "TopicEmbeddingConfig":
+        if self.enabled and not self.model:
+            raise ValueError("enabled topic embeddings require an explicitly configured model")
+        return self
+
+
+class CreativeTopicsConfig(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
+    )
+    candidate_batch_size: int = Field(default=15, ge=1, le=30)
+    recent_history_count: int = Field(default=100, ge=1, le=500)
+    max_generation_rounds: int = Field(default=3, ge=1, le=10)
+    lexical_similarity_threshold: float = Field(default=0.82, gt=0, le=1)
+    treatment_similarity_threshold: float = Field(default=0.80, gt=0, le=1)
+    semantic_similarity_threshold: float = Field(default=0.88, gt=0, le=1)
+    banned_topics: tuple[str, ...] = Field(default=(), max_length=100)
+    embedding: TopicEmbeddingConfig = Field(default_factory=TopicEmbeddingConfig)
+
+
 class CreativeLLMConfig(BaseModel):
     """Explicit NIM configuration; credentials are read only from the named environment."""
 
@@ -297,6 +331,7 @@ class RuntimeConfig(BaseModel):
     expected_youtube_channel_id: str | None = None
     publication: PublicationConfig = Field(default_factory=PublicationConfig)
     creative_llm: CreativeLLMConfig = Field(default_factory=CreativeLLMConfig)
+    creative_topics: CreativeTopicsConfig = Field(default_factory=CreativeTopicsConfig)
     environment_generation: EnvironmentGenerationConfig = Field(
         default_factory=EnvironmentGenerationConfig
     )

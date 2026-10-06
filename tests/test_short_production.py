@@ -728,13 +728,86 @@ def test_next_creation_and_active_run_resume(case, monkeypatch):
     calls = list(case["fake"].calls)
     second = case["flow"].produce_next(confirmed=True)
     assert first == second and case["fake"].calls == calls
-    assert calls.count("CreativeSubjectPool") == 1
+    assert calls.count("TopicPool") == 1
     with closing(case["store"].database.connect()) as db:
         # Recover a create-next crash after creative completion, before the pipeline pointer update.
         db.execute("UPDATE production_next_runs SET episode_id=NULL")
         db.commit()
     assert case["flow"].produce_next(confirmed=True) == first
     assert case["fake"].calls == calls
+
+
+def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_metadata(
+    case,
+    monkeypatch,
+):
+    from tovitunes.creative.provider import ChatResponse
+    from tovitunes.creative.topic_memory import TopicMemory
+
+    fake = case["fake"]
+    original = fake.chat
+
+    def chat(messages, *, record_identity):
+        schema = json.loads(messages[0]["content"].split("JSON Schema:\n", 1)[1])
+        if schema["title"] != "EpisodeVisualPlan":
+            return original(messages, record_identity=record_identity)
+        facts = json.loads(messages[-1]["content"])
+        ep = Episode.model_validate(facts["episode"])
+        assert ep.learning_source == "generated_learning_brief"
+        assert TopicMemory(case["store"].database, case["flow"].catalog).get(ep.learning_brief_id)
+        data = case["plan"].model_dump(mode="json")
+        data.update(
+            episode_id=ep.episode_id,
+            concept_id=ep.concept_id,
+            objective_id=ep.objective_id,
+            episode_spec_artifact_id=facts["creative_artifact_ids"][0],
+            lyrics_artifact_id=facts["creative_artifact_ids"][1],
+            music_spec_artifact_id=facts["creative_artifact_ids"][2],
+        )
+        data["required_assets"] = [
+            {
+                "asset_key": key,
+                "kind": "lesson_object",
+                "semantic_label": "balloon",
+                "display_name": word + " balloon",
+                "description": "One " + word + " balloon",
+                "educational_role": "teaching",
+                "educational_claims": [ep.objective],
+            }
+            for key, word in (("big_balloon", "big"), ("small_balloon", "small"))
+        ]
+        for scene, line in zip(data["scenes"], facts["lyrics"]["lines"], strict=True):
+            scene.update(
+                lyric_text=line["text"],
+                required_assets=["big_balloon", "small_balloon"],
+                visual_focus="Compare big and small balloons",
+            )
+        fake.calls.append("EpisodeVisualPlan")
+        fake.messages.append(list(messages))
+        return ChatResponse(EpisodeVisualPlan.model_validate(data).model_dump_json())
+
+    monkeypatch.setattr(fake, "chat", chat)
+    result = case["flow"].produce_next(confirmed=True)
+    assert result["status"] == "NEEDS_REVIEW", (result.get("blocker"), case["errors"])
+    assert result["ready_local_preview"]
+    assert Path(result["output_path"]).read_bytes()[4:8] == b"ftyp"
+    store = AssetStore(case["config"].data_root, case["store"].database, local_preview=True)
+    with closing(store.database.connect()) as db:
+        ep_id = db.execute(
+            "SELECT episode_id FROM episodes WHERE external_key=?", (result["episode_key"],)
+        ).fetchone()[0]
+    episode = store.database.get_episode(ep_id)
+    assert episode.subject == "Big and small" and episode.curriculum_revision_id is None
+    metadata = store.selected("episode", ep_id, "publication_metadata", "main")
+    brief = TopicMemory(store.database, case["flow"].catalog).get(episode.learning_brief_id)
+    assert store.read_json(metadata.identity.artifact_id)["youtube_title"] != brief.working_title
+    storyboard = store.selected("episode", ep_id, "timed_storyboard", "main")
+    assert parse_storyboard(store.read_json(storyboard.identity.artifact_id)).schema_version == 2
+    assert case["music_events"].count("/release_task") == 1
+    calls = (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
+    second = case["flow"].produce_next(confirmed=True)
+    assert second["final_render_id"] == result["final_render_id"]
+    assert calls == (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
 
 
 def test_hard_exit_reclaims_only_marked_process_lease(tmp_path):
