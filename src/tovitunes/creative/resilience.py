@@ -7,6 +7,7 @@ from sqlite3 import Row
 from tovitunes.creative.provider import (
     MODEL_FAILURES,
     ChatTransport,
+    CreativeAmbiguity,
     DurableStructuredGenerator,
     FailureCategory,
     GenerationContext,
@@ -19,6 +20,7 @@ from tovitunes.creative.provider import (
     stored_failure,
     structured_json_instruction,
 )
+from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import GeneratedDraft
 
@@ -128,10 +130,10 @@ class ResilientStructuredGenerator:
             except StructuredOutputError:
                 category = FailureCategory.STRUCTURED_OUTPUT
             except ProviderError as exc:
-                if exc.ambiguous:
-                    raise
                 category = exc.category
-                if category not in MODEL_FAILURES | {FailureCategory.ENDPOINT_UNREACHABLE}:
+                if not exc.ambiguous and category not in MODEL_FAILURES | {
+                    FailureCategory.ENDPOINT_UNREACHABLE
+                }:
                     raise
             current = self._history(context)
             attempts = [
@@ -154,13 +156,25 @@ class ResilientStructuredGenerator:
                 and terminal["parent_request_id"] == attempts[0]["request_id"]
             )
             safe_failed = terminal["status"] == "failed" and stored_failure(terminal) == category
-            if not (safe_invalid or safe_failed):
+            decision = CreativeReconciliations(self.database).get(str(terminal["request_id"]))
+            abandoned = (
+                terminal["status"] == "ambiguous"
+                and decision is not None
+                and decision["action"] == "abandon_remote_result"
+            )
+            if not (safe_invalid or safe_failed or abandoned):
+                if terminal["status"] == "ambiguous":
+                    raise CreativeAmbiguity(
+                        terminal,
+                        "durable outcome does not authorize fallback; explicit recovery required; "
+                        "reconcile provider evidence; do not resend",
+                    )
                 raise ProviderError(
                     "durable outcome does not authorize fallback; reconcile evidence",
                     ambiguous=terminal["status"] in {"ambiguous", "remote_started"},
                 )
             previous = str(attempts[-1]["request_id"])
-            reason = category.value
+            reason = "operator_abandoned_ambiguous" if abandoned else category.value
             if category == FailureCategory.ENDPOINT_UNREACHABLE:
                 if self.emergency is None or transport is self.emergency:
                     raise ProviderError(

@@ -120,6 +120,36 @@ class StructuredOutputError(ValueError):
     pass
 
 
+class CreativeAmbiguity(ProviderError):
+    """Safe request identity for operator recovery; never carries a remote response body."""
+
+    def __init__(self, row: Row, message: str | None = None) -> None:
+        has_receipt = row["response_content"] is not None or row["response_sha256"] is not None
+        self.evidence: dict[str, object] = {
+            "request_id": row["request_id"],
+            "provider": row["provider"],
+            "model": row["model"],
+            "kind": row["kind"],
+            "recovery_action": (
+                "inspect_durable_receipt" if has_receipt else "abandon_remote_result"
+            ),
+            "recovery_command": (
+                f"creative request-status --request-id {row['request_id']}"
+                if has_receipt
+                else f"creative reconcile --request-id {row['request_id']} "
+                "--action abandon-remote-result --actor human:operator "
+                '--reason "Remote result is inaccessible; '
+                'continue through configured fallback chain"'
+            ),
+        }
+        super().__init__(
+            message
+            or f"creative request {row['request_id']} is ambiguous; "
+            "explicit recovery required; do not resend",
+            ambiguous=True,
+        )
+
+
 class ChatTransport(Protocol):
     provider_name: str
     model_name: str
@@ -245,6 +275,8 @@ class DurableStructuredGenerator:
                 raise ProviderError("durable response hash differs; operator recovery required")
             if row["status"] in {"ambiguous", "failed"}:
                 category = stored_failure(row)
+                if row["status"] == "ambiguous":
+                    raise CreativeAmbiguity(row)
                 raise ProviderError(
                     f"creative request {request_id} is {row['status']}; "
                     "explicit recovery required; "
@@ -255,10 +287,7 @@ class DurableStructuredGenerator:
             if content is None:
                 if row["status"] != "prepared":
                     self.ledger.finish(request_id, "ambiguous", error_kind="interrupted")
-                    raise ProviderError(
-                        f"creative request {request_id} started without a receipt; do not resend",
-                        ambiguous=True,
-                    )
+                    raise CreativeAmbiguity(self.ledger.get(request_id))
                 self.transport.check_ready()
                 context.assert_owner()
                 self.ledger.start(request_id)
@@ -287,6 +316,11 @@ class DurableStructuredGenerator:
                             else "local failure after remote start; reconcile receipt"
                         ),
                     )
+                    if ambiguous:
+                        raise CreativeAmbiguity(
+                            self.ledger.get(request_id),
+                            str(exc) if isinstance(exc, ProviderError) else None,
+                        ) from exc
                     raise
             try:
                 result = model_type.model_validate(json.loads(content))

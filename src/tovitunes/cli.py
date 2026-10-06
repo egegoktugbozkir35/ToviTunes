@@ -68,6 +68,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_commands.add_parser("eligible")
     creative_commands.add_parser("doctor")
     creative_commands.add_parser("history")
+    reconcile = creative_commands.add_parser("reconcile")
+    reconcile.add_argument("--request-id", required=True)
+    reconcile.add_argument("--action", choices=["abandon-remote-result"], required=True)
+    reconcile.add_argument("--actor", required=True)
+    reconcile.add_argument("--reason", required=True)
+    reconcile.add_argument("--evidence-uri")
+    request_status = creative_commands.add_parser("request-status")
+    request_status.add_argument("--request-id", required=True)
     creative_generate = creative_commands.add_parser("generate-next")
     creative_resume = creative_generate.add_mutually_exclusive_group()
     creative_resume.add_argument("--run-id")
@@ -393,6 +401,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "creative":
         database = Database(config.database_path)
         database.migrate()
+        if args.creative_command in {"reconcile", "request-status"}:
+            from tovitunes.creative.recovery import request_status as inspect_request
+            from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
+
+            try:
+                if args.creative_command == "reconcile":
+                    CreativeReconciliations(database).abandon(
+                        args.request_id,
+                        actor=args.actor,
+                        rationale=args.reason,
+                        evidence_uri=args.evidence_uri,
+                    )
+                inspection = inspect_request(database, config.creative_llm, args.request_id)
+            except (ValueError, KeyError) as exc:
+                parser.error(
+                    "creative request does not exist" if isinstance(exc, KeyError) else str(exc)
+                )
+            print(json.dumps(inspection, sort_keys=True))
+            return 0
         catalog = load_brand(config.brand_root)
         if args.creative_command == "history":
             from tovitunes.creative.topic_memory import TopicMemory, compact_history

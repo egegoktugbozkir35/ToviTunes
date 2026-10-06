@@ -17,7 +17,12 @@ from tovitunes.creative.director import pinned_facts, validate_pins
 from tovitunes.creative.factory import creative_generator
 from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.provider import GenerationContext, StructuredGenerator
+from tovitunes.creative.provider import (
+    CreativeAmbiguity,
+    GenerationContext,
+    ProviderError,
+    StructuredGenerator,
+)
 from tovitunes.creative.workflow import CreativeWorkflow, episode_by_key
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
@@ -538,15 +543,16 @@ class ShortProductionWorkflow:
             return result
         except Exception as exc:
             result = self.plan()
+            ambiguous = isinstance(exc, ProviderError) and exc.ambiguous
             return {
                 **result,
                 "dry_run": False,
                 "provider_calls": None,
                 "status": "AMBIGUOUS"
-                if getattr(exc, "category", None) == "ambiguous"
+                if ambiguous
                 else "FAILED",
                 "current_stage": "CREATIVE",
-                "blocker": (
+                "blocker": exc.evidence if isinstance(exc, CreativeAmbiguity) else (
                     f"CREATIVE failed ({type(exc).__name__}); inspect durable creative attempts"
                 ),
             }
@@ -1291,12 +1297,19 @@ class ShortProductionWorkflow:
             evidence = {
                 "reason": f"{stage} failed ({type(exc).__name__}); inspect configured local runtime"
             }
-            self._event(episode, stage, "FAILED", evidence)
+            status = "AMBIGUOUS" if isinstance(exc, ProviderError) and exc.ambiguous else "FAILED"
+            if status == "AMBIGUOUS":
+                evidence["reason"] = (
+                    "Creative request is ambiguous; explicit operator recovery required"
+                )
+            if isinstance(exc, CreativeAmbiguity):
+                evidence.update(exc.evidence)
+            self._event(episode, stage, status, evidence)
             return {
                 **self.plan(episode_key),
                 "dry_run": False,
                 "provider_calls": None,
-                "status": "FAILED",
+                "status": status,
                 "current_stage": stage,
                 "blocker": evidence,
             }
