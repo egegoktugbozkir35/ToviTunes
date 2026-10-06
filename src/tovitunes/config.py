@@ -275,6 +275,17 @@ class PublicationConfig(BaseModel):
     youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
 
 
+class ProductionAutomationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    auto_publish: bool = False
+    publish_visibility: Literal["private", "public"] = "private"
+    require_human_review: bool = True
+    asr_model: str = "small.en"
+    analysis_device: Literal["auto", "cpu", "cuda"] = "auto"
+    allow_model_download: bool = False
+    analysis_version: int = Field(default=1, gt=0)
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -293,6 +304,7 @@ class RuntimeConfig(BaseModel):
         default_factory=LessonObjectGenerationConfig
     )
     music_generation: MusicGenerationConfig = Field(default_factory=MusicGenerationConfig)
+    automation: ProductionAutomationConfig = Field(default_factory=ProductionAutomationConfig)
 
     @model_validator(mode="before")
     @classmethod

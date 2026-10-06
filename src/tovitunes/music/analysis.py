@@ -88,10 +88,16 @@ def normalized_words(text: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", text.casefold()))
 
 
-def compare_lyrics(expected: str, recognized: str, *, complete: bool) -> LyricComparison:
+def compare_lyrics(
+    expected: str,
+    recognized: str,
+    *,
+    complete: bool,
+    required_phrases: tuple[str, ...] = REQUIRED_PHRASES,
+) -> LyricComparison:
     reference, hypothesis = normalized_words(expected), normalized_words(recognized)
     phrases: dict[str, bool | None] = {}
-    for phrase in REQUIRED_PHRASES:
+    for phrase in required_phrases:
         needle = normalized_words(phrase)
         phrases[phrase] = (
             any(hypothesis[i : i + len(needle)] == needle for i in range(len(hypothesis)))
@@ -582,7 +588,16 @@ def build_timing(
         "eligible"
     ]
     sections: list[TimedText] = []
-    if reliable:
+    if reliable and spec.brief.id.startswith("episode_"):
+        # Creative sections can repeat; group adjacent measured lines, never prompt durations.
+        previous_section = None
+        for line, canonical in zip(alignment.lyric_lines, spec.lyrics.lines, strict=True):
+            if canonical.section == previous_section:
+                sections[-1] = sections[-1].model_copy(update={"end": line.end})
+            else:
+                sections.append(TimedText(start=line.start, end=line.end, text=canonical.section))
+            previous_section = canonical.section
+    elif reliable:
         section_names = {
             "hook": "hook",
             "teaching_line": "teaching",
@@ -652,6 +667,9 @@ def analyze_audio(
         spec.lyrics.text(),
         transcription.recognized_text,
         complete=bool(transcription.recognized_text),
+        required_phrases=(
+            spec.brief.examples if spec.brief.id.startswith("episode_") else REQUIRED_PHRASES
+        ),
     )
     timing = build_timing(
         version, sha, technical.duration_seconds, rhythm, alignment, spec, comparison, transcription

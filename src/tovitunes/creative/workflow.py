@@ -29,6 +29,7 @@ from tovitunes.domain.episode import Episode
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.leases import LeaseStore
 from tovitunes.pipeline.creative import CreativeDraftService
+from tovitunes.pipeline.execution import production_execution
 
 
 def committed_curriculum_digest(root: Path, catalog: BrandCatalog) -> str:
@@ -239,7 +240,18 @@ class CreativeWorkflow:
         reasons: list[str] = []
         for candidate in pool.candidates:
             try:
-                validate_subject(candidate, eligible, history)
+                allowed_examples = next(
+                    (
+                        concept.get("example_entities", ())
+                        for concept in facts["eligible_concepts"]
+                        if concept["concept_id"] == candidate.concept_id
+                    ),
+                    (),
+                )
+                if allowed_examples:
+                    validate_subject(candidate, eligible, history, allowed_examples)
+                else:
+                    validate_subject(candidate, eligible, history)
             except ValueError as exc:
                 reasons.append(str(exc))
                 continue
@@ -275,6 +287,20 @@ class CreativeWorkflow:
             db.commit()
         return episode
 
+    def reserve_next_run(self) -> str:
+        """Expose durable planning identity so callers survive a create-next process crash."""
+        execution = production_execution(
+            self.database,
+            f"creative-planning:{self.catalog.definition.brand_id}",
+            duration_seconds=60,
+        )
+        self.leases, lease = execution.__enter__()
+        try:
+            row = self._run(None)
+            return str((row if row is not None else self._new_run())["run_id"])
+        finally:
+            execution.__exit__(None, None, None)
+
     def generate_next(
         self,
         *,
@@ -287,10 +313,12 @@ class CreativeWorkflow:
             "tovi",
         ):
             raise ValueError("Production V1 requires English and the selected Tovi-only brand")
-        lease = self.leases.acquire(
+        execution = production_execution(
+            self.database,
             f"creative-planning:{self.catalog.definition.brand_id}",
             duration_seconds=self.config.creative_llm.generation_budget_seconds(4),
         )
+        self.leases, lease = execution.__enter__()
 
         def assert_owner() -> None:
             self.leases.assert_owner(lease)
@@ -360,7 +388,7 @@ class CreativeWorkflow:
             result["generation_attempts"] = generation_audit(self.database, episode.episode_id)
             return result
         finally:
-            self.leases.release(lease)
+            execution.__exit__(None, None, None)
 
     def _resume(
         self,

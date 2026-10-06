@@ -16,6 +16,7 @@ GROUND_PLANE_Y = 0.92
 LEGACY_PROP_STYLE_VERSION = "preschool_soft_v1"
 PROP_STYLE_VERSION = LEGACY_PROP_STYLE_VERSION
 LESSON_OBJECT_STYLE_VERSION = "lesson_object_assets_v2"
+EPISODE_ASSET_STYLE_VERSION = "episode_visual_assets_v1"
 Direction = Literal["left", "right", "none"]
 
 SLOTS: dict[str, tuple[float, float]] = {

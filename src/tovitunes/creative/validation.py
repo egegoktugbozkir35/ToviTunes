@@ -147,7 +147,10 @@ def treatment_signature(text: str) -> str:
 
 
 def validate_subject(
-    candidate: CreativeSubjectCandidate, eligible: set[str], history: Sequence[str]
+    candidate: CreativeSubjectCandidate,
+    eligible: set[str],
+    history: Sequence[str],
+    allowed_examples: Sequence[str] = FAMILIAR_OBJECTS,
 ) -> None:
     if candidate.concept_id not in eligible:
         raise ValueError("subject concept is not eligible")
@@ -165,9 +168,10 @@ def validate_subject(
     )
     for example in candidate.example_objects:
         words = normalize_topic(example).split()
+        full_example = " ".join(words)
         if words and words[0] == candidate.concept_id:
             words = words[1:]
-        if " ".join(words) not in FAMILIAR_OBJECTS:
+        if " ".join(words) not in allowed_examples and full_example not in allowed_examples:
             raise ValueError("subject must use familiar concrete example objects")
     if any(
         max(

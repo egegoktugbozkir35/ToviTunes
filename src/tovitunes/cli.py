@@ -80,6 +80,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_metadata.add_argument("--episode-key", required=True)
     production = subcommands.add_parser("production")
     production_commands = production.add_subparsers(dest="production_command", required=True)
+    for command in ("generate-next-short", "auto-next", "produce", "auto-resume"):
+        autonomous = production_commands.add_parser(command)
+        if command in {"produce", "auto-resume"}:
+            autonomous.add_argument("--episode-key", required=True)
+        autonomous.add_argument("--confirm-provider-generation", action="store_true")
     storyboard = production_commands.add_parser("prepare-storyboard")
     storyboard.add_argument("--concept", required=True)
     storyboard.add_argument("--episode-key", required=True)
@@ -445,6 +450,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "production":
         try:
+            if args.production_command in {
+                "generate-next-short",
+                "auto-next",
+                "produce",
+                "auto-resume",
+            }:
+                from tovitunes.pipeline.short_production import ShortProductionWorkflow
+
+                short_workflow = ShortProductionWorkflow(config)
+                short_result = (
+                    short_workflow.produce_next(confirmed=args.confirm_provider_generation)
+                    if args.production_command in {"generate-next-short", "auto-next"}
+                    else short_workflow.produce(
+                        args.episode_key, confirmed=args.confirm_provider_generation
+                    )
+                )
+                print(json.dumps(short_result, sort_keys=True))
+                return 0
             if args.production_command in {"render", "render-v4"}:
                 from tovitunes.render.production import ProductionRenderer
 

@@ -30,6 +30,17 @@ def build_messages(version: str, instructions: str, facts: object) -> list[Messa
 
 
 def subject_messages(facts: object) -> list[Message]:
+    allowed = FAMILIAR_OBJECTS
+    if isinstance(facts, dict):
+        committed_examples = tuple(
+            dict.fromkeys(
+                entity
+                for concept in facts.get("eligible_concepts", [])
+                for entity in concept.get("example_entities", ())
+            )
+        )
+        if committed_examples:
+            allowed = committed_examples
     return build_messages(
         SUBJECT_PROMPT,
         (
@@ -39,7 +50,7 @@ def subject_messages(facts: object) -> list[Message]:
             "You choose premise, hook, setting, example objects and playful song angle. Use no "
             "scores or virality predictions. Prefer useful learning repetition, avoid recent "
             "treatments, abstract explanations and unsafe behavior. Familiar objects allowed: "
-            + ", ".join(FAMILIAR_OBJECTS)
+            + ", ".join(allowed)
         ),
         facts,
     )

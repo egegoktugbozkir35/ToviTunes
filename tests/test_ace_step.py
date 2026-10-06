@@ -207,7 +207,7 @@ def test_timeout_and_transport_failure_keep_known_identity() -> None:
         provider.generate_with_identity(
             _spec(), provider.translate(_spec()), lambda: None, lambda _id: None
         )
-    assert failure.value.outcome == "ambiguous"
+    assert isinstance(failure.value, MusicTaskPending)
     assert failure.value.provider_request_id == "known"
     assert calls.count("/release_task") == 1
 
@@ -266,7 +266,7 @@ def test_benchmark_resume_uses_existing_task_only(tmp_path: Path) -> None:
     spec = _spec()
     planned = plan(spec.brief, spec.lyrics, [provider], attempt=1)[0]
     initial = benchmark.run(planned, provider)
-    assert initial["status"] == "ambiguous"
+    assert initial["status"] == "pending_provider"
     row = benchmark.request(initial["request_id"])
     assert row["provider_request_id"] == "known"
     durable_status = row["status"]

@@ -193,7 +193,7 @@ class AceStepLocalProvider:
                     if exc.outcome != "retryable_failure":
                         raise
                 self._sleep(self.config.poll_interval_seconds)
-        raise MusicFailure("ACE-Step task timed out", "ambiguous", task_id)
+        raise MusicTaskPending(task_id)
 
     def retrieve(self, task_id: str, translated_request: dict[str, Any]) -> MusicResult:
         """Query one known task; never call /release_task."""

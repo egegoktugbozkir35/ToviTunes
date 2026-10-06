@@ -17,6 +17,7 @@ _DIRECT_CREATIVE_KINDS = frozenset(
         "character_reference",
         "environment_source_plate",
         "lesson_object_source",
+        "visual_asset_source",
         "lyrics",
         "publication_metadata",
     }
