@@ -38,7 +38,11 @@ class MusicService(StageContext):
             },
             ids,
         )
-        benchmark = MusicBenchmark(self.database, self.config.data_root / "music-benchmark")
+        benchmark = MusicBenchmark(
+            self.database,
+            self.config.data_root / "music-benchmark",
+            assert_owner=self.ownership.assert_owned,
+        )
         with closing(self.database.connect()) as db:
             binding = db.execute(
                 "SELECT * FROM episode_music_bindings WHERE episode_id=?", (episode.episode_id,)
@@ -130,6 +134,7 @@ class MusicService(StageContext):
                 db.commit()
             # Re-enter via the authoritative binding, also handling prepare-before-bind crashes.
             return self._music(episode, inputs)
+        self.ownership.assert_owned()
         if result.get("status") != "succeeded":
             status = (
                 "PENDING_PROVIDER"
@@ -181,7 +186,11 @@ class MusicService(StageContext):
 
     def _analysis(self, episode: Episode, blind_id: str) -> dict[str, Any]:
         config = self.config.automation
-        benchmark = MusicBenchmark(self.database, self.config.data_root / "music-benchmark")
+        benchmark = MusicBenchmark(
+            self.database,
+            self.config.data_root / "music-benchmark",
+            assert_owner=self.ownership.assert_owned,
+        )
         report, reused = benchmark.analyze_audio(
             blind_id,
             config.analysis_version,

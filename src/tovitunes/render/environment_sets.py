@@ -3,6 +3,7 @@
 import io
 import json
 import tempfile
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -396,7 +397,12 @@ def generate_set(
     provider: ImageProvider | None = None,
     episode_id: str | None = None,
     role_briefs: dict[str, str] | None = None,
+    assert_owner: Callable[[], None] | None = None,
 ) -> dict[str, object]:
+    if episode_id is not None and assert_owner is None:
+        raise ValueError("episode environment generation requires production ownership")
+    assert_owner = assert_owner or (lambda: None)
+    assert_owner()
     if not confirmed:
         raise ValueError("live image generation requires --confirm-provider-generation")
     if theme != THEME or attempt < 1:
@@ -436,6 +442,7 @@ def generate_set(
         stage = Path(dirname)
         store = AssetStore(config.data_root, db, generated_source_roots=[stage])
         for role in ROLES:
+            assert_owner()
             master = plates[0] if plates else None
             master_reference_id: str | None = None
             reference: ReferenceImage | None = None
@@ -532,6 +539,7 @@ def generate_set(
 
             def remote_start() -> None:
                 nonlocal started
+                assert_owner()
                 if started:
                     raise ValueError("provider started the same request twice")
                 _transition(db, request_id, "remote_started")
@@ -675,6 +683,7 @@ def generate_set(
                 )
                 counts["ambiguous" if status == "ambiguous" else "failed"] += 1
                 raise
+        assert_owner()
         environment = EnvironmentSet(
             set_id=set_id,
             theme=theme,

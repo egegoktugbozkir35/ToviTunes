@@ -5,7 +5,7 @@ import os
 import re
 import sqlite3
 import wave
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime
 from hashlib import sha256
@@ -135,8 +135,15 @@ def inspect_wav(data: bytes) -> float:
 
 
 class MusicBenchmark:
-    def __init__(self, database: Database, audio_root: Path) -> None:
+    def __init__(
+        self,
+        database: Database,
+        audio_root: Path,
+        *,
+        assert_owner: Callable[[], None] = lambda: None,
+    ) -> None:
         self.database = database
+        self.assert_owner = assert_owner
         audio_root.mkdir(parents=True, exist_ok=True)
         if audio_root.is_symlink():
             raise ValueError("audio root cannot be a symlink")
@@ -432,6 +439,7 @@ class MusicBenchmark:
 
         def remote_start() -> None:
             nonlocal started
+            self.assert_owner()
             if started:
                 raise ValueError("remote-start callback invoked twice")
             self._transition(request_id, "remote_started")
@@ -521,6 +529,7 @@ class MusicBenchmark:
         retrieve = getattr(provider, "retrieve", None)
         if retrieve is None:
             raise ValueError("provider does not support existing-interaction retrieval")
+        self.assert_owner()
         try:
             result = retrieve(
                 row["provider_request_id"], json.loads(row["translated_request_json"])

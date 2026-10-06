@@ -258,6 +258,7 @@ class Orchestrator:
                             context.catalog.creative_bible.visual_direction,
                             context.image_provider,
                             progress=context.progress,
+                            assert_owner=owner.assert_owned,
                         )
                         visual._environment(episode, visual_plan, plan_id)
                     elif stage == "STORYBOARD":

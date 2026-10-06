@@ -140,6 +140,7 @@ class VisualService(StageContext):
                         confirmed=True,
                         episode_id=episode.episode_id,
                         role_briefs={env.role: env.description for env in visual.environments},
+                        assert_owner=self.ownership.assert_owned,
                     )
                 except ProviderFailure as exc:
                     raise ProductionStop(
@@ -147,6 +148,7 @@ class VisualService(StageContext):
                         "Qwen environment generation stopped; inspect the durable request",
                     ) from exc
                 aid = str(result["manifest_artifact_id"])
+            self.ownership.assert_owned()
             environment = EnvironmentSet.model_validate(self.store.read_json(aid))
             for plate in environment.plates:
                 if plate.source_artifact_id:

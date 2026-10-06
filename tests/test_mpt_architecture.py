@@ -314,3 +314,59 @@ def test_youtube_ambiguity_remains_blocked_in_a_new_process(case):
     assert resumed["status"] == "AMBIGUOUS" and resumed["current_stage"] == "YOUTUBE"
     with closing(app.database.connect()) as db:
         assert [tuple(row) for row in db.execute("SELECT * FROM publication_attempts")] == retained
+
+
+def test_lost_lease_after_music_preflight_prevents_remote_submission(case, monkeypatch):
+    original_health = case["music"].health
+
+    def expired_after_preflight():
+        result = original_health()
+        with closing(case["store"].database.connect()) as db:
+            db.execute(
+                "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+            )
+            db.commit()
+        return result
+
+    monkeypatch.setattr(case["music"], "health", expired_after_preflight)
+    with pytest.raises(ExecutionOwnershipLostError):
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    assert "/release_task" not in case["music_events"]
+    with closing(case["store"].database.connect()) as db:
+        assert not db.execute(
+            "SELECT 1 FROM music_requests WHERE remote_started_at IS NOT NULL"
+        ).fetchone()
+
+
+def test_lost_lease_during_image_stage_prevents_further_submissions_and_selection(
+    case, monkeypatch
+):
+    from tovitunes.benchmark.providers import QwenComfyUIImageProvider
+
+    generate = QwenComfyUIImageProvider.generate
+
+    def expired_after_result(provider, *args, **kwargs):
+        result = generate(provider, *args, **kwargs)
+        with closing(case["store"].database.connect()) as db:
+            db.execute(
+                "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+            )
+            db.commit()
+        return result
+
+    monkeypatch.setattr(QwenComfyUIImageProvider, "generate", expired_after_result)
+    with pytest.raises(ExecutionOwnershipLostError):
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    assert case["image_events"].count("/prompt") == 1
+    with closing(case["store"].database.connect()) as db:
+        assert not db.execute(
+            "SELECT 1 FROM production_image_receipts WHERE normalized_artifact_id IS NOT NULL"
+        ).fetchone()
+        # Retain the immutable image response for the next owner without issuing another request.
+        assert (
+            db.execute(
+                "SELECT count(*) FROM production_image_receipts "
+                "WHERE source_artifact_id IS NOT NULL"
+            ).fetchone()[0]
+            == 1
+        )

@@ -147,6 +147,7 @@ def generate_assets(
     provider: ImageProvider | None = None,
     *,
     progress: Callable[[str, str], None] | None = None,
+    assert_owner: Callable[[], None],
 ) -> dict[str, str]:
     provider = provider or _provider(config)
     if provider.provider != "qwen_comfyui":
@@ -154,6 +155,7 @@ def generate_assets(
     ledger = RequestLedger(store.database)
     assets: dict[str, str] = {}
     for index, requirement in enumerate(visual.required_assets, 1):
+        assert_owner()
         if progress:
             progress(
                 "VISUAL_ASSETS",
@@ -262,6 +264,7 @@ def generate_assets(
 
             def remote_start() -> None:
                 nonlocal started
+                assert_owner()
                 ledger.transition(request_id, "remote_started")
                 started = True
 
@@ -323,6 +326,7 @@ def generate_assets(
                     "AMBIGUOUS" if started and outcome != "terminal_failure" else "FAILED",
                     request_id,
                 ) from exc
+        assert_owner()
         store.admit_preview(source_record.identity.artifact_id)
         image = normalize(
             _prepare_qwen_white_background(

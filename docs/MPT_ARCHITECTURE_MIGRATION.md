@@ -64,7 +64,6 @@ All existing SQL migrations remain byte-for-byte unchanged. Classification descr
 | `music_timing` | PROVENANCE | Immutable source, request, configuration or analysis evidence needed for reuse |
 | `music_timing_decisions` | AUTHORITATIVE | Selected durable identity, gate, publication or ownership fact |
 | `preview_admissions` | AUTHORITATIVE | Selected durable identity, gate, publication or ownership fact |
-| `production_attempts` | DIAGNOSTIC | Observation/history; never continuation authority |
 | `production_execution_lease` | AUTHORITATIVE | Selected durable identity, gate, publication or ownership fact |
 | `production_image_receipts` | PROVENANCE | Immutable source, request, configuration or analysis evidence needed for reuse |
 | `production_next_runs` | DIAGNOSTIC | Historical compatibility only; new production does not write this table |
@@ -89,7 +88,7 @@ Old PR40 reconciliation decisions remain immutable audit evidence. Creative ambi
 
 ## Final runtime and donor deviations
 
-`orchestrator.py` owns effects and composition. CLI and FastAPI call `generate(target)` / `resume(key,target)`; recovery only repeats the saved user intent. `continuation.py` recomputes a deterministic plan under the singleton heartbeat lease before every stage. Selected valid artifacts, immutable provider receipts and explicit remote IDs decide reuse. Jobs, stage events, history, UI counters and timing cannot decide production state. Progress/reporting/history errors are best-effort observations. Invalid saved job payloads are skipped so diagnostic corruption cannot prevent the Web application from opening.
+`orchestrator.py` owns effects and composition. CLI and FastAPI call `generate(target)` / `resume(key,target)`; recovery only repeats the saved user intent. `continuation.py` recomputes a deterministic plan under the singleton heartbeat lease before every stage. Music and image/environment remote-start callbacks assert that same owner, each image-loop iteration checks ownership, and lost owners cannot select returned media. Immutable returned provider receipts remain available for the next owner. Selected valid artifacts, immutable provider receipts and explicit remote IDs decide reuse. Jobs, stage events, history, UI counters and timing cannot decide production state. Progress/reporting/history errors are best-effort observations. Invalid saved job payloads are skipped so diagnostic corruption cannot prevent the Web application from opening.
 
 The donor heartbeat ownership implementation and SQLite lease methods were ported directly, adapting imports and connection helpers. Donor strict frozen configuration, central typed errors (including YouTube/channel errors), FailureScope, ordered sticky fallback, lazy factories, typed progress, best-effort history, renderer result acceptance and publication lifecycle are adapted to the existing durable ToviTunes domain. No old production lock, planner or workflow is called through an adapter.
 
@@ -162,7 +161,7 @@ Deleted source modules: `pipeline/short_production.py`, `pipeline/planner.py`, `
 
 Deleted superseded guides: ARCHITECTURE_PROPOSAL, AUTONOMOUS_SHORT_PIPELINE_V1, CONTINUATION, CREATIVE_FALLBACK, STUDIO_V1 and WEBUI_YOUTUBE_V1. Current runtime is described here and domain-only guides retain unique contracts.
 
-Against the PR baseline, `git diff --no-renames --numstat -- src` records **3,388 source lines inserted, 3,558 removed, net −170**. The four superseded module paths contained 2,409 lines; their unique domain algorithms were moved into the specialized services, while their orchestration, locks and planner implementations were removed. Across source, tests and guides the refactor also deletes obsolete contracts and documentation. File splitting adds small domain modules; module count is not used as a substitute for measuring competing runtime responsibilities.
+Against the PR baseline, `git diff --no-renames --numstat -- src` records **3,424 source lines inserted, 3,560 removed, net −136**. The four superseded module paths contained 2,409 lines; their unique domain algorithms were moved into the specialized services, while their orchestration, locks and planner implementations were removed. Across source, tests and guides the refactor also deletes obsolete contracts and documentation. File splitting adds small domain modules; module count is not used as a substitute for measuring competing runtime responsibilities.
 
 Architecture counts after replacement: **2 normal production-effect entry points**, **1 continuation decision location**, **1 creative failure classifier**, **1 publication state-machine owner**, **1 production concurrency owner**. Non-production benchmark/intake tools retain their own local resource leases; they are not production entry points. Historical audit tables stay physically readable and do not own new production.
 
