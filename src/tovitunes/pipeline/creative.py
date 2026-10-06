@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from tovitunes.artifacts.store import ArtifactRecord, AssetStore, InputDependency
 from tovitunes.catalog import BrandCatalog
+from tovitunes.config import CreativeTopicsConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import (
     EpisodeConcept,
@@ -335,6 +336,36 @@ class CreativeDraftService:
             actor="machine:curriculum_policy",
             policy_version="canonical_curriculum_v1",
             reason="Exact identity and bytes of the committed curriculum objective.",
+        )
+
+    def approve_learning_brief(
+        self, episode_id: str, catalog: BrandCatalog, config: CreativeTopicsConfig
+    ) -> None:
+        from tovitunes.creative.director import validate_pins
+        from tovitunes.creative.topic_memory import TopicMemory, validate_candidate
+
+        episode = self.store.database.get_episode(episode_id)
+        validate_pins(episode, catalog, self.store.database)
+        if not episode.learning_brief_id:
+            raise ValueError("episode has no selected learning brief")
+        brief = TopicMemory(self.store.database, catalog).get(episode.learning_brief_id)
+        validate_candidate(brief, config)
+        with closing(self.store.database.connect()) as db:
+            prior = db.execute(
+                "SELECT status FROM approval_decisions WHERE episode_id=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+        if prior:
+            if prior[0] != "approved":
+                raise PermissionError("existing objective review requires human escalation")
+            return
+        self.review_objective(
+            episode_id,
+            "approved",
+            actor="machine:learning_policy",
+            policy_version=brief.learning_policy_revision_id,
+            reason="Exact persisted learning facts pass bounded preschool policy checks.",
         )
 
     def select_structural(self, artifact_id: str) -> None:

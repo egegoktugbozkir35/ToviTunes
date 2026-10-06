@@ -1,6 +1,8 @@
 # Creative fallback and durable recovery
 
-The same prompts, schemas, pinned curriculum and domain validators apply to every model.
+The same prompts, schemas, pinned learning facts and domain validators apply to every model.
+New open topic pools use this same durable chain; [editorial memory](OPEN_EDITORIAL_MEMORY_V1.md)
+does not introduce another NVIDIA client or request ledger.
 The default NVIDIA chain is:
 
 1. `moonshotai/kimi-k3`

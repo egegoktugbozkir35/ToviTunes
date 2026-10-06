@@ -67,6 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_commands = creative.add_subparsers(dest="creative_command", required=True)
     creative_commands.add_parser("eligible")
     creative_commands.add_parser("doctor")
+    creative_commands.add_parser("history")
     creative_generate = creative_commands.add_parser("generate-next")
     creative_resume = creative_generate.add_mutually_exclusive_group()
     creative_resume.add_argument("--run-id")
@@ -393,14 +394,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         database = Database(config.database_path)
         database.migrate()
         catalog = load_brand(config.brand_root)
+        if args.creative_command == "history":
+            from tovitunes.creative.topic_memory import TopicMemory, compact_history
+
+            print(
+                json.dumps(
+                    {
+                        "topic_mode": "open",
+                        "provider_calls": 0,
+                        "history": compact_history(
+                            TopicMemory(database, catalog).history()[
+                                : config.creative_topics.recent_history_count
+                            ]
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         if args.creative_command == "eligible":
             print(json.dumps(eligibility(database, catalog), sort_keys=True))
             return 0
         if args.creative_command == "doctor":
+            from tovitunes.creative.topic_memory import TopicMemory
+
             print(
                 json.dumps(
                     {
                         "provider": config.creative_llm.provider,
+                        "topic_mode": "open",
+                        "editorial_memory": config.creative_topics.model_dump(mode="json"),
+                        "remembered_selected_ideas": len(TopicMemory(database, catalog).history()),
                         "model": config.creative_llm.model,
                         "primary_model": config.creative_llm.model,
                         "fallback_models": config.creative_llm.fallback_models,

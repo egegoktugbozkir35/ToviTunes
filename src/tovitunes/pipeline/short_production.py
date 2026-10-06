@@ -1193,7 +1193,7 @@ class ShortProductionWorkflow:
                 "next_action": "reuse immutable historical production",
             }
         self.catalog = load_brand(self.config.brand_root)
-        validate_pins(episode, self.catalog)
+        validate_pins(episode, self.catalog, self.database)
         self.working = self.config.data_root / ".short-production"
         self.working.mkdir(parents=True, exist_ok=True)
         self.store = AssetStore(

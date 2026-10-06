@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from tovitunes.creative.learning import TopicCandidate, TopicPool
 from tovitunes.creative.models import CreativeSubjectCandidate, CreativeSubjectPool
 from tovitunes.creative.provider import ChatResponse, Message
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
@@ -47,7 +48,57 @@ class FakeNIMTransport:
             )
         )
         output: object
-        if kind == "CreativeSubjectPool":
+        if kind == "TopicPool":
+            lessons = (
+                (
+                    "Big and small",
+                    "opposites",
+                    ("big", "small"),
+                    "Compare a big balloon with a small balloon.",
+                    "Tovi compares two balloons beside a basket.",
+                    "Which balloon is big?",
+                    ("balloon",),
+                ),
+                (
+                    "Name a leaf",
+                    "nature",
+                    ("leaf",),
+                    "Identify a leaf on a tree.",
+                    "Tovi points to a leaf resting beneath a tree.",
+                    "A leaf gently floats down!",
+                    ("leaf", "tree"),
+                ),
+                (
+                    "Find a circle",
+                    "shapes",
+                    ("circle",),
+                    "Identify a circle on a round plate.",
+                    "Tovi traces a circle around a round plate.",
+                    "Follow the round edge!",
+                    ("plate",),
+                ),
+            )
+            candidates = []
+            for index in range(facts["candidate_batch_size"]):
+                subject, domain, words, objective, premise, hook, examples = lessons[index % 3]
+                candidates.append(
+                    TopicCandidate(
+                        subject=subject,
+                        domain=domain,
+                        objective=objective,
+                        target_vocabulary=words,
+                        premise=premise,
+                        hook=hook,
+                        setting="a simple garden",
+                        example_objects=examples,
+                        song_angle="Repeat " + " and ".join(words) + " in a gentle musical phrase.",
+                        working_title="Tovi sings " + " and ".join(words),
+                        score=10 - index / 10,
+                        reason="One visible action and a short repeated vocabulary phrase.",
+                    )
+                )
+            output = TopicPool(candidates=tuple(candidates)).model_dump(mode="json")
+        elif kind == "CreativeSubjectPool":
             concept = facts["eligible_concepts"][0]["concept_id"]
             objects = ("apple", "ball", "crayon")
             premises = (
@@ -56,7 +107,7 @@ class FakeNIMTransport:
                 ("Tovi presents", "beside drawing paper", "A paper window reveals"),
             )
             offset = len(facts["used_concepts"]) % len(premises)
-            candidates = [
+            legacy_candidates = [
                 CreativeSubjectCandidate(
                     concept_id=concept,
                     premise=(
@@ -71,14 +122,17 @@ class FakeNIMTransport:
                 )
                 for i, obj in enumerate(objects)
             ]
-            output = CreativeSubjectPool(candidates=tuple(candidates)).model_dump(mode="json")
+            output = CreativeSubjectPool(candidates=tuple(legacy_candidates)).model_dump(
+                mode="json"
+            )
         elif kind == "EpisodePublicationMetadata":
             episode = facts["episode"]
             final = facts["final_render"]
             concept = episode["concept_id"]
+            vocabulary = " and ".join(episode["target_vocabulary"])
             output = {
-                "youtube_title": f"Learn {concept.title()} with Tovi | Kids Color Song #Shorts",
-                "youtube_description": f"Learn {concept} with ToviTunes in this preschool song.",
+                "youtube_title": f"Learn {vocabulary.title()} with Tovi | Kids Song #Shorts",
+                "youtube_description": f"Learn {vocabulary} with ToviTunes in this preschool song.",
                 "tags": [concept, "preschool learning", "kids song", "shorts"],
                 "language": "en",
                 "made_for_kids": True,

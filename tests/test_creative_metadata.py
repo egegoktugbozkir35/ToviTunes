@@ -56,7 +56,9 @@ def ingest(flow, episode_id, kind, content, deps=()):
 @pytest.fixture
 def finished(workflow):
     flow, fake = workflow
-    result = flow.generate_next()
+    legacy = Episode.create(flow.catalog, "red", "colors-red-001")
+    flow.database.create_episode(flow.catalog, legacy)
+    result = flow.generate_next(episode_key=legacy.external_key)
     episode = flow.database.get_episode(result["episode_id"])
     lyrics = flow.store.read_json(result["lyrics_artifact_id"])
     texts = [line["text"] for line in lyrics["lines"]]

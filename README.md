@@ -33,7 +33,17 @@ Production handoff and renderer-facing storyboard contracts:
 
 The selected pilot can be rendered and reviewed locally. Private YouTube test uploads require an explicit operator action and a passing release preflight. Public publication uses the existing gated same-video promotion service.
 
-## Create a Colors episode
+## Create the next creative episode
+
+New autonomous episodes use an open Creative Director topic planner and persistent editorial
+memory. The Director invents a preschool lesson and working title; deterministic policy and
+history checks persist an immutable LearningBrief before expensive production. Future subjects
+need no curriculum YAML additions. `creative generate-next --live` creates the next creative
+episode. `creative doctor` and `creative history` inspect settings and memory without provider
+calls. [Open editorial memory](docs/OPEN_EDITORIAL_MEMORY_V1.md) documents schemas, duplicate
+rules, optional embeddings, donor adaptation, migrations and legacy Colors compatibility.
+
+## Create a legacy Colors episode manually
 
 After `uv sync --python 3.11 --locked --extra dev`, run this from the repository root in Python:
 

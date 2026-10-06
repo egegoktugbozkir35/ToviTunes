@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
+from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 _NON_WORD = re.compile(r"[^\w]+", flags=re.UNICODE)
@@ -36,3 +38,12 @@ def lexical_similarity(left: str, right: str) -> float:
         / max(len(left_tokens), len(right_tokens))
     )
     return max(jaccard, sequence, containment_score)
+
+
+def cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    denominator = math.sqrt(sum(v * v for v in left) * sum(v * v for v in right))
+    return (
+        sum(a * b for a, b in zip(left, right, strict=True)) / denominator if denominator else 0.0
+    )
