@@ -133,7 +133,7 @@ class MusicReview(StrictModel):
         if set(self.scores) != set(AXES) or any(
             not 0 <= value <= 4 for value in self.scores.values()
         ):
-            raise ValueError("all eight rubric axes require integer 0–4 scores")
+            raise ValueError("all eight rubric axes require integer 0Ã¢â‚¬â€œ4 scores")
         if (
             self.hard_failures or any(v < 3 or v == 4 for v in self.scores.values())
         ) and not self.evidence:

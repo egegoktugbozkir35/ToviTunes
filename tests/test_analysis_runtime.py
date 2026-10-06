@@ -85,11 +85,13 @@ def test_doctor(tmp_path, monkeypatch, status, cached, cuda):
                 device_count=lambda: int(cuda),
                 get_device_name=lambda index: "fixture GPU",
                 get_device_properties=lambda index: SimpleNamespace(total_memory=8 * 1024**3),
-            )
+            ),
         ),
     )
     monkeypatch.setitem(
-        sys.modules, "ctranslate2", SimpleNamespace(
+        sys.modules,
+        "ctranslate2",
+        SimpleNamespace(
             get_cuda_device_count=lambda: int(cuda),
             get_supported_compute_types=lambda device, index: {"float16", "float32"},
         ),
@@ -121,12 +123,16 @@ def test_cuda_doctor_rejects_incomplete_stack(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(runtime, "ffmpeg_status", lambda: {"status": "found"})
     monkeypatch.setattr(runtime, "package_versions", lambda: {"whisperx": "fixture"})
     monkeypatch.setitem(
-        sys.modules, "torch", SimpleNamespace(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
             __version__="2.8.0+cu128",
             version=SimpleNamespace(cuda=None if failure == "torch_build" else "12.8"),
-            backends=SimpleNamespace(cudnn=SimpleNamespace(
-                version=lambda: None if failure == "cudnn" else 91002,
-            )),
+            backends=SimpleNamespace(
+                cudnn=SimpleNamespace(
+                    version=lambda: None if failure == "cudnn" else 91002,
+                )
+            ),
             cuda=SimpleNamespace(
                 is_available=lambda: True,
                 device_count=lambda: 1,
@@ -142,7 +148,9 @@ def test_cuda_doctor_rejects_incomplete_stack(tmp_path, monkeypatch, failure):
         return {"float32"} if failure == "fp16" else {"float16"}
 
     monkeypatch.setitem(
-        sys.modules, "ctranslate2", SimpleNamespace(
+        sys.modules,
+        "ctranslate2",
+        SimpleNamespace(
             get_cuda_device_count=lambda: 0 if failure == "ct2_count" else 1,
             get_supported_compute_types=compute_types,
         ),
@@ -290,24 +298,44 @@ def test_large_v3_cache_requires_multilingual_assets(tmp_path, missing):
 
 @pytest.mark.parametrize("old_path_exists", [True, False])
 def test_cached_large_v3_inventory_does_not_reuse_other_model_hashes(
-    tmp_path, monkeypatch, old_path_exists,
+    tmp_path,
+    monkeypatch,
+    old_path_exists,
 ):
     snapshot = fill_cache(tmp_path, "large-v3")
     old_path = Path(__file__) if old_path_exists else tmp_path / "deleted-medium-model.bin"
-    (tmp_path / "inventory.json").write_text(json.dumps({"assets": [{
-        "asset": "asr", "logical_name": "medium.en", "files": [{
-            "path": str(old_path), "size": Path(__file__).stat().st_size,
-            "sha256": "incorrect-other-model-hash",
-        }],
-    }]}))
+    (tmp_path / "inventory.json").write_text(
+        json.dumps(
+            {
+                "assets": [
+                    {
+                        "asset": "asr",
+                        "logical_name": "medium.en",
+                        "files": [
+                            {
+                                "path": str(old_path),
+                                "size": Path(__file__).stat().st_size,
+                                "sha256": "incorrect-other-model-hash",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
     monkeypatch.setitem(
-        sys.modules, "faster_whisper.utils", SimpleNamespace(
+        sys.modules,
+        "faster_whisper.utils",
+        SimpleNamespace(
             download_model=lambda *a, **k: pytest.fail("cached model download"),
         ),
     )
     monkeypatch.setitem(
-        sys.modules, "whisperx", SimpleNamespace(
-            load_model=lambda *a, **k: None, load_align_model=lambda **k: None,
+        sys.modules,
+        "whisperx",
+        SimpleNamespace(
+            load_model=lambda *a, **k: None,
+            load_align_model=lambda **k: None,
         ),
     )
     result = runtime.prepare_models(tmp_path, "large-v3", allow_download=True)
@@ -363,8 +391,18 @@ def test_cli_preparation_explicit_allowlist(tmp_path, monkeypatch, model):
         "tovitunes.cli.prepare_models",
         lambda root, selected, device, **kw: calls.append((selected, device, kw)) or {},
     )
-    args = ["--config", str(config), "music-benchmark", "analysis-models", "prepare",
-            "--asr-model", model, "--device", "cpu", "--allow-model-download"]
+    args = [
+        "--config",
+        str(config),
+        "music-benchmark",
+        "analysis-models",
+        "prepare",
+        "--asr-model",
+        model,
+        "--device",
+        "cpu",
+        "--allow-model-download",
+    ]
     assert main(args) == 0
     assert calls == [(model, "cpu", {"allow_download": True})]
     with pytest.raises(SystemExit) as exc:

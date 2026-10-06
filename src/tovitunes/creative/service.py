@@ -16,10 +16,9 @@ from tovitunes.catalog import BrandCatalog, load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.director import CreativeDirector
 from tovitunes.creative.learning import LEARNING_POLICY, LearningBrief, subject_slug
-from tovitunes.creative.models import CreativeSubjectCandidate, CreativeSubjectPool
-from tovitunes.creative.prompts import OPEN_TOPIC_PROMPT, SUBJECT_PROMPT, subject_messages
+from tovitunes.creative.models import CreativeSubjectCandidate
+from tovitunes.creative.prompts import OPEN_TOPIC_PROMPT
 from tovitunes.creative.provider import (
-    GenerationContext,
     StructuredGenerator,
     canonical,
     fingerprint,
@@ -27,12 +26,11 @@ from tovitunes.creative.provider import (
 from tovitunes.creative.resilience import generation_audit
 from tovitunes.creative.topic_memory import TopicMemory
 from tovitunes.creative.topics import TopicPlanner
-from tovitunes.creative.validation import treatment, validate_subject
+from tovitunes.creative.validation import treatment
 from tovitunes.domain.episode import Episode
+from tovitunes.errors import StateError
 from tovitunes.persistence.db import Database
-from tovitunes.persistence.leases import LeaseStore
 from tovitunes.pipeline.creative import CreativeDraftService
-from tovitunes.pipeline.execution import production_execution
 
 
 def committed_curriculum_digest(root: Path, catalog: BrandCatalog) -> str:
@@ -161,15 +159,19 @@ def call_report(database: Database, before: set[str]) -> dict[str, int]:
     return result
 
 
-class CreativeWorkflow:
+class CreativeService:
     def __init__(
         self,
         config: RuntimeConfig,
         provider: StructuredGenerator,
         *,
         catalog: BrandCatalog | None = None,
+        progress: Callable[[str, str], None] | None = None,
+        assert_owner: Callable[[], None],
     ) -> None:
         self.config, self.provider = config, provider
+        self.progress = progress
+        self.assert_owner = assert_owner
         self.catalog = catalog or load_brand(config.brand_root)
         self.database = Database(config.database_path)
         self.database.migrate()
@@ -179,7 +181,6 @@ class CreativeWorkflow:
         self.store = AssetStore(
             config.data_root, self.database, generated_source_roots=[self.generated]
         )
-        self.leases = LeaseStore(self.database)
 
     def _run(self, run_id: str | None) -> Row | None:
         with closing(self.database.connect()) as db:
@@ -270,186 +271,92 @@ class CreativeWorkflow:
             db.commit()
         return episode
 
-    @staticmethod
-    def _choose(pool: CreativeSubjectPool, facts: dict[str, Any]) -> CreativeSubjectCandidate:
-        eligible = {c["concept_id"] for c in facts["eligible_concepts"]}
-        history = [h["treatment"] for h in facts["history"] if h.get("treatment")]
-        reasons: list[str] = []
-        for candidate in pool.candidates:
-            try:
-                allowed_examples = next(
-                    (
-                        concept.get("example_entities", ())
-                        for concept in facts["eligible_concepts"]
-                        if concept["concept_id"] == candidate.concept_id
-                    ),
-                    (),
-                )
-                if allowed_examples:
-                    validate_subject(candidate, eligible, history, allowed_examples)
-                else:
-                    validate_subject(candidate, eligible, history)
-            except ValueError as exc:
-                reasons.append(str(exc))
-                continue
-            return candidate
-        raise ValueError("no acceptable subject in ordered pool: " + "; ".join(reasons))
-
-    def _reserve(self, row: Row, subject: CreativeSubjectCandidate) -> Episode:
-        current = eligibility(self.database, self.catalog)
-        if subject.concept_id not in {c["concept_id"] for c in current["eligible_concepts"]}:
-            raise ValueError("selected concept is no longer eligible; operator recovery required")
-        stem = f"{self.catalog.curriculum.curriculum_id}-{subject.concept_id}"
-        # Keep a hash of the full stem when truncating to the Episode external-key limit.
-        if len(stem) > 54:
-            stem = stem[:41] + "-" + sha256(stem.encode()).hexdigest()[:12]
-        with closing(self.database.connect()) as db:
-            keys = {r[0] for r in db.execute("SELECT external_key FROM episodes")}
-        ordinal = 1
-        while f"{stem}-{ordinal:03d}" in keys:
-            ordinal += 1
-        episode = Episode.create(self.catalog, subject.concept_id, f"{stem}-{ordinal:03d}")
-        with closing(self.database.connect()) as db:
-            db.execute(
-                "UPDATE creative_runs SET status='selected',selected_concept_id=?,"
-                "selected_subject_json=?,reserved_episode_json=?,updated_at=? WHERE run_id=?",
-                (
-                    subject.concept_id,
-                    subject.model_dump_json(),
-                    episode.model_dump_json(),
-                    datetime.now(UTC).isoformat(),
-                    row["run_id"],
-                ),
-            )
-            db.commit()
-        return episode
-
     def reserve_next_run(self) -> str:
-        """Expose durable planning identity so callers survive a create-next process crash."""
-        execution = production_execution(
-            self.database,
-            f"creative-planning:{self.catalog.definition.brand_id}",
-            duration_seconds=60,
-        )
-        self.leases, lease = execution.__enter__()
-        try:
-            row = self._run(None)
-            return str((row if row is not None else self._new_run())["run_id"])
-        finally:
-            execution.__exit__(None, None, None)
+        self.assert_owner()
+        return str(self._new_run()["run_id"])
 
-    def generate_next(
+    def prepare(
         self,
         *,
         run_id: str | None = None,
         episode_key: str | None = None,
     ) -> dict[str, Any]:
+        if self.progress:
+            self.progress("CREATIVE", "TOPIC_RUNNING")
         before = call_snapshot(self.database)
         if self.catalog.definition.language != "en" or self.catalog.definition.characters != (
             "tovi",
         ):
             raise ValueError("Production V1 requires English and the selected Tovi-only brand")
-        execution = production_execution(
-            self.database,
-            f"creative-planning:{self.catalog.definition.brand_id}",
-            duration_seconds=self.config.creative_llm.generation_budget_seconds(
-                self.config.creative_topics.max_generation_rounds + 3
-            ),
-        )
-        self.leases, lease = execution.__enter__()
+        assert_owner = self.assert_owner
+        assert_owner()
 
-        def assert_owner() -> None:
-            self.leases.assert_owner(lease)
-
-        try:
-            row = self._run(run_id) if not episode_key else None
-            if episode_key:
-                episode = episode_by_key(self.database, episode_key)
+        row = self._run(run_id) if not episode_key else None
+        if episode_key:
+            episode = episode_by_key(self.database, episode_key)
+        else:
+            row = row if row is not None else self._new_run()
+            if row["prompt_version"] != OPEN_TOPIC_PROMPT:
+                raise StateError("Historical creative planning runs are retained read-only")
+            if row["brand_revision_id"] != self.catalog.version.revision_id:
+                raise ValueError("pending run pins an older catalog; explicit recovery required")
+            if row["reserved_episode_json"]:
+                episode = Episode.model_validate_json(row["reserved_episode_json"])
             else:
-                row = row if row is not None else self._new_run()
-                if row["brand_revision_id"] != self.catalog.version.revision_id or (
-                    row["prompt_version"] == SUBJECT_PROMPT
-                    and row["curriculum_revision_id"]
-                    != self.catalog.curriculum_revision.revision_id
-                ):
+                facts = json.loads(row["input_json"])
+                if facts["creative_topics"] != self.config.creative_topics.model_dump(mode="json"):
                     raise ValueError(
-                        "pending run pins an older catalog; explicit recovery required"
+                        "pending topic run pins older configuration; restore original config"
                     )
-                if row["reserved_episode_json"]:
-                    episode = Episode.model_validate_json(row["reserved_episode_json"])
-                elif row["prompt_version"] == OPEN_TOPIC_PROMPT:
-                    facts = json.loads(row["input_json"])
-                    if facts["creative_topics"] != self.config.creative_topics.model_dump(
-                        mode="json"
-                    ):
-                        raise ValueError(
-                            "pending topic run pins older configuration; restore original config"
-                        )
-                    planner = TopicPlanner(
-                        self.provider,
-                        TopicMemory(self.database, self.catalog),
-                        self.config.creative_topics,
-                        assert_owner=assert_owner,
-                    )
-                    brief = planner.select(row["run_id"], facts)[0]
-                    assert_owner()
-                    episode = self._reserve_brief(row, brief)
-                else:
-                    facts = json.loads(row["input_json"])
-
-                    def validate_pool(pool: CreativeSubjectPool) -> None:
-                        self._choose(pool, facts)
-
-                    pool = self.provider.generate(
-                        CreativeSubjectPool,
-                        subject_messages(facts),
-                        context=GenerationContext(
-                            "subject_pool",
-                            SUBJECT_PROMPT,
-                            run_id=row["run_id"],
-                            assert_owner=assert_owner,
-                        ),
-                        validate=validate_pool,
-                    )
-                    assert_owner()
-                    episode = self._reserve(row, self._choose(pool.output, facts))
-                try:
-                    existing = self.database.get_episode(episode.episode_id)
-                    if existing.model_dump(exclude={"lifecycle"}) != episode.model_dump(
-                        exclude={"lifecycle"}
-                    ):
-                        raise ValueError("reserved episode differs from persisted identity")
-                    episode = existing
-                except KeyError:
-                    assert_owner()
-                    self.database.create_episode(self.catalog, episode)
+                planner = TopicPlanner(
+                    self.provider,
+                    TopicMemory(self.database, self.catalog),
+                    self.config.creative_topics,
+                    assert_owner=assert_owner,
+                )
+                brief = planner.select(row["run_id"], facts)[0]
+                if self.progress:
+                    self.progress("CREATIVE", "TOPIC_COMPLETE")
+                    self.progress("CREATIVE", "BRIEF_RUNNING")
                 assert_owner()
-                with closing(self.database.connect()) as db:
-                    db.execute(
-                        "UPDATE creative_runs SET episode_id=?,updated_at=? WHERE run_id=?",
-                        (episode.episode_id, datetime.now(UTC).isoformat(), row["run_id"]),
-                    )
-                    db.commit()
-            digest = (
-                committed_curriculum_digest(self.config.brand_root, self.catalog)
-                if episode.learning_source == "legacy_curriculum"
-                else ""
-            )
-            result = self._resume(episode, digest, assert_owner)
-            if row is not None:
+                episode = self._reserve_brief(row, brief)
+            try:
+                existing = self.database.get_episode(episode.episode_id)
+                if existing.model_dump(exclude={"lifecycle"}) != episode.model_dump(
+                    exclude={"lifecycle"}
+                ):
+                    raise ValueError("reserved episode differs from persisted identity")
+                episode = existing
+            except KeyError:
                 assert_owner()
-                with closing(self.database.connect()) as db:
-                    db.execute(
-                        "UPDATE creative_runs SET status='complete',updated_at=? WHERE run_id=?",
-                        (datetime.now(UTC).isoformat(), row["run_id"]),
-                    )
-                    db.commit()
-                result["run_id"] = row["run_id"]
-            result["provider_calls"] = call_report(self.database, before)
-            result["generation_attempts"] = generation_audit(self.database, episode.episode_id)
-            return result
-        finally:
-            execution.__exit__(None, None, None)
+                self.database.create_episode(self.catalog, episode)
+            assert_owner()
+            with closing(self.database.connect()) as db:
+                db.execute(
+                    "UPDATE creative_runs SET episode_id=?,updated_at=? WHERE run_id=?",
+                    (episode.episode_id, datetime.now(UTC).isoformat(), row["run_id"]),
+                )
+                db.commit()
+        if self.progress:
+            self.progress("CREATIVE", "BRIEF_COMPLETE")
+        digest = (
+            committed_curriculum_digest(self.config.brand_root, self.catalog)
+            if episode.learning_source == "legacy_curriculum"
+            else ""
+        )
+        result = self._resume(episode, digest, assert_owner)
+        if row is not None:
+            assert_owner()
+            with closing(self.database.connect()) as db:
+                db.execute(
+                    "UPDATE creative_runs SET status='complete',updated_at=? WHERE run_id=?",
+                    (datetime.now(UTC).isoformat(), row["run_id"]),
+                )
+                db.commit()
+            result["run_id"] = row["run_id"]
+        result["provider_calls"] = call_report(self.database, before)
+        result["generation_attempts"] = generation_audit(self.database, episode.episode_id)
+        return result
 
     def _resume(
         self,
@@ -479,6 +386,8 @@ class CreativeWorkflow:
             ("lyrics", service.draft_lyrics),
             ("music_spec", service.draft_music_spec),
         ):
+            if self.progress:
+                self.progress("CREATIVE", kind.upper() + "_RUNNING")
             assert_owner()
             # Calling the generator is safe even for a selected stage: exact fingerprints reuse
             # its receipt, and a crash after ingest reuses its local-request artifact identity.
@@ -490,4 +399,6 @@ class CreativeWorkflow:
             if selected is None or selected.identity != record.identity:
                 service.select_structural(record.identity.artifact_id)
             result[f"{kind}_artifact_id"] = record.identity.artifact_id
+            if self.progress:
+                self.progress("CREATIVE", kind.upper() + "_COMPLETE")
         return result

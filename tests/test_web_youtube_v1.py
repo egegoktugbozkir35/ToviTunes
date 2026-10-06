@@ -5,6 +5,7 @@ import socket
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,13 +17,15 @@ from tovitunes.creative.models import EpisodePublicationMetadata
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import ApprovalDecision, RightsDecision
+from tovitunes.errors import ChannelMismatch, UploadAmbiguous
 from tovitunes.persistence.db import Database
+from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.models import RenderManifest, SceneRender
 from tovitunes.web.app import create_app
 from tovitunes.web.jobs import JobBusy, JobManager
-from tovitunes.youtube.client import ChannelMismatch, UploadAmbiguous, YouTubeClient
+from tovitunes.youtube.client import YouTubeClient
 
 
 @pytest.fixture(autouse=True)
@@ -322,8 +325,10 @@ def test_web_health_projection_media_and_host(ready, monkeypatch):
         )
         called = []
         monkeypatch.setattr(
-            "tovitunes.web.app.ProductionRenderer.render",
-            lambda self, key, **kw: called.append((key, kw)) or {"ok": True},
+            "tovitunes.web.app.build_orchestrator",
+            lambda *a, **kw: SimpleNamespace(
+                resume=lambda key, target: called.append((key, target)) or {"status": "COMPLETE"}
+            ),
         )
         response = client.post("/api/episodes/colors-red/render")
         assert response.status_code == 202
@@ -331,7 +336,7 @@ def test_web_health_projection_media_and_host(ready, monkeypatch):
             if client.get("/api/jobs/" + response.json()["job_id"]).json()["status"] == "succeeded":
                 break
             time.sleep(0.01)
-        assert called == [("colors-red", {"visual_story": True})]
+        assert called == [("colors-red", ProductionTarget.RENDER)]
 
 
 def test_job_manager_one_worker_and_sanitized_failure():
@@ -462,7 +467,7 @@ def test_youtube_remote_ambiguity_and_explicit_rejection(ready):
         media_factory=lambda *a, **k: object(),
         sleeper=lambda _: None,
     )
-    from tovitunes.youtube.client import UploadRejected
+    from tovitunes.errors import UploadRejected
 
     with pytest.raises(UploadRejected, match="limit"):
         rejected.upload_private(
@@ -548,7 +553,7 @@ def test_oauth_saved_token_refresh_and_invalid_grant(context, monkeypatch):
     assert fake.refreshed == 1 and flow.launched == 0
     fake.expired, fake.valid = True, False
     fake.refresh_error = RefreshError("secret refresh data", {"error": "temporarily_unavailable"})
-    from tovitunes.youtube.client import YouTubeError
+    from tovitunes.errors import YouTubeError
 
     with pytest.raises(YouTubeError) as error:
         YouTubeClient(yt).service(interactive=True)
@@ -589,7 +594,9 @@ def test_durable_success_deduplicates_and_ambiguity_blocks(ready):
             return "video-123"
 
     fake = Client()
-    publisher = PublicationService(config, client_factory=lambda: fake)
+    publisher = PublicationService(
+        config, client_factory=lambda: fake, ownership=SimpleNamespace(assert_owned=lambda: None)
+    )
     first = publisher.upload_private("colors-red")
     second = publisher.upload_private("colors-red")
     assert first["youtube_video_id"] == second["youtube_video_id"] == "video-123"
@@ -602,7 +609,7 @@ def test_durable_success_deduplicates_and_ambiguity_blocks(ready):
     fake.ambiguous = True
     with pytest.raises(UploadAmbiguous):
         publisher.upload_private("colors-red")
-    with pytest.raises(ValueError, match="manual reconciliation"):
+    with pytest.raises(UploadAmbiguous, match="reconciliation"):
         publisher.upload_private("colors-red")
     assert fake.calls == 2
     latest = publisher.latest(episode.episode_id)

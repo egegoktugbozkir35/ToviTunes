@@ -252,8 +252,14 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
         except Exception as exc:
             failures.append(diagnostic("ctranslate2_device_probe_failed", exc))
     cuda_ready = bool(
-        cuda_available and cuda_count and gpu_name and torch_cuda_build and cudnn_version
-        and ct2_probe_succeeded and ct2_count and "float16" in ct2_compute_types
+        cuda_available
+        and cuda_count
+        and gpu_name
+        and torch_cuda_build
+        and cudnn_version
+        and ct2_probe_succeeded
+        and ct2_count
+        and "float16" in ct2_compute_types
     )
     # Import public loaders to detect broken DLLs/dependencies without loading models.
     try:

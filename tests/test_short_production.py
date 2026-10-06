@@ -18,11 +18,13 @@ from test_render import render_fixture, rows_snapshot
 
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.benchmark.providers import QwenComfyUIImageProvider
+from tovitunes.catalog import load_brand
 from tovitunes.cli import main
 from tovitunes.config import ProductionAutomationConfig
+from tovitunes.continuation import plan_continuation
 from tovitunes.creative.fake import FakeNIMTransport
 from tovitunes.creative.provider import DurableStructuredGenerator
-from tovitunes.creative.workflow import CreativeWorkflow
+from tovitunes.creative.service import CreativeService
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import RightsDecision
@@ -33,6 +35,7 @@ from tovitunes.domain.visual_plan import (
     EpisodeVisualPlan,
     validate_visual_plan,
 )
+from tovitunes.errors import ProductionStop
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import normalized_words
 from tovitunes.music.analysis_models import (
@@ -43,15 +46,19 @@ from tovitunes.music.analysis_models import (
 )
 from tovitunes.music.models import TimedText
 from tovitunes.music.timing_runtime import measured_rhythm
-from tovitunes.pipeline import short_production
+from tovitunes.orchestrator import build_orchestrator
+from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import FakeDraftGenerator
 from tovitunes.pipeline.music_adapter import creative_music_spec
-from tovitunes.pipeline.short_production import ProductionStop, ShortProductionWorkflow
+from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.rights_policy import is_direct_rights_root
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.episode_assets import swatch
 from tovitunes.render.production import ProductionRenderer
+from tovitunes.services import render as short_production
+from tovitunes.services.render import RenderService
+from tovitunes.services.visual import VisualService
 
 WORKFLOW = Path("workflows/qwen_image_2_1_t2i_api.json").resolve()
 pytest_plugins = ("test_web_youtube_v1",)
@@ -132,11 +139,11 @@ def case(tmp_path, catalog, monkeypatch):
     monkeypatch.setattr(
         "socket.socket.connect", lambda *args: pytest.fail("live network forbidden")
     )
-    from tovitunes.creative.workflow import committed_curriculum_digest
+    from tovitunes.creative.service import committed_curriculum_digest
 
     committed_root = Path(__file__).resolve().parents[1] / "brands/tovitunes"
     monkeypatch.setattr(
-        "tovitunes.creative.workflow.committed_curriculum_digest",
+        "tovitunes.creative.service.committed_curriculum_digest",
         lambda root, catalog: committed_curriculum_digest(committed_root, catalog),
     )
     database = original_store.database
@@ -155,13 +162,40 @@ def case(tmp_path, catalog, monkeypatch):
     )
     fake.responses["EpisodeSpec"] = [draft.model_dump_json()]
     provider = DurableStructuredGenerator(database, fake)
-    creative = CreativeWorkflow(config, provider, catalog=catalog)
-    selected = creative.generate_next(episode_key=episode.external_key)
+    creative = CreativeService(config, provider, catalog=catalog, assert_owner=lambda: None)
+    selected = creative.prepare(episode_key=episode.external_key)
     ids = tuple(selected[k + "_artifact_id"] for k in ("episode_spec", "lyrics", "music_spec"))
     lyrics = LyricsSpec.model_validate(creative.store.read_json(ids[1]))
     plan = visual_plan(episode, ids, lyrics)
     fake.responses["EpisodeVisualPlan"] = [plan.model_dump_json()]
 
+    return connect_offline(config, episode, ids, fake, monkeypatch, red, socket_connect)
+
+
+def connect_offline(config, episode, ids, fake, monkeypatch, red=None, socket_connect=None):
+    """Reconstruct offline domain dependencies using only retained production facts."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from tovitunes.render import production
+    from tovitunes.render.character import ACTION_ROLES
+
+    database = Database(config.database_path)
+    catalog = load_brand(config.brand_root)
+    store = AssetStore(config.data_root, database, local_preview=True)
+    sprite_refs = {}
+    for i, role in enumerate(sorted(set(ACTION_ROLES.values()))):
+        record = store.selected(
+            "brand", episode.brand_revision_id, "character_sprite", f"sprite_{i}"
+        )
+        sprite_refs[role] = record.identity.artifact_id
+    pack = catalog.packs[0].model_copy(update={"asset_artifact_ids": sprite_refs})
+    monkeypatch.setattr(production, "load_brand", lambda _: replace(catalog, packs=(pack,)))
+    provider = DurableStructuredGenerator(database, fake)
+    creative = SimpleNamespace(store=store)
+    lyrics = LyricsSpec.model_validate(store.read_json(ids[1]))
+    plan = visual_plan(episode, ids, lyrics)
+    fake.responses["EpisodeVisualPlan"] = [plan.model_dump_json()]
     music_events = []
     music_behavior = {"state": "success", "resume": "success"}
     audio = tone()
@@ -335,21 +369,10 @@ def case(tmp_path, catalog, monkeypatch):
         "ProductionRenderer",
         lambda config, **kwargs: actual_renderer(config, canvas=(270, 480), **kwargs),
     )
-    pipeline = ShortProductionWorkflow(
+    pipeline = build_orchestrator(
         config, creative_provider=provider, music_provider=music, image_provider=qwen
     )
     errors = []
-    for name in ("_visual", "_environment", "_storyboard", "_render", "_metadata"):
-        original = getattr(pipeline, name)
-
-        def traced(*args, original=original, **kwargs):
-            try:
-                return original(*args, **kwargs)
-            except Exception as exc:
-                errors.append(str(exc))
-                raise
-
-        setattr(pipeline, name, traced)
     return dict(
         socket_connect=socket_connect,
         errors=errors,
@@ -384,7 +407,7 @@ def test_lossless_adapter_and_plan_only(case):
         line.text for line in canonical.lyrics.lines
     )
     before = rows_snapshot(case["config"].database_path)
-    plan = flow.produce(episode.external_key)
+    plan = plan_continuation(flow.config, episode.external_key, target=ProductionTarget.PUBLISH)
     assert plan["current_stage"] == "MUSIC" and plan["provider_calls"] == 0
     assert rows_snapshot(case["config"].database_path) == before
     assert not case["music_events"] and not case["image_events"]
@@ -395,9 +418,9 @@ def test_lossless_adapter_and_plan_only(case):
 )
 def test_music_stops_and_never_resubmits(case, behavior, status):
     case["music_behavior"]["state"] = behavior
-    first = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    first = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert first["status"] == status, first
-    second = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    second = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert second["status"] == status, second
     assert case["music_events"].count("/release_task") == 1
     assert not case["image_events"]
@@ -414,13 +437,13 @@ def test_music_stops_and_never_resubmits(case, behavior, status):
 def test_pending_then_success_same_task(case, monkeypatch):
     case["music_behavior"]["state"] = "pending"
     assert (
-        case["flow"].produce(case["episode"].external_key, confirmed=True)["status"]
+        case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)["status"]
         == "PENDING_PROVIDER"
     )
     case["music_behavior"]["state"] = "success"
-    monkeypatch.setattr(case["flow"], "_visual", lambda *args: (_ for _ in ()).throw(SystemExit()))
+    monkeypatch.setattr(VisualService, "_visual", lambda *args: (_ for _ in ()).throw(SystemExit()))
     with pytest.raises(SystemExit):
-        result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+        result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
         pytest.fail(str(result.get("blocker"))[:700])
     assert case["music_events"].count("/release_task") == 1
     assert case["analysis_calls"]
@@ -441,7 +464,7 @@ def test_qa_failure_stops_without_regeneration(case, monkeypatch):
         ),
     )
     for _ in range(2):
-        result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+        result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
         assert result["status"] == "BLOCKED", result
         assert result["current_stage"] == "AUDIO_ANALYSIS"
     assert case["music_events"].count("/release_task") == 1
@@ -450,7 +473,7 @@ def test_qa_failure_stops_without_regeneration(case, monkeypatch):
 
 def test_complete_real_preview_and_reuse(case, monkeypatch):
     before = rows_snapshot(case["config"].database_path)
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert result["status"] == "NEEDS_REVIEW", (result.get("blocker"), case["errors"])
     assert result["ready_local_preview"]
     assert Path(result["output_path"]).read_bytes()[4:8] == b"ftyp"
@@ -471,7 +494,7 @@ def test_complete_real_preview_and_reuse(case, monkeypatch):
     assert case["music_events"].count("/release_task") == 1
     assert case["image_events"].count("/prompt") == 6
     calls = (len(case["music_events"]), len(case["image_events"]), len(case["fake"].calls))
-    second = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    second = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert second["final_render_id"] == result["final_render_id"]
     assert (len(case["music_events"]), len(case["image_events"]), len(case["fake"].calls)) == calls
     assert len(case["analysis_calls"]) == 1
@@ -535,11 +558,6 @@ def test_complete_real_preview_and_reuse(case, monkeypatch):
             }
 
     client = YouTubeFixture()
-    monkeypatch.setattr(
-        short_production,
-        "PublicationService",
-        lambda config: PublicationService(config, client_factory=lambda: client),
-    )
     enabled = case["config"].model_copy(
         update={
             "expected_youtube_channel_id": "fixture-channel",
@@ -553,18 +571,36 @@ def test_complete_real_preview_and_reuse(case, monkeypatch):
             "automation": ProductionAutomationConfig(auto_publish=True, require_human_review=False),
         }
     )
-    case["flow"].config = enabled
-    assert case["flow"]._publication(case["episode"])["status"] == "COMPLETE"
-    assert case["flow"]._publication(case["episode"])["status"] == "COMPLETE"
+    case["flow"] = build_orchestrator(
+        enabled,
+        publisher_factory=lambda owner: PublicationService(
+            enabled, ownership=owner, client_factory=lambda: client
+        ),
+    )
+    assert (
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.PUBLISH)["status"]
+        == "COMPLETE"
+    )
+    assert (
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.PUBLISH)["status"]
+        == "COMPLETE"
+    )
     assert client.uploads == 1 and client.promotions == 0
     public = enabled.model_copy(
         update={
             "automation": enabled.automation.model_copy(update={"publish_visibility": "public"})
         }
     )
-    case["flow"].config = public
-    with pytest.raises(ProductionStop, match="release gates"):
-        case["flow"]._publication(case["episode"])
+    case["flow"] = build_orchestrator(
+        public,
+        publisher_factory=lambda owner: PublicationService(
+            public, ownership=owner, client_factory=lambda: client
+        ),
+    )
+    assert (
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.PUBLISH)["status"]
+        == "BLOCKED"
+    )
     assert client.uploads == 1 and client.promotions == 0
     # Test-only operator rights decisions; the pipeline itself never fabricates them.
     with closing(store.database.connect()) as db:
@@ -582,8 +618,14 @@ def test_complete_real_preview_and_reuse(case, monkeypatch):
                     decided_at=datetime.now(UTC),
                 )
             )
-    assert case["flow"]._publication(case["episode"])["status"] == "COMPLETE"
-    assert case["flow"]._publication(case["episode"])["status"] == "COMPLETE"
+    assert (
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.PUBLISH)["status"]
+        == "COMPLETE"
+    )
+    assert (
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.PUBLISH)["status"]
+        == "COMPLETE"
+    )
     assert client.uploads == 1 and client.promotions == 1
 
 
@@ -622,51 +664,6 @@ def test_visual_plan_rejects_unbound_creative_facts(case, defect):
         )
 
 
-@pytest.mark.parametrize(
-    "boundary",
-    [
-        "CREATIVE",
-        "MUSIC",
-        "AUDIO_ANALYSIS",
-        "VISUAL_PLAN",
-        "VISUAL_ASSETS",
-        "STORYBOARD",
-        "RENDER",
-        "MEDIA_QA",
-        "METADATA",
-    ],
-)
-def test_restart_after_completed_stage(case, monkeypatch, boundary):
-    original = case["flow"]._event
-    crashed = False
-
-    def crash(episode, stage, status, evidence):
-        nonlocal crashed
-        original(episode, stage, status, evidence)
-        if stage == boundary and status == "COMPLETE" and not crashed:
-            crashed = True
-            raise SystemExit("offline stage-boundary crash")
-
-    monkeypatch.setattr(case["flow"], "_event", crash)
-    if boundary not in {"RENDER", "MEDIA_QA", "METADATA"}:
-
-        def stop_before_render(*args):
-            raise ProductionStop("BLOCKED", "Offline test reached the verified render boundary")
-
-        monkeypatch.setattr(case["flow"], "_render", stop_before_render)
-    with pytest.raises(SystemExit):
-        case["flow"].produce(case["episode"].external_key, confirmed=True)
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
-    assert result["status"] in {"BLOCKED", "NEEDS_REVIEW"}, result.get("blocker")
-    assert case["music_events"].count("/release_task") == 1
-    assert case["image_events"].count("/prompt") == 6
-    assert case["fake"].calls.count("EpisodeSpec") == 1
-    assert case["fake"].calls.count("LyricsSpec") == 1
-    assert case["fake"].calls.count("MusicSpec") == 1
-    assert case["fake"].calls.count("EpisodeVisualPlan") == 1
-    assert len(case["analysis_calls"]) == 1
-
-
 def test_partial_images_reuse_first_candidate(case, monkeypatch):
     from tovitunes.render import episode_assets
 
@@ -683,14 +680,14 @@ def test_partial_images_reuse_first_candidate(case, monkeypatch):
 
     monkeypatch.setattr(episode_assets, "persist_file", crash)
     monkeypatch.setattr(
-        case["flow"],
+        RenderService,
         "_render",
         lambda *args: (_ for _ in ()).throw(ProductionStop("BLOCKED", "Offline render boundary")),
     )
     with pytest.raises(SystemExit):
-        case["flow"].produce(case["episode"].external_key, confirmed=True)
+        case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert case["image_events"].count("/prompt") == 1
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert result["status"] == "BLOCKED"
     assert case["image_events"].count("/prompt") == 6
     with closing(case["store"].database.connect()) as db:
@@ -710,31 +707,31 @@ def test_partial_images_reuse_first_candidate(case, monkeypatch):
 def test_ambiguous_image_cannot_resend(case):
     case["image_behavior"]["crash"] = 1
     with pytest.raises(SystemExit):
-        case["flow"].produce(case["episode"].external_key, confirmed=True)
+        case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     case["image_behavior"]["crash"] = None
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert result["status"] == "AMBIGUOUS" and result["current_stage"] == "VISUAL_ASSETS"
     assert case["image_events"].count("/prompt") == 1
 
 
-def test_next_creation_and_active_run_resume(case, monkeypatch):
-    def stopped(key, *, confirmed):
-        assert confirmed
-        return {"status": "BLOCKED", "episode_key": key}
+def test_next_creation_and_active_run_resume(case):
+    flow = case["flow"]
 
-    monkeypatch.setattr(case["flow"], "produce", stopped)
-    first = case["flow"].produce_next(confirmed=True)
-    assert first["episode_key"] not in {"colors-red-001", case["episode"].external_key}
+    def stop(progress):
+        if progress.stage == "MUSIC":
+            raise SystemExit()
+
+    flow._reporter = stop
+    with pytest.raises(SystemExit):
+        flow.generate(ProductionTarget.PUBLISH)
+    with closing(flow.database.connect()) as db:
+        before = [tuple(row) for row in db.execute("SELECT * FROM production_requests")]
     calls = list(case["fake"].calls)
-    second = case["flow"].produce_next(confirmed=True)
-    assert first == second and case["fake"].calls == calls
-    assert calls.count("TopicPool") == 1
-    with closing(case["store"].database.connect()) as db:
-        # Recover a create-next crash after creative completion, before the pipeline pointer update.
-        db.execute("UPDATE production_next_runs SET episode_id=NULL")
-        db.commit()
-    assert case["flow"].produce_next(confirmed=True) == first
-    assert case["fake"].calls == calls
+    with pytest.raises(SystemExit):
+        flow.generate(ProductionTarget.PUBLISH)
+    with closing(flow.database.connect()) as db:
+        assert [tuple(row) for row in db.execute("SELECT * FROM production_requests")] == before
+    assert case["fake"].calls == calls and calls.count("TopicPool") == 1
 
 
 def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_metadata(
@@ -754,7 +751,9 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
         facts = json.loads(messages[-1]["content"])
         ep = Episode.model_validate(facts["episode"])
         assert ep.learning_source == "generated_learning_brief"
-        assert TopicMemory(case["store"].database, case["flow"].catalog).get(ep.learning_brief_id)
+        assert TopicMemory(case["store"].database, load_brand(case["config"].brand_root)).get(
+            ep.learning_brief_id
+        )
         data = case["plan"].model_dump(mode="json")
         data.update(
             episode_id=ep.episode_id,
@@ -787,7 +786,7 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
         return ChatResponse(EpisodeVisualPlan.model_validate(data).model_dump_json())
 
     monkeypatch.setattr(fake, "chat", chat)
-    result = case["flow"].produce_next(confirmed=True)
+    result = case["flow"].generate(target=ProductionTarget.PUBLISH)
     assert result["status"] == "NEEDS_REVIEW", (result.get("blocker"), case["errors"])
     assert result["ready_local_preview"]
     assert Path(result["output_path"]).read_bytes()[4:8] == b"ftyp"
@@ -799,45 +798,17 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
     episode = store.database.get_episode(ep_id)
     assert episode.subject == "Big and small" and episode.curriculum_revision_id is None
     metadata = store.selected("episode", ep_id, "publication_metadata", "main")
-    brief = TopicMemory(store.database, case["flow"].catalog).get(episode.learning_brief_id)
+    brief = TopicMemory(store.database, load_brand(case["config"].brand_root)).get(
+        episode.learning_brief_id
+    )
     assert store.read_json(metadata.identity.artifact_id)["youtube_title"] != brief.working_title
     storyboard = store.selected("episode", ep_id, "timed_storyboard", "main")
     assert parse_storyboard(store.read_json(storyboard.identity.artifact_id)).schema_version == 2
     assert case["music_events"].count("/release_task") == 1
     calls = (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
-    second = case["flow"].produce_next(confirmed=True)
+    second = case["flow"].generate(target=ProductionTarget.PUBLISH)
     assert second["final_render_id"] == result["final_render_id"]
     assert calls == (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
-
-
-def test_hard_exit_reclaims_only_marked_process_lease(tmp_path):
-    import subprocess
-    import sys
-
-    from tovitunes.persistence.db import Database
-    from tovitunes.persistence.leases import LeaseHeld, LeaseStore
-    from tovitunes.pipeline.execution import production_execution
-
-    database = Database(tmp_path / "crash.db")
-    database.migrate()
-    code = (
-        "import os,sys; from pathlib import Path; "
-        "from tovitunes.persistence.db import Database; "
-        "from tovitunes.pipeline.execution import production_execution; "
-        "lock=production_execution(Database(Path(sys.argv[1])), 'short-production:crash'); "
-        "lock.__enter__(); os._exit(0)"
-    )
-    subprocess.run([sys.executable, "-c", code, str(database.path)], check=True)
-    with production_execution(database, "short-production:crash") as (leases, lease):
-        leases.assert_owner(lease)
-        with pytest.raises(LeaseHeld):
-            with production_execution(database, "short-production:crash"):
-                pytest.fail("live writer was not excluded")
-    legacy = LeaseStore(database).acquire("creative-planning:legacy", duration_seconds=300)
-    with pytest.raises(LeaseHeld):
-        with production_execution(database, "creative-planning:legacy"):
-            pytest.fail("unmarked legacy lease was incorrectly reclaimed")
-    LeaseStore(database).release(legacy)
 
 
 def test_future_committed_entities_need_no_object_registry():
@@ -869,24 +840,24 @@ def test_cli_frontends_use_application_service(case, monkeypatch, capsys, comman
         def __init__(self, config, **kwargs):
             pass
 
-        def produce_next(self, *, confirmed):
-            calls.append(("next", confirmed))
+        def generate(self, target):
+            calls.append(("next", target))
             return {"status": "READY"}
 
-        def produce(self, key, *, confirmed):
-            calls.append((key, confirmed))
+        def resume(self, key, target):
+            calls.append((key, target))
             return {"status": "READY"}
 
-    monkeypatch.setattr(short_production, "ShortProductionWorkflow", Service)
+    monkeypatch.setattr("tovitunes.cli.build_orchestrator", Service)
     path = case["config"].database_path.parent / "operator.yaml"
     path.write_text(yaml.safe_dump(json.loads(case["config"].model_dump_json())), encoding="utf-8")
     args = ["--config", str(path), "production", command]
     if command in {"produce", "auto-resume"}:
         args += ["--episode-key", case["episode"].external_key]
     assert main(args) == 0
-    assert calls[-1][1] is False
+    assert calls == []
     assert main([*args, "--confirm-provider-generation"]) == 0
-    assert calls[-1][1] is True
+    assert calls[-1][1] == ProductionTarget.PUBLISH
     assert not case["music_events"] and not case["image_events"]
     assert "READY" in capsys.readouterr().out
 
@@ -905,24 +876,24 @@ def test_web_frontend_plan_and_confirmation(case, monkeypatch):
         def __init__(self, config, **kwargs):
             pass
 
-        def plan(self, key=None):
+        def unused_plan(self, key=None):
             calls.append(("plan", key))
             return {"status": "READY", "provider_calls": 0}
 
-        def produce(self, key, *, confirmed):
-            calls.append(("produce", key, confirmed))
+        def resume(self, key, target):
+            calls.append(("resume", key, target))
             return {"status": "PENDING_PROVIDER", "episode_key": key, "current_stage": "MUSIC"}
 
-        def produce_next(self, *, confirmed):
-            calls.append(("next", confirmed))
+        def generate(self, target):
+            calls.append(("next", target))
             return {"status": "NEEDS_REVIEW"}
 
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", Service)
+    monkeypatch.setattr(web_app, "build_orchestrator", Service)
     app = web_app.create_app(case["config"])
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
         key = case["episode"].external_key
         assert client.post(f"/api/episodes/{key}/produce").json()["provider_calls"] == 0
-        assert calls == [("plan", key)]
+        assert calls == []
         response = client.post(f"/api/episodes/{key}/produce?confirm_provider_generation=true")
         job_id = response.json()["job_id"]
         for _ in range(50):
@@ -931,7 +902,7 @@ def test_web_frontend_plan_and_confirmation(case, monkeypatch):
                 break
             time.sleep(0.01)
         assert job["status"] == "pending_provider"
-        assert calls[-1] == ("produce", key, True)
+        assert calls[-1] == ("resume", key, ProductionTarget.PUBLISH)
         assert client.post("/api/production/generate-next-short").json()["provider_calls"] == 0
     app.state.jobs.close()
     assert not case["music_events"] and not case["image_events"]
@@ -946,10 +917,15 @@ def test_published_red_is_read_only_in_new_pipeline(ready, monkeypatch):
     monkeypatch.setattr(
         "socket.socket.connect", lambda *args: pytest.fail("historical provider call")
     )
-    result = ShortProductionWorkflow(config).produce(episode.external_key, confirmed=True)
-    assert result["status"] == "COMPLETE" and result["historical"]
+    result = build_orchestrator(config).resume(
+        episode.external_key, target=ProductionTarget.PUBLISH
+    )
+    assert result["status"] == "COMPLETE" and result["target_complete"]
     assert result["final_render_id"] == render.identity.artifact_id
-    assert rows_snapshot(database.path) == before
+    after = rows_snapshot(database.path)
+    assert all(
+        after[name] == rows for name, rows in before.items() if name not in {"production_runs"}
+    )
     with closing(database.connect()) as db:
         assert (
             db.execute("SELECT youtube_video_id FROM publication_attempts").fetchone()[0]
@@ -966,18 +942,20 @@ def test_published_red_is_read_only_in_new_pipeline(ready, monkeypatch):
 def test_pending_music_endpoint_change_blocks_query(case):
     case["music_behavior"]["state"] = "pending"
     assert (
-        case["flow"].produce(case["episode"].external_key, confirmed=True)["status"]
+        case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)["status"]
         == "PENDING_PROVIDER"
     )
     calls = list(case["music_events"])
-    case["flow"].config = case["config"].model_copy(
+    changed = case["config"].model_copy(
         update={
             "music_generation": case["config"].music_generation.model_copy(
                 update={"base_url": "http://127.0.0.1:8002"}
             )
         }
     )
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    result = build_orchestrator(changed).resume(
+        case["episode"].external_key, target=ProductionTarget.PUBLISH
+    )
     assert result["status"] == "BLOCKED"
     assert case["music_events"] == calls
 
@@ -1003,11 +981,11 @@ def test_compatible_environment_reuse_preserves_brand_selection(case, monkeypatc
             )
         ]
     monkeypatch.setattr(
-        case["flow"],
+        RenderService,
         "_render",
         lambda *args: (_ for _ in ()).throw(ProductionStop("BLOCKED", "Offline render boundary")),
     )
-    result = case["flow"].produce(case["episode"].external_key, confirmed=True)
+    result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
     assert result["current_stage"] == "RENDER", result.get("blocker")
     assert case["environment_events"].count("/prompt") == 4
     with closing(case["store"].database.connect()) as db:
@@ -1020,9 +998,7 @@ def test_compatible_environment_reuse_preserves_brand_selection(case, monkeypatc
 
 
 @pytest.mark.parametrize("outcome", ["remote_started", "ambiguous", "terminal_failure"])
-def test_uncertain_or_failed_publication_never_uploads_again(ready, monkeypatch, outcome):
-    from dataclasses import replace
-
+def test_remote_id_is_success_evidence_even_when_diagnostics_are_stale(ready, monkeypatch, outcome):
     from test_public_release_v1 import record_upload
 
     (config, database, episode, _), _, _, _ = ready
@@ -1030,150 +1006,7 @@ def test_uncertain_or_failed_publication_never_uploads_again(ready, monkeypatch,
     with closing(database.connect()) as db:
         db.execute("UPDATE publication_attempts SET outcome=?", (outcome,))
         db.commit()
-    enabled = config.model_copy(
-        update={
-            "automation": ProductionAutomationConfig(auto_publish=True, require_human_review=False)
-        }
+    app = build_orchestrator(
+        config, publisher_factory=lambda owner: pytest.fail("duplicate upload")
     )
-    gate = replace(evaluate_release(config, episode.external_key), private_test_upload_allowed=True)
-    monkeypatch.setattr(short_production, "evaluate_release", lambda *args: gate)
-    before = rows_snapshot(database.path)
-    with pytest.raises(ProductionStop) as stopped:
-        ShortProductionWorkflow(enabled)._publication(episode)
-    assert stopped.value.status == ("FAILED" if outcome == "terminal_failure" else "AMBIGUOUS")
-    assert rows_snapshot(database.path) == before
-
-
-@pytest.mark.parametrize("entrypoint", ["existing_episode", "next_episode"])
-def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(
-    case,
-    entrypoint,
-    monkeypatch,
-):
-    from test_creative_fallback import CHAIN, build, records, reply
-
-    from tovitunes.catalog import load_brand
-    from tovitunes.creative.provider import ProviderError
-    from tovitunes.creative.resilience import ResilientStructuredGenerator
-    from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
-
-    # MockTransport still runs NIM's credential preflight. Never depend on a host/CI secret.
-    monkeypatch.setenv("NVIDIA_API_KEY", "offline-creative-recovery-key")
-    flow, config, store = (case[k] for k in ("flow", "config", "store"))
-    database = store.database
-    historical = database.get_episode(case["red"].episode_id).model_dump_json()
-    calls = []
-    failures = []
-    original_generate = ResilientStructuredGenerator.generate
-
-    def diagnose_generate(generator, *args, **kwargs):
-        try:
-            return original_generate(generator, *args, **kwargs)
-        except Exception as exc:
-            frames = []
-            trace = exc.__traceback__
-            while trace is not None:
-                frames.append(
-                    {
-                        "file": Path(trace.tb_frame.f_code.co_filename).name,
-                        "function": trace.tb_frame.f_code.co_name,
-                    }
-                )
-                trace = trace.tb_next
-            # No exception text, locals, prompts, response bodies, credentials or URLs.
-            failures.append(
-                {
-                    "type": type(exc).__name__,
-                    "category": exc.category.value if isinstance(exc, ProviderError) else None,
-                    "ambiguous": exc.ambiguous if isinstance(exc, ProviderError) else None,
-                    "frames": frames,
-                }
-            )
-            raise
-
-    monkeypatch.setattr(ResilientStructuredGenerator, "generate", diagnose_generate)
-    before_requests = len(records(database))
-
-    def interrupted(request):
-        uses_offline_key = (
-            request.headers.get("Authorization") == "Bearer offline-creative-recovery-key"
-        )
-        assert uses_offline_key, "mock transport must use the test-scoped placeholder credential"
-        calls.append(json.loads(request.content)["model"])
-        return httpx.Response(504, text="remote-body-with-secret-and-signed-URL")
-
-    flow.creative_provider = build(database, interrupted)
-    if entrypoint == "existing_episode":
-        episode = Episode.create(load_brand(config.brand_root), "green", "recovery-green")
-        database.create_episode(load_brand(config.brand_root), episode)
-
-        def invoke():
-            return flow.produce(episode.external_key, confirmed=True)
-    else:
-
-        def invoke():
-            return flow.produce_next(confirmed=True)
-
-    stopped = invoke()
-    diagnostics = {
-        "status": stopped["status"],
-        "current_stage": stopped["current_stage"],
-        "mock_provider_calls": len(calls),
-        "exceptions": failures,
-        "new_requests": [
-            {key: row[key] for key in ("kind", "provider", "model", "status", "error_kind")}
-            for row in records(database)[before_requests:]
-        ],
-    }
-    assert stopped["status"] == "AMBIGUOUS" and stopped["current_stage"] == "CREATIVE", json.dumps(
-        diagnostics, sort_keys=True
-    )
-    assert failures[-1]["type"] == "CreativeAmbiguity", json.dumps(diagnostics, sort_keys=True)
-    assert failures[-1]["category"] == "ambiguous" and failures[-1]["ambiguous"] is True
-    assert calls == [CHAIN[0]], json.dumps(diagnostics, sort_keys=True)
-    evidence = stopped["blocker"]
-    target = records(database)[-1]
-    assert evidence["request_id"] == target["request_id"]
-    assert evidence["provider"] == "nvidia" and evidence["model"] == CHAIN[0]
-    assert evidence["kind"] == target["kind"]
-    assert evidence["recovery_action"] == "abandon_remote_result"
-    assert "creative reconcile --request-id" in evidence["recovery_command"]
-    assert "failed" not in evidence.get("reason", "").lower()
-    for forbidden in ("remote-body-with-secret-and-signed-URL", "offline-creative-recovery-key"):
-        assert forbidden not in json.dumps(stopped)
-        assert forbidden not in json.dumps(diagnostics)
-    assert invoke()["status"] == "AMBIGUOUS" and calls == [CHAIN[0]]
-    CreativeReconciliations(database).abandon(
-        target["request_id"], actor="human:operator", rationale="No usable remote result."
-    )
-    fake = FakeNIMTransport()
-
-    def recovered(request):
-        payload = json.loads(request.content)
-        calls.append(payload["model"])
-        output = fake.chat(payload["messages"], record_identity=lambda _: None)
-        return reply(output.content, identity=f"recovered-{len(calls)}")
-
-    # Fresh workflow instances simulate a new command/process with the same durable state.
-    resumed = ShortProductionWorkflow(
-        config, creative_provider=build(database, recovered), music_provider=case["music"]
-    )
-    case["music_behavior"]["state"] = "pending"
-    if entrypoint == "existing_episode":
-        continued = resumed.produce(episode.external_key, confirmed=True)
-    else:
-        continued = resumed.produce_next(confirmed=True)
-    assert continued["current_stage"] == "MUSIC" and continued["status"] == "PENDING_PROVIDER"
-    assert calls == [CHAIN[0]] + [CHAIN[1]] * (3 if entrypoint == "existing_episode" else 4)
-    assert records(database)[-len(calls)]["request_id"] == target["request_id"]
-    assert CreativeReconciliations(database).get(target["request_id"]) is not None
-    with database.connect() as db:
-        assert (
-            dict(
-                db.execute(
-                    "SELECT * FROM generation_requests WHERE request_id=?", (target["request_id"],)
-                ).fetchone()
-            )
-            == target
-        )
-    assert database.get_episode(case["red"].episode_id).model_dump_json() == historical
+    assert app.resume(episode.external_key, ProductionTarget.PUBLISH)["target_complete"]

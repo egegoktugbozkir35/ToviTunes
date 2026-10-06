@@ -13,13 +13,14 @@ from tovitunes.config import CreativeLLMConfig, CreativeTopicsConfig, RuntimeCon
 from tovitunes.creative import prompts
 from tovitunes.creative.fake import FakeNIMTransport
 from tovitunes.creative.learning import TopicCandidate, TopicPool
-from tovitunes.creative.models import CreativeSubjectCandidate, CreativeSubjectPool
+from tovitunes.creative.models import CreativeSubjectCandidate
 from tovitunes.creative.nvidia import NvidiaNIMClient
 from tovitunes.creative.provider import (
     DurableStructuredGenerator,
     ProviderError,
     StructuredOutputError,
 )
+from tovitunes.creative.service import CreativeService, eligibility
 from tovitunes.creative.validation import (
     treatment,
     validate_episode_spec,
@@ -27,10 +28,9 @@ from tovitunes.creative.validation import (
     validate_music,
     validate_subject,
 )
-from tovitunes.creative.workflow import CreativeWorkflow, eligibility
 from tovitunes.domain.episode import Episode
+from tovitunes.errors import StateError
 from tovitunes.persistence.db import Database
-from tovitunes.persistence.leases import LeaseHeld
 from tovitunes.pipeline.creative import CreativeDraftService, FakeDraftGenerator
 
 
@@ -47,8 +47,11 @@ def workflow(tmp_path, catalog, brand_root, monkeypatch):
     database = Database(config.database_path)
     database.migrate()
     fake = FakeNIMTransport()
-    return CreativeWorkflow(
-        config, DurableStructuredGenerator(database, fake), catalog=catalog
+    return CreativeService(
+        config,
+        DurableStructuredGenerator(database, fake),
+        catalog=catalog,
+        assert_owner=lambda: None,
     ), fake
 
 
@@ -69,7 +72,7 @@ def candidate(**updates):
 
 def test_end_to_end_generates_pinned_selected_creative_only(workflow):
     flow, fake = workflow
-    result = flow.generate_next()
+    result = flow.prepare()
     assert result["episode_key"].startswith("big-and-small-")
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
     episode = flow.database.get_episode(result["episode_id"])
@@ -128,7 +131,7 @@ def test_live_cli_contract_through_mock_nim_creates_nvidia_provenance(
     transport = NvidiaNIMClient(
         flow.config.creative_llm, client=httpx.Client(transport=httpx.MockTransport(handler))
     )
-    monkeypatch.setattr("tovitunes.cli.NvidiaNIMClient", lambda config: transport)
+    monkeypatch.setattr("tovitunes.creative.factory.NvidiaNIMClient", lambda config: transport)
     config_file = flow.config.database_path.parent / "cli-config.yaml"
     config_file.write_text(
         f"database_path: {flow.config.database_path.as_posix()}\n"
@@ -149,9 +152,9 @@ def test_live_cli_contract_through_mock_nim_creates_nvidia_provenance(
 
 def test_same_run_and_episode_resume_make_no_more_calls(workflow):
     flow, fake = workflow
-    first = flow.generate_next()
-    second = flow.generate_next(run_id=first["run_id"])
-    third = flow.generate_next(episode_key=first["episode_key"])
+    first = flow.prepare()
+    second = flow.prepare(run_id=first["run_id"])
+    third = flow.prepare(episode_key=first["episode_key"])
     assert len(fake.calls) == 4
     assert second["episode_spec_artifact_id"] == third["episode_spec_artifact_id"]
     assert all(v == 0 for v in second["provider_calls"].values())
@@ -179,10 +182,10 @@ def test_interrupted_after_selected_stage_resumes_only_missing_work(
 
     monkeypatch.setattr(flow.provider, "generate", interrupted)
     with pytest.raises(KeyboardInterrupt):
-        flow.generate_next()
+        flow.prepare()
     before = len(fake.calls)
     monkeypatch.setattr(flow.provider, "generate", original_generate)
-    flow.generate_next()
+    flow.prepare()
     assert fake.calls[before:] == expected
 
 
@@ -197,10 +200,10 @@ def test_crash_after_remote_receipt_before_artifact_ingest_reuses_it(workflow, m
 
     monkeypatch.setattr(flow.store, "ingest", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        flow.generate_next()
+        flow.prepare()
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec"]
     monkeypatch.setattr(flow.store, "ingest", original)
-    flow.generate_next()
+    flow.prepare()
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
 
@@ -217,10 +220,10 @@ def test_crash_after_ingest_before_selection_reuses_same_artifact(workflow, monk
 
     monkeypatch.setattr(CreativeDraftService, "select_structural", interrupt)
     with pytest.raises(KeyboardInterrupt):
-        flow.generate_next()
+        flow.prepare()
     lyric_id = observed[-1]
     monkeypatch.setattr(CreativeDraftService, "select_structural", original)
-    result = flow.generate_next()
+    result = flow.prepare()
     assert result["lyrics_artifact_id"] == lyric_id and len(fake.calls) == 4
 
 
@@ -233,13 +236,13 @@ def test_crash_after_subject_reservation_recovers_same_episode_without_subject_p
         flow.database, "create_episode", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
     )
     with pytest.raises(KeyboardInterrupt):
-        flow.generate_next()
+        flow.prepare()
     with flow.database.connect() as db:
         reserved = json.loads(
             db.execute("SELECT reserved_episode_json FROM creative_runs").fetchone()[0]
         )
     monkeypatch.setattr(flow.database, "create_episode", original)
-    result = flow.generate_next()
+    result = flow.prepare()
     assert result["episode_id"] == reserved["episode_id"] and fake.calls.count("TopicPool") == 1
 
 
@@ -248,7 +251,7 @@ def test_ambiguous_subject_is_never_restarted(workflow):
     fake.responses["TopicPool"] = [ProviderError("timeout", ambiguous=True)]
     for _ in range(2):
         with pytest.raises(ProviderError):
-            flow.generate_next()
+            flow.prepare()
     assert fake.calls == ["TopicPool"]
     with flow.database.connect() as db:
         assert db.execute("SELECT count(*) FROM episodes").fetchone()[0] == 0
@@ -269,19 +272,9 @@ def test_curriculum_exhaustion_does_not_limit_new_editorial_subjects(workflow):
         flow.database.create_episode(
             flow.catalog, Episode.create(flow.catalog, c.concept_id, c.concept_id)
         )
-    result = flow.generate_next()
+    result = flow.prepare()
     assert flow.database.get_episode(result["episode_id"]).subject == "Big and small"
     assert fake.calls[0] == "TopicPool"
-
-
-def test_invalid_rank_one_skipped_without_another_pool_call():
-    pool = CreativeSubjectPool(
-        candidates=(candidate(concept_id="unknown"), candidate(), candidate())
-    )
-    chosen = CreativeWorkflow._choose(
-        pool, {"eligible_concepts": [{"concept_id": "blue"}], "history": []}
-    )
-    assert chosen.concept_id == "blue" and chosen == pool.candidates[1]
 
 
 @pytest.mark.parametrize(
@@ -321,8 +314,8 @@ def test_lexical_paraphrase_does_not_evade_treatment_check():
 
 def test_next_fresh_run_excludes_previous_selected_concept(workflow):
     flow, fake = workflow
-    first = flow.generate_next()
-    second = flow.generate_next()
+    first = flow.prepare()
+    second = flow.prepare()
     assert first["episode_id"] != second["episode_id"]
     assert flow.database.get_episode(second["episode_id"]).subject == "Name a leaf"
     assert fake.calls.count("TopicPool") == 2
@@ -344,7 +337,7 @@ def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monke
         return result
 
     monkeypatch.setattr(fake, "chat", chat)
-    result = flow.generate_next()
+    result = flow.prepare()
     assert fake.calls.count("EpisodeSpec") == 2 and result["provider_calls"]["repair"] == 1
     with flow.database.connect() as db:
         saved = db.execute(
@@ -362,7 +355,7 @@ def test_invalid_episode_spec_repair_remains_failed_closed(workflow):
     fake.responses["EpisodeSpec"] = ["{}", "{}"]
     for _ in range(2):
         with pytest.raises(StructuredOutputError):
-            flow.generate_next()
+            flow.prepare()
     assert fake.calls == ["TopicPool", "EpisodeSpec", "EpisodeSpec"]
 
 
@@ -403,7 +396,7 @@ def test_all_bad_candidates_get_bounded_durable_subject_rounds(workflow):
     fake.responses["TopicPool"] = [pool.model_dump_json()] * 3
     for _ in range(2):
         with pytest.raises(ValueError, match="TOPIC_POOLS_EXHAUSTED"):
-            flow.generate_next()
+            flow.prepare()
     assert fake.calls == ["TopicPool"] * 3
 
 
@@ -492,15 +485,15 @@ def test_music_brief_pins_duration_and_moderate_tempo(workflow):
 
 def test_curriculum_machine_approval_does_not_overwrite_human_rejection(workflow):
     flow, _ = workflow
-    result = flow.generate_next()
+    result = flow.prepare()
     service = CreativeDraftService(flow.store, flow.generated, FakeDraftGenerator())
     service.review_objective(result["episode_id"], "rejected", actor="human", reason="hold")
     with pytest.raises(PermissionError, match="escalation"):
-        flow.generate_next(run_id=result["run_id"])
+        flow.prepare(run_id=result["run_id"])
     service.review_objective(result["episode_id"], "approved", actor="human")
     service.review_candidate(result["lyrics_artifact_id"], "rejected", actor="human", reason="hold")
     with pytest.raises(PermissionError, match="escalation"):
-        flow.generate_next(run_id=result["run_id"])
+        flow.prepare(run_id=result["run_id"])
 
 
 def test_modified_curriculum_cannot_be_machine_approved(workflow):
@@ -514,28 +507,25 @@ def test_modified_curriculum_cannot_be_machine_approved(workflow):
         ),
     )
     with pytest.raises(PermissionError, match="committed"):
-        flow.generate_next(episode_key=legacy.external_key)
+        flow.prepare(episode_key=legacy.external_key)
     assert fake.calls == []
 
 
-def test_lease_prevents_concurrent_planning(workflow):
+def test_historical_subject_planning_cannot_start_new_generation(workflow):
     flow, fake = workflow
-    lease = flow.leases.acquire("creative-planning:tovitunes", duration_seconds=1800)
-    try:
-        with pytest.raises(LeaseHeld):
-            flow.generate_next()
-    finally:
-        flow.leases.release(lease)
-    assert fake.calls == []
-
-
-def test_subject_key_ordinal_handles_existing_keys_without_hardcoding_category(workflow):
-    flow, _ = workflow
-    ep = Episode.create(flow.catalog, "red", "colors-blue-001")
-    flow.database.create_episode(flow.catalog, ep)
     row = flow._new_run()
-    episode = flow._reserve(row, candidate())
-    assert episode.external_key == "colors-blue-002"
+    with closing(flow.database.connect()) as db:
+        db.execute(
+            "UPDATE creative_runs SET prompt_version=? WHERE run_id=?",
+            (prompts.SUBJECT_PROMPT, row["run_id"]),
+        )
+        db.commit()
+        before = [tuple(r) for r in db.execute("SELECT * FROM creative_runs")]
+    with pytest.raises(StateError, match="read-only"):
+        flow.prepare(run_id=row["run_id"])
+    assert fake.calls == []
+    with closing(flow.database.connect()) as db:
+        assert [tuple(r) for r in db.execute("SELECT * FROM creative_runs")] == before
 
 
 def test_pure_prompts_include_version_pins_safety_and_preschool_rules():

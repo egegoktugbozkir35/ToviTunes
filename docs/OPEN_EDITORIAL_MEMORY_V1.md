@@ -1,8 +1,8 @@
 # Open editorial memory V1
 
 ```text
-ShortProductionWorkflow.produce_next()
-  -> CreativeWorkflow.generate_next()
+Orchestrator.generate(target)
+  -> CreativeService.prepare()
   -> TopicPlanner (existing durable requests and PR #37 fallback)
   -> selected persisted LearningBrief -> generic Episode
   -> existing EpisodeSpec -> LyricsSpec -> MusicSpec
@@ -63,7 +63,7 @@ held and archived ideas remain excluded. A crash after selection reuses the pers
 a crash after episode reservation reuses the same UUID/key.
 
 TopicMemory projects all generated selections and legacy episodes from their persisted
-objectives/vocabulary, retained subject treatments where available, production_stage_events
+objectives/vocabulary, retained subject treatments where available, selected immutable production artifacts
 and publication_attempts. Prompt history is compact subject/domain/objective/vocabulary,
 premise/hook/examples/working-title/status data. No binary data, artifact records, provenance
 or embeddings enter the topic prompt. Recent-history count bounds only the prompt;

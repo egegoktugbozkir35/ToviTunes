@@ -1,68 +1,29 @@
 # ToviTunes
 
-ToviTunes is a local production studio for preschool learning videos. The **local WebUI** is the recommended operator entry point. It reads the same episodes, selected immutable assets, approvals, rights decisions, render manifests, and SQLite database as the Python pipeline.
+ToviTunes is a local production studio for preschool learning videos. Its application architecture specializes [ollama-mpt-youtube](https://github.com/egegoktugbozkir35/ollama-mpt-youtube/tree/1b82232ed794ccf611cb939ff95a1a52f3b06f52).
 
-## Start the operator studio
+Double-click **start-ui.bat** on Windows. Studio opens at **http://127.0.0.1:8766**, using `config.yaml` or `config.example.yaml`. Settings shows the installed ACE-Step/ComfyUI services and any startup problem. Ollama is optional.
 
-From the repository root on Windows:
+Generate Draft stops after the durable topic, learning brief, episode, lyrics and music direction. Generate + Render continues through ACE-Step, audio analysis, Qwen assets, Storyboard V2, MP4, QA and metadata. Generate, Render & Publish also applies release gates and publishes to the configured channel. Videos resumes a saved episode through the same application API. A restart reconstructs work from SQLite facts; queue/progress history is observational.
 
-```powershell
-uv sync --python 3.11 --locked --extra web --extra youtube --extra video-render
-Copy-Item config.example.yaml config.yaml
-.\start-ui.bat
-```
+The sample config disables YouTube. Configure the expected channel and OAuth client, then connect in Settings. A Publish target authorizes publication subject to configured visibility, rights and human-review gates. Creative ambiguity advances to the next model without resending. An uncertain YouTube upload remains blocked until its remote outcome is reconciled.
 
-Open **http://127.0.0.1:8766**. The batch script uses `config.yaml` when present, and `config.example.yaml` otherwise. The Python equivalent is:
-
-```powershell
-uv run --locked --extra web --extra youtube --extra video-render python -m tovitunes.web --config config.yaml
-```
-
-The sample config keeps YouTube disabled. Set `expected_youtube_channel_id`, enable `publication.youtube.enabled`, and supply a local installed-app OAuth client secret only when you are ready to connect. The UI retains the existing private-test and gated public-promotion actions. See [WebUI and YouTube V1](docs/WEBUI_YOUTUBE_V1.md) for setup, routes, preflight policy, and recovery behavior.
-
-The WebUI now includes **Generate Next Short** and episode-level **Resume Production**, backed by the same durable application service as `production auto-next` / `production produce`. Provider generation requires explicit confirmation. Automatic publication defaults to disabled; optional private/public publication uses the existing release gates and ledger. See [Autonomous Short pipeline V1](docs/AUTONOMOUS_SHORT_PIPELINE_V1.md) for commands, configuration, artifact contracts and crash recovery.
-
-## Development and production reference
-
-The first Colors Red pilot can be rendered locally from the selected production
-artifact graph. See [production rendering](docs/PRODUCTION_RENDER.md) for the
-MoviePy extra, system FFmpeg requirements, CLI, deterministic QA, and review exports.
-
-Production handoff and renderer-facing storyboard contracts:
-[Production storyboard V1](docs/PRODUCTION_STORYBOARD.md).
-
-The selected pilot can be rendered and reviewed locally. Private YouTube test uploads require an explicit operator action and a passing release preflight. Public publication uses the existing gated same-video promotion service.
-
-## Create the next creative episode
-
-New autonomous episodes use an open Creative Director topic planner and persistent editorial
-memory. The Director invents a preschool lesson and working title; deterministic policy and
-history checks persist an immutable LearningBrief before expensive production. Future subjects
-need no curriculum YAML additions. `creative generate-next --live` creates the next creative
-episode. `creative doctor` and `creative history` inspect settings and memory without provider
-calls. [Open editorial memory](docs/OPEN_EDITORIAL_MEMORY_V1.md) documents schemas, duplicate
-rules, optional embeddings, donor adaptation, migrations and legacy Colors compatibility.
-
-## Create a legacy Colors episode manually
-
-After `uv sync --python 3.11 --locked --extra dev`, run this from the repository root in Python:
+The complete [architecture migration report](docs/MPT_ARCHITECTURE_MIGRATION.md) includes the old-to-new map, table authority, deletion measurements, generate/resume sequences, compatibility and validation.
 
 ```python
 from pathlib import Path
+from tovitunes.config import load_config
+from tovitunes.orchestrator import build_orchestrator
+from tovitunes.pipeline.targets import ProductionTarget
 
-from tovitunes.catalog import load_brand
-from tovitunes.domain.episode import Episode
-from tovitunes.persistence.db import Database
-
-catalog = load_brand(Path("brands/tovitunes"))
-episode = Episode.create(catalog, "red", "colors-red")
-db = Database(Path("data/tovitunes.db"))
-db.migrate()
-db.create_episode(catalog, episode)
-print(db.get_episode(episode.episode_id).model_dump_json(indent=2))
+# Resolve config once; production dependencies are built only when needed.
+app = build_orchestrator(load_config(Path("config.yaml")))
+draft = app.generate(ProductionTarget.DRAFT)
+render = app.resume(draft["episode_key"], ProductionTarget.RENDER)
 ```
 
-See [the architecture proposal](docs/ARCHITECTURE_PROPOSAL.md), [artifact store guide](docs/ARTIFACT_STORE.md), [continuation guide](docs/CONTINUATION.md), [creative draft guide](docs/CREATIVE.md), [offline music benchmark rubric](docs/MUSIC_BENCHMARK.md), [character pack intake](docs/CHARACTER_PACK_INTAKE.md), [offline visual benchmark protocol](docs/VISUAL_BENCHMARK.md), and [development guide](docs/DEVELOPMENT.md) for scope and verification commands.
+Advanced CLI aliases delegate to these same two operations. Provider-free commands include `creative doctor`, `creative history`, `creative request-status` and production dry-run planning. The former creative reconciliation command was removed; PR40 decisions remain read-only audit evidence.
 
-For local validation, install the `dev`, `web`, `youtube`, and `video-render` extras, then run `uv run ruff check .`, `uv run mypy src`, and `uv run pytest -q`.
+Domain references: [creative contracts](docs/CREATIVE.md), [editorial memory](docs/OPEN_EDITORIAL_MEMORY_V1.md), [artifact storage](docs/ARTIFACT_STORE.md), [production rendering](docs/PRODUCTION_RENDER.md), [historical storyboard data](docs/PRODUCTION_STORYBOARD.md), [release gates](docs/PUBLIC_RELEASE_V1.md), [music benchmark](docs/MUSIC_BENCHMARK.md), [character intake](docs/CHARACTER_PACK_INTAKE.md), [visual benchmark](docs/VISUAL_BENCHMARK.md), and [development](docs/DEVELOPMENT.md).
 
+Install `dev`, `web`, `youtube` and `video-render` extras with `uv sync --locked`. Validate with `uv run --locked ruff check .`, `uv run --locked mypy src` and `uv run --locked pytest -q`. Windows CI uses system FFmpeg and the same offline suite.

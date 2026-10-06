@@ -58,7 +58,7 @@ def finished(workflow):
     flow, fake = workflow
     legacy = Episode.create(flow.catalog, "red", "colors-red-001")
     flow.database.create_episode(flow.catalog, legacy)
-    result = flow.generate_next(episode_key=legacy.external_key)
+    result = flow.prepare(episode_key=legacy.external_key)
     episode = flow.database.get_episode(result["episode_id"])
     lyrics = flow.store.read_json(result["lyrics_artifact_id"])
     texts = [line["text"] for line in lyrics["lines"]]
@@ -146,7 +146,7 @@ def finished(workflow):
 
 def test_metadata_requires_selected_final_render_before_provider(workflow):
     flow, fake = workflow
-    result = flow.generate_next()
+    result = flow.prepare()
     with pytest.raises(ValueError, match="selected final_render"):
         MetadataWriter(flow).generate(result["episode_key"])
     assert len(fake.calls) == 4

@@ -1,52 +1,246 @@
-const $ = id => document.getElementById(id);
-const state = { selected: null, system: null, jobs: [] };
-function el(tag, cls, text) { const node=document.createElement(tag); if(cls) node.className=cls; if(text!==undefined && text!==null) node.textContent=String(text); return node; }
-function clear(node){node.replaceChildren();return node;}
-function field(box,label,value){const row=el('div','field');row.append(el('span','',label),el('span','',value ?? '—'));box.append(row);}
-function badge(value){return el('span','badge '+String(value).replaceAll(' ','-'),value);}
-function notice(message){$('notice').textContent=message||'';}
-async function api(path,options){const response=await fetch(path,options);const body=await response.json();if(!response.ok)throw new Error(body.detail||'Request failed');return body;}
-async function action(path,message){if(message&&!window.confirm(message))return;try{const job=await api(path,{method:'POST'});notice(`Started ${job.operation}. Watch Activity for the result.`);await refreshJobs();}catch(error){notice(error.message);}}
-function health(label,value,good){const card=el('div','health '+(good===true?'good':good===false?'bad':''));card.append(el('div','label',label),el('div','value',value));return card;}
-function renderSystem(data){state.system=data;const box=clear($('system'));const assets=data.selected_visual_assets||{};const pack=(data.character_pack||[]).map(p=>`${p.revision_id} (${p.readiness})`).join(', ')||'Unavailable';[
- ['Database',data.database_present?'Ready · '+data.database_path:'Unavailable',data.database_present],
- ['Brand / curriculum',`${data.brand_revision} / ${data.curriculum_revision}`,true],
- ['Creative',data.nvidia_key_configured?'NVIDIA key configured':'NVIDIA key missing',data.nvidia_key_configured],
- ['Next lesson eligibility',data.creative_eligibility?`${data.creative_eligibility.eligible_concepts.length} unused concepts · ${data.creative_eligibility.eligible_concepts.map(c=>c.concept_id).join(', ')||'curriculum complete'}`:'Unavailable',!!data.creative_eligibility?.eligible_concepts.length],
- ['FFmpeg',data.ffmpeg_available&&data.ffprobe_available?'FFmpeg + FFprobe ready':'Unavailable',data.ffmpeg_available&&data.ffprobe_available],
- ['Tovi pack',pack,(data.character_pack||[]).every(p=>p.readiness==='approved')],
- ['Environment',assets.environment_set?.[0]?.artifact_id||'No selection',!!assets.environment_set?.length],
- ['Lesson objects',assets.lesson_object_manifest?.[0]?.artifact_id||'No selection',!!assets.lesson_object_manifest?.length],
- ['YouTube',data.youtube_enabled?`Enabled · credentials ${data.youtube_credentials_present?'present':'missing'} · token ${data.youtube_token_present?'present':'missing'}`:'Disabled',data.youtube_enabled&&data.youtube_token_present],
- ['YouTube channel',data.connected_channel?`${data.connected_channel.title} · ${data.connected_channel.channel_id} · ${data.connected_channel.matches_expected?'MATCH':'MISMATCH'}`:(data.youtube_connection_error||'Not connected'),data.connected_channel?.matches_expected],
-].forEach(v=>box.append(health(...v)));$('last-refresh').textContent=new Date().toLocaleTimeString();}
-function renderEpisodes(items){const box=clear($('episode-list'));$('episode-count').textContent=`${items.length} total`;if(!items.length)box.append(el('p','muted','No episodes in this database yet.'));items.forEach(item=>{const button=el('button','episode-button'+(state.selected===item.external_key?' active':''));button.append(el('strong','',item.external_key),el('small','',`${item.concept_id} · ${item.lifecycle}`));button.onclick=()=>openEpisode(item.external_key);box.append(button);});}
-function stageCard(stage){const card=el('div','stage');card.append(el('strong','',({CREATIVE:'Creative',MUSIC:'Music',AUDIO_ANALYSIS:'Audio QA',VISUAL_PLAN:'Visual Plan',VISUAL_ASSETS:'Images',STORYBOARD:'Storyboard',RENDER:'Render',MEDIA_QA:'Media QA',METADATA:'Metadata',RELEASE:'Release',YOUTUBE:'YouTube'})[stage.name]||stage.name),badge(stage.status),el('p','',stage.reason));if(stage.artifacts?.length)card.append(el('code','',stage.artifacts.map(x=>x.artifact_id.slice(0,8)).join(', ')));return card;}
-function renderDetail(data){const root=clear($('episode-detail'));root.className='';const episode=data.episode;const head=el('div','detail-head');const title=el('div');title.append(el('h2','',episode.external_key),el('p','',`${episode.concept_id} · ${episode.lifecycle}`));head.append(title,badge(data.preflight.render_ready?'READY':'BLOCKED'));root.append(head);const stages=el('div','stage-list');(data.production?.historical?data.stages:(data.production?.stages||data.stages)).forEach(s=>stages.append(stageCard({...s,reason:s.reason||s.evidence?.reason||(s.name==="RELEASE"?"Release checks and current rights/review evidence":s.evidence?.missing_assets?.length?"Missing assets: "+s.evidence.missing_assets.join(", "):"Durable production evidence")})));root.append(stages);const panels=el('div','panels');
- const preview=el('div','panel full');preview.append(el('h3','','Final render'));if(data.video_url){const video=el('video');video.controls=true;video.preload='metadata';video.src=data.video_url;preview.append(video);}else preview.append(el('p','muted','No trusted selected MP4 is available for preview.'));const summary=data.manifest_summary||{};field(preview,'Duration',summary.duration_seconds?`${summary.duration_seconds}s`:'—');field(preview,'Resolution',summary.canvas?.join(' × '));field(preview,'Renderer',summary.renderer_version);field(preview,'Manifest',data.selected.render_manifest?.[0]?.artifact_id);field(preview,'Audio master',summary.audio_master_artifact_id);panels.append(preview);
- field(preview,'Audio SHA',data.selected.audio_master?.[0]?.sha256);if(data.render_manifest){const details=el('details','manifest-details');details.append(el('summary','','Inspect render manifest'),el('pre','',JSON.stringify(data.render_manifest,null,2)));preview.append(details);}
- const review=el('div','panel');review.append(el('h3','','Visual review'));const scene=data.selected.scene_image?.[0];if(scene){const image=el('img','review-image');image.src=`/api/media/${scene.artifact_id}`;image.alt=`Selected ${scene.slot_key} scene image`;review.append(image);field(review,'Scene',scene.slot_key);field(review,'SHA',scene.sha256);}else review.append(el('p','muted','No persisted review image is selected.'));panels.append(review);
- const assets=el('div','panel');assets.append(el('h3','','Selected visual assets'));field(assets,'Environment',data.render_manifest?.environment_set_artifact_id||data.brand_assets.environment_set?.[0]?.artifact_id);field(assets,'Visual plan',data.selected.episode_visual_plan?.[0]?.artifact_id||data.brand_assets.lesson_object_manifest?.[0]?.artifact_id);(data.selected.visual_asset?.length?data.selected.visual_asset:(data.brand_assets.lesson_object||[])).forEach(item=>field(assets,item.slot_key,item.artifact_id));panels.append(assets);
- const metadata=el('div','panel');metadata.append(el('h3','','Publication metadata'));const meta=data.publication_metadata;field(metadata,'Status',meta?'SELECTED':'BLOCKED');field(metadata,'Artifact ID',data.selected.publication_metadata?.[0]?.artifact_id);field(metadata,'Title',meta?.youtube_title);field(metadata,'Description',meta?.youtube_description);field(metadata,'Tags',meta?.tags?.join(', '));field(metadata,'Final render dependency',meta?.final_render_artifact_id);const generate=el('button','button secondary','Generate Metadata');generate.disabled=!!meta;generate.onclick=()=>action(`/api/episodes/${episode.external_key}/publication-metadata`);metadata.append(generate);panels.append(metadata);
- const release=el('div','panel');release.append(el('h3','','Release preflight'));const pf=data.preflight;field(release,'Technical',pf.render_ready?'READY':'BLOCKED');field(release,'Rights',pf.checks.filter(c=>c.scope==='rights_public').every(c=>c.passed)?'READY':'BLOCKED');field(release,'Metadata',pf.metadata_artifact_id&&pf.checks.filter(c=>c.scope==='private').every(c=>c.passed)?'READY':'BLOCKED');field(release,'Private test',pf.private_test_upload_allowed?'ALLOWED':'BLOCKED');field(release,'Public release',pf.public_release_allowed?'CLEARED':'BLOCKED');const checks=el('div','checks');pf.checks.filter(c=>!c.passed).forEach(c=>{const row=el('div','check fail');row.append(el('strong','',`${c.scope}: ${c.name}`),el('small','',c.reason+(c.artifact_id?` · ${c.artifact_id}`:'')));checks.append(row);});if(!checks.children.length)checks.append(el('p','muted','All current checks passed.'));release.append(checks);const preflight=el('button','button secondary','Run preflight');preflight.onclick=()=>openEpisode(episode.external_key);release.append(preflight);panels.append(release);
- const yt=el('div','panel full');yt.append(el('h3','','YouTube · private test'));const config=state.system||{};field(yt,'Credentials',config.youtube_credentials_present?'Present':'Missing');field(yt,'OAuth token',config.youtube_token_present?'Present':'Missing');field(yt,'Expected channel',config.expected_channel_id);const pub=data.publication;if(pub){field(yt,'Attempt',pub.outcome);field(yt,'Video ID',pub.youtube_video_id);field(yt,'Privacy',pub.privacy_status);field(yt,'Completed',pub.completed_at);if(pub.operator_action)yt.append(el('p','warning',pub.operator_action));if(pub.watch_url){const link=el('a','', 'Watch on YouTube');link.href=pub.watch_url;link.target='_blank';link.rel='noopener noreferrer';yt.append(link);}}else yt.append(el('p','muted','No publication attempt recorded.'));const channel=el('div','channel-status');yt.append(channel);const actions=el('div','actions');const connect=el('button','button secondary','Connect YouTube');connect.disabled=!config.youtube_enabled;connect.onclick=()=>action('/api/youtube/connect');const check=el('button','button secondary','Refresh channel status');check.onclick=async()=>{try{const result=await api('/api/youtube/status?refresh=true');clear(channel);if(result.connected_channel){const c=result.connected_channel;field(channel,'Connected channel',`${c.title} · ${c.channel_id}`);field(channel,'Expected match',c.matches_expected?'YES':'MISMATCH');}else field(channel,'Connection',result.connection_error||'Not connected');}catch(error){notice(error.message);}};const upload=el('button','button warn','Upload PRIVATE test');upload.disabled=!data.preflight.private_test_upload_allowed||!config.youtube_enabled||!!(pub&&['succeeded','remote_started','ambiguous'].includes(pub.outcome));upload.onclick=()=>action(`/api/episodes/${episode.external_key}/youtube/upload-private`,'Upload this render to the expected YouTube channel as PRIVATE? This is a remote test upload and does not clear release rights.');actions.append(connect,check,upload);yt.append(actions);panels.append(yt);
- if(pub?.outcome==='succeeded'){const remote=el('div','remote-status');const refreshVideo=el('button','button secondary','Refresh video status');const publish=el('button','button warn','Publish Public');publish.disabled=true;publish.hidden=!data.preflight.public_release_allowed||pub.privacy_status!=='private'||!!(pub.public_promotion&&pub.public_promotion.outcome!=='terminal_failure');publish.onclick=async()=>{if(!window.confirm('Publish this ToviTunes Short publicly on YouTube? This changes the existing private video to public.'))return;try{const result=await api(`/api/episodes/${episode.external_key}/youtube/publish`,{method:'POST'});notice(`Public promotion ${result.outcome}.`);await openEpisode(episode.external_key);}catch(error){notice(error.message);}};refreshVideo.onclick=async()=>{try{const result=await api(`/api/episodes/${episode.external_key}/youtube/video-status`);clear(remote);['title','channel_id','privacy','upload_status','processing_status','made_for_kids'].forEach(key=>field(remote,key.replaceAll('_',' '),result[key]));publish.disabled=!(data.preflight.public_release_allowed&&result.available&&result.video_id===pub.youtube_video_id&&result.channel_id===config.expected_channel_id&&result.privacy==='private'&&result.upload_status==='processed'&&result.processing_status==='succeeded'&&result.self_declared_made_for_kids===true&&result.contains_synthetic_media===config.youtube_contains_synthetic_media);}catch(error){notice(error.message);}};actions.append(refreshVideo,publish);yt.append(remote);}
- const render=el('div','panel full');render.append(el('h3','','Production action'),el('p','', 'Render the selected storyboard through the existing production renderer.'));const renderButton=el('button','button secondary','Render selected episode');renderButton.onclick=()=>action(`/api/episodes/${episode.external_key}/render`);const resumeButton=el('button','button','Resume Production');resumeButton.onclick=()=>productionAction(episode.external_key);render.append(resumeButton,renderButton);panels.append(render);root.append(panels);}
-async function openEpisode(key){state.selected=key;try{const data=await api(`/api/episodes/${key}`);renderDetail(data);await refreshEpisodes();notice('');}catch(error){notice(error.message);}}
-async function refreshEpisodes(){renderEpisodes(await api('/api/episodes'));}
-async function refreshJobs(){try{state.jobs=await api('/api/jobs');const box=clear($('job-list'));if(!state.jobs.length)box.append(el('p','muted','No jobs yet.'));state.jobs.slice(0,12).forEach(job=>{const row=el('div','job');row.append(badge(job.status.toUpperCase()),el('span','',`${job.operation}${job.episode_key?' · '+job.episode_key:''}`),el('span','muted',job.error||job.progress));box.append(row);});}catch(error){notice(error.message);}}
-async function refresh(){try{const [system,items]=await Promise.all([api('/api/system'),api('/api/episodes')]);renderSystem(system);renderEpisodes(items);await refreshJobs();if(state.selected)await openEpisode(state.selected);}catch(error){notice(error.message);}}
-$('refresh').onclick=refresh;refresh();setInterval(async()=>{const had=state.jobs.some(j=>['queued','running'].includes(j.status));await refreshJobs();const has=state.jobs.some(j=>['queued','running'].includes(j.status));if(had&&!has){await refreshEpisodes();const finished=state.jobs.find(j=>j.operation==="short_production"&&j.episode_key);if(finished)await openEpisode(finished.episode_key);else if(state.selected)await openEpisode(state.selected);}else if(has&&state.selected)await openEpisode(state.selected);},2000);
-
-async function productionAction(key=null){
- try{
-  const plan=await api('/api/production/plan'+(key?'?episode_key='+encodeURIComponent(key):''));
-  const publication=plan.auto_publish?`Automatic YouTube publication is ENABLED (${plan.publish_visibility}) after release gates pass.`:'Automatic publication is disabled. This produces a local preview.';
-  if(!window.confirm(`Allow Creative Director, ACE-Step and Qwen provider generation? ${publication} Existing valid stages will be reused.`))return;
-  const path=key?`/api/episodes/${encodeURIComponent(key)}/produce`:'/api/production/generate-next-short';
-  const job=await api(path+'?confirm_provider_generation=true',{method:'POST'});
-  notice(`Started production (${job.job_id}). Watch Activity for durable stage status.`);
-  await refreshJobs();
- }catch(error){notice(error.message);}
+"use strict";
+// Visual shell and helpers adapted from ollama-mpt-youtube, commit 1b82232.
+const state = {page: "generate", jobs: [], videos: [], system: null, busy: false, expanded: new Set(), outcomes: new Set(), lastJobSignature: "", submitting: false};
+const $ = query => document.querySelector(query);
+const els = {toast: $("#toast")};
+let toastTimer = null;
+const pageMeta = {dashboard:["Production overview","Dashboard"], generate:["Production control","Generate videos"], videos:["Persisted content","Videos"], settings:["Local configuration","Settings"]};
+const labels = {TOPIC:"Choosing lesson", BRIEF:"Learning brief", EPISODE_SPEC:"Writing episode", LYRICS:"Writing lyrics", MUSIC_SPEC:"Music direction", CREATIVE:"Creative Director", MUSIC:"Generating song", AUDIO_ANALYSIS:"Checking audio", VISUAL_PLAN:"Planning visuals", VISUAL_ASSETS:"Generating images", STORYBOARD:"Building storyboard", RENDER:"Encoding video", MEDIA_QA:"Checking video", METADATA:"Writing metadata", RELEASE:"Checking release gates", YOUTUBE:"Publishing to YouTube"};
+const targets = {draft:"Generate Draft", render:"Generate + Render", publish:"Generate, Render & Publish"};
+const terminal = job => !["queued", "running"].includes(job.status);
+const successful = job => ["complete", "succeeded"].includes(job.status);
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
-$('generate-next').onclick=()=>productionAction();
+
+function titleCase(value) {
+  return String(value ?? "unknown").replaceAll("_", " ").replaceAll("-", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? "—"
+    : new Intl.DateTimeFormat(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    }).format(date);
+}
+
+function showToast(message, isError = false) {
+  clearTimeout(toastTimer);
+  els.toast.textContent = message;
+  els.toast.classList.toggle("error", isError);
+  els.toast.hidden = false;
+  toastTimer = setTimeout(() => { els.toast.hidden = true; }, 4500);
+}
+
+async function api(path, options = {}) {
+  const request = { ...options, headers: { ...(options.headers || {}) } };
+  if (request.body && typeof request.body !== "string") {
+    request.headers["Content-Type"] = "application/json";
+    request.body = JSON.stringify(request.body);
+  }
+  const response = await fetch(path, request);
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json") ? await response.json() : null;
+  if (!response.ok) {
+    const detail = payload?.detail;
+    let message = typeof detail === "string" ? detail : `Studio action failed (${response.status})`;
+    if (Array.isArray(detail)) {
+      message = "Check the selected Studio action.";
+    }
+    throw new Error(message);
+  }
+  return payload;
+}
+
+function navigate(viewName) {
+  if (!pageMeta[viewName]) viewName = "generate";
+  state.page = viewName;
+  document.querySelectorAll(".view").forEach(view => { view.hidden = view.dataset.page !== viewName; });
+  document.querySelectorAll(".nav-item").forEach(button => {
+    const active = button.dataset.view === viewName;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-current", active ? "page" : "false");
+  });
+  const [kicker, title] = pageMeta[viewName];
+  $("#page-kicker").textContent = kicker;
+  $("#page-title").textContent = title;
+  if (location.hash !== `#${viewName}`) location.hash = viewName;
+  if (viewName === "dashboard" || viewName === "videos") refreshVideos().catch(error => showToast(error.message, true));
+  if (viewName === "settings") refreshSystem().catch(error => showToast(error.message, true));
+}
+
+function safeMedia(value) { return /^\/api\/media\/[a-zA-Z0-9_-]+$/.test(value || "") ? value : null; }
+function safeWatch(value) { return /^https:\/\/www\.youtube\.com\/watch\?v=[a-zA-Z0-9_-]+$/.test(value || "") ? value : null; }
+function updateActionAvailability() {
+  document.querySelectorAll("[data-create], [data-continue], [data-recover], #youtube-connect").forEach(button => {
+    button.disabled = state.busy || state.submitting;
+  });
+  if (state.system && !state.system.youtube_enabled) $("#youtube-connect").disabled = true;
+}
+
+function jobCard(job, current = false) {
+  const done = successful(job);
+  const steps = job.steps || [];
+  const percent = Math.max(0, Math.min(100, Number(job.progress_percent) || 0));
+  const activeIndex = Math.min(job.completed_steps || 0, Math.max(0, steps.length - 1));
+  const substage = (job.current_substage || "").replace(/_(RUNNING|COMPLETE)$/, "");
+  const detail = labels[substage] || labels[job.current_stage] || "Waiting for production";
+  const diagnostics = job.creative_diagnostics;
+  const attempts = diagnostics?.attempts || [];
+  const recovery = job.recovery_action === "resume_music_task" ? "Resume retained ACE-Step task" : "Retry / Resume";
+  const status = job.stopped ? "stopped" : job.status;
+  const knownStatus = ["running", "queued", "failed", "ambiguous", "interrupted", "pending_provider", "needs_review", "complete", "succeeded"].includes(status) ? status : "neutral";
+  const error = diagnostics?.message || job.error;
+  const timeline = current ? `<ol class="job-steps">${steps.map((step, index) => `<li class="${index < job.completed_steps ? "done" : index === activeIndex && !done ? "current" : ""}">${index < job.completed_steps ? "✓" : index === activeIndex && !done ? "●" : "○"} ${escapeHtml(labels[step] || step)}</li>`).join("")}</ol>` : "";
+  const showDiagnostic = !job.stopped && (error || attempts.length);
+  return `<article class="job-card ${current ? "current" : ""} ${done ? "succeeded" : knownStatus}" data-job="${escapeHtml(job.job_id)}">
+    <header><strong>${escapeHtml(targets[job.target] || titleCase(job.operation))}</strong><span class="badge ${knownStatus}">${escapeHtml(titleCase(status))}</span></header>
+    <p class="job-meta">${escapeHtml(formatDate(job.started_at || job.submitted_at))} · Execution ${Number(job.execution) || 1}</p>
+    ${current ? `<div class="job-progress-summary"><div><div class="job-stage">${done ? "Production complete" : escapeHtml(detail)}</div><p class="job-detail">${done ? "Saved in Videos" : "Work is retained as each stage completes"}</p></div><strong class="job-percent">${percent}%</strong></div><div class="job-progress-track" role="progressbar" aria-label="Whole production progress" aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"><span class="job-progress-fill" style="width:${percent}%"></span></div>${timeline}` : ""}
+    ${showDiagnostic && current ? `<div class="typed-diagnostic" role="status"><strong>${diagnostics?.exhausted ? "Creative model chain exhausted" : job.current_stage === "CREATIVE" && job.error ? "Creative model failed" : diagnostics?.message && !terminal(job) ? "Creative model fallback" : "Production diagnostics"}</strong>${error ? `<p>${escapeHtml(error)}</p>` : ""}${attempts.length ? `<details class="model-diagnostics" ${diagnostics?.exhausted || state.outcomes.has(job.job_id) ? "open" : ""}><summary>Per-model outcomes</summary><ol class="model-outcomes">${attempts.map(item => `<li>${escapeHtml(item.message)}${item.reconciled ? "<br><small>Remote outcome stays ambiguous · operator reconciliation recorded</small>" : ""}<br><small>Fallback ${Number(item.fallback_index) || 0}${item.fallback_reason ? ` · ${escapeHtml(titleCase(item.fallback_reason))}` : ""}</small></li>`).join("")}</ol></details>` : ""}</div>` : ""}
+    ${job.error && !current ? `<p class="job-error">${escapeHtml(job.error)}</p>` : ""}
+    <div class="job-actions">${done && job.target ? `<button class="button" data-navigate="videos">Open Videos →</button>` : ""}${terminal(job) && !done && !job.stopped ? `${job.recovery_action ? `<button class="button solid" data-recover="${escapeHtml(job.job_id)}">${recovery}</button>` : ""}<button class="button" data-stop="${escapeHtml(job.job_id)}">Stop</button>` : ""}</div>
+    ${current ? `<details class="job-technical" ${state.expanded.has(job.job_id) ? "open" : ""}><summary>Task details</summary><dl class="system-list">${[["Stage",labels[job.current_stage] || job.current_stage], ["Substage",labels[substage] || substage], ["Task",job.job_id], ["Episode",job.episode_key]].filter(([,value]) => value).map(([label,value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl></details>` : ""}
+  </article>`;
+}
+
+function renderJobs() {
+  state.expanded = new Set(Array.from(document.querySelectorAll(".job-card:has(.job-technical[open])")).map(card => card.dataset.job));
+  state.outcomes = new Set(Array.from(document.querySelectorAll(".job-card:has(.model-diagnostics[open])")).map(card => card.dataset.job));
+  const visible = state.jobs.filter(job => !job.stopped);
+  const active = visible.find(job => !terminal(job));
+  const headline = active || visible[0];
+  state.busy = Boolean(active);
+  $("#current-job").className = headline ? "" : "empty-state";
+  $("#current-job").innerHTML = headline ? jobCard(headline, true) : `<span class="empty-glyph" aria-hidden="true">◌</span><strong>No active job</strong><p>Start a run to see its queue and completion state here.</p>`;
+  $("#job-history").innerHTML = visible.filter(job => job !== headline).slice(0, 3).map(job => jobCard(job)).join("");
+  updateActionAvailability();
+}
+
+async function refreshJobs() {
+  const wasBusy = state.busy;
+  const jobs = await api("/api/jobs");
+  // Read the current durable task through its established single-job endpoint.
+  const headline = jobs.find(job => !terminal(job)) || jobs.find(job => !job.stopped);
+  if (headline) {
+    const durable = await api(`/api/jobs/${encodeURIComponent(headline.job_id)}`);
+    state.jobs = jobs.map(job => job.job_id === durable.job_id ? durable : job);
+  } else state.jobs = jobs;
+  const signature = JSON.stringify(state.jobs);
+  if (signature !== state.lastJobSignature) { state.lastJobSignature = signature; renderJobs(); }
+  else updateActionAvailability();
+  if (wasBusy && !state.busy) await refreshVideos();
+  if (state.page === "videos") renderVideos();
+  if (state.page === "dashboard") renderDashboard();
+}
+
+function itemActions(item) {
+  const key = escapeHtml(item.episode_key);
+  return `${item.draft ? `<button class="button" data-draft="${key}">View Draft</button>` : ""}${safeMedia(item.video_url) ? `<button class="button" data-watch="${key}">Watch</button>` : ""}${item.can_render ? `<button class="button" data-continue="${key}" data-target="render">Render</button>` : ""}${item.can_publish ? `<button class="button" data-continue="${key}" data-target="publish">Publish</button>` : ""}`;
+}
+
+function renderVideos() {
+  const filter = $("#video-filter").value;
+  const items = state.videos.filter(item => !filter || item.category === filter);
+  $("#videos-empty").hidden = Boolean(items.length);
+  $("#videos-body").innerHTML = items.map(item => `<tr><td>${safeMedia(item.preview_url) ? `<img class="video-thumb" src="${escapeHtml(item.preview_url)}" alt="${escapeHtml(item.title)}" loading="lazy">` : ""}<strong>${escapeHtml(item.title)}</strong><small>${item.historical ? "Historical · retained" : "ToviTunes episode"}</small></td><td>${item.draft_ready ? "Creative draft" : item.render_ready ? "Video" : "Saved work"}</td><td><span class="badge ${item.category === "published" ? "published" : item.category === "renders" ? "rendered" : item.category === "attention" ? "failed" : "brief_ready"}">${escapeHtml(titleCase(item.category))}</span></td><td>${escapeHtml(titleCase(item.publication?.privacy_status || item.publication?.outcome || "not published"))}</td><td>${escapeHtml(formatDate(item.created_at))}</td><td><div class="video-actions">${itemActions(item)}</div>${item.blocker ? `<p>${escapeHtml(item.blocker)}</p>` : ""}</td></tr>`).join("");
+  updateActionAvailability();
+}
+
+function renderDashboard() {
+  const metrics = [["Drafts", state.videos.filter(v => v.category === "drafts").length], ["Rendered",state.videos.filter(v => v.category === "renders").length], ["Published",state.videos.filter(v => v.category === "published").length], ["Needs attention",state.videos.filter(v => v.category === "attention").length], ["Active jobs",state.jobs.filter(j => !terminal(j)).length]];
+  $("#dashboard-metrics").innerHTML = metrics.map(([label,value]) => `<article class="metric-card"><span>${label}</span><strong>${value}</strong><small>Saved Studio evidence</small></article>`).join("");
+  $("#dashboard-activity").innerHTML = state.videos.length ? state.videos.slice(0, 8).map(item => `<div class="activity-row"><div><strong>${escapeHtml(item.title)}</strong><small>${item.historical ? "Historical production" : "ToviTunes"}</small></div><span>${escapeHtml(formatDate(item.created_at))}</span><span class="badge">${escapeHtml(titleCase(item.category))}</span><button class="text-button" data-navigate="videos">View →</button></div>`).join("") : `<div class="empty-state"><span class="empty-glyph">□</span><strong>Your studio is ready for its first lesson</strong><p>Generate a draft to start your saved library.</p></div>`;
+}
+
+async function refreshVideos() { state.videos = await api("/api/studio/library"); renderVideos(); renderDashboard(); }
+function setReadiness(element, text, ready, failed = false) { element.innerHTML = `<span class="mini-dot ${ready ? "ready" : failed ? "error" : ""}"></span>${escapeHtml(text)}`; }
+async function refreshSystem() {
+  const data = state.system = await api("/api/system");
+  const creative = data.services?.creative_director?.status === "ready";
+  const youtube = data.services?.youtube?.status === "connected";
+  $("#sidebar-status").textContent = "Pipeline ready";
+  $("#sidebar-signal").className = "signal-dot ready";
+  $("#creative-pill").textContent = creative ? "Creative ready" : "Creative setup needed";
+  $("#creative-pill").className = `status-pill ${creative ? "ready" : "error"}`;
+  $("#youtube-pill").textContent = youtube ? "YouTube connected" : "YouTube disconnected";
+  $("#youtube-pill").className = `status-pill ${youtube ? "ready" : "neutral"}`;
+  setReadiness($("#api-readiness"), "Ready", true);
+  setReadiness($("#creative-readiness"), creative ? "Ready" : "Check Settings", creative, !creative);
+  setReadiness($("#youtube-readiness"), youtube ? "Connected" : "Connect in Settings", youtube);
+  $("#publish-note").textContent = youtube ? "Publication follows your configured review and release policy." : "Connect YouTube in Settings before publishing. Drafts and renders can run independently.";
+  const names = {creative_director:"NVIDIA Creative Director", ace_step:"ACE-Step", comfyui:"Qwen / ComfyUI", comfyui_environment:"ComfyUI environments", ollama:"Ollama", ollama_embedding:"Ollama embeddings", ffmpeg:"FFmpeg / FFprobe", youtube:"YouTube", database:"Database", tovi_pack:"Tovi character pack"};
+  $("#service-list").innerHTML = Object.entries(data.services || {}).map(([name, service]) => `<article class="service-row"><header><h3>${escapeHtml(names[name] || titleCase(name))}</h3><span class="status-pill ${service.status === "ready" || service.status === "connected" ? "ready" : "neutral"}">${escapeHtml(titleCase(service.status))}</span></header>${service.message ? `<p>${escapeHtml(service.message)}</p>` : ""}${["ace_step","comfyui","comfyui_environment","ollama","ollama_embedding"].includes(name) && ["failed","unavailable"].includes(service.status) ? `<button class="button" data-service="${name}">Retry startup</button>` : ""}</article>`).join("");
+  $("#system-list").innerHTML = [["Creative planning","Open editorial planning"], ["Database",data.database_path], ["Brand revision",data.brand_revision], ["Curriculum revision",data.curriculum_revision], ["Configured channel",data.expected_channel_id || "Not configured"], ["OAuth files",`Client credentials ${data.youtube_credentials_present ? "present" : "not found"} · Token ${data.youtube_token_present ? "present" : "not found"}`]].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
+  updateActionAvailability();
+}
+
+function preview(key, watch = false) {
+  const item = state.videos.find(video => video.episode_key === key);
+  if (!item) return;
+  $("#detail-title").textContent = item.title;
+  const draft = item.draft;
+  const video = safeMedia(item.video_url);
+  const youtube = safeWatch(item.publication?.watch_url);
+  $("#detail-content").innerHTML = `${watch && video ? `<video class="detail-video" src="${escapeHtml(video)}" controls preload="metadata"></video>` : draft ? `<div class="detail-grid"><section class="detail-block"><h3>The lesson</h3><p>${escapeHtml(draft.premise)}</p></section><section class="detail-block"><h3>The hook</h3><p>${escapeHtml(draft.hook)}</p></section><section class="detail-block full"><h3>Lyrics</h3><p>${escapeHtml((draft.lyrics || []).join("\n"))}</p></section><section class="detail-block full"><h3>Music direction</h3><p>${escapeHtml(draft.music_direction)}</p></section></div>` : ""}<div class="job-actions">${itemActions(item)}${youtube ? `<a href="${escapeHtml(youtube)}" target="_blank" rel="noopener noreferrer">View on YouTube ↗</a>` : ""}</div>`;
+  updateActionAvailability();
+  if (!$("#video-dialog").open) $("#video-dialog").showModal();
+}
+
+async function action(button, path, body = {}) {
+  if (state.submitting) return;
+  state.submitting = true;
+  updateActionAvailability();
+  button.disabled = true;
+  try {
+    await api(path, {method:"POST", body});
+    if ($("#video-dialog").open) $("#video-dialog").close();
+    navigate("generate");
+    await refreshJobs();
+  } catch (error) { showToast(error.message, true); }
+  finally { state.submitting = false; button.disabled = false; updateActionAvailability(); }
+}
+
+document.addEventListener("click", async event => {
+  const button = event.target.closest("button");
+  if (!button || button.disabled) return;
+  if (button.dataset.view || button.dataset.navigate) navigate(button.dataset.view || button.dataset.navigate);
+  if (button.dataset.create) await action(button,"/api/studio/create",{target:button.dataset.create});
+  if (button.dataset.continue) await action(button,`/api/studio/episodes/${encodeURIComponent(button.dataset.continue)}/continue`,{target:button.dataset.target});
+  if (button.dataset.recover) await action(button,`/api/studio/jobs/${encodeURIComponent(button.dataset.recover)}/recover`);
+  if (button.dataset.stop) await action(button,`/api/studio/jobs/${encodeURIComponent(button.dataset.stop)}/stop`);
+  if (button.dataset.draft) preview(button.dataset.draft);
+  if (button.dataset.watch) preview(button.dataset.watch, true);
+  if (button.dataset.service) {
+    button.disabled = true;
+    try { await api(`/api/system/services/${button.dataset.service}/retry`, {method:"POST", body:{}}); await refreshSystem(); }
+    catch (error) { showToast(error.message, true); }
+    finally { button.disabled = false; }
+  }
+});
+$("#generate-form").addEventListener("submit", event => event.preventDefault());
+$("#close-dialog").addEventListener("click", () => $("#video-dialog").close());
+$("#video-dialog").addEventListener("close", () => { $("#detail-content").innerHTML = ""; });
+$("#video-filter").addEventListener("change", renderVideos);
+$("#system-refresh").addEventListener("click", () => refreshSystem().catch(error => showToast(error.message, true)));
+$("#youtube-connect").addEventListener("click", event => action(event.target,"/api/youtube/connect"));
+window.addEventListener("hashchange", () => navigate(location.hash.slice(1)));
+navigate(location.hash.slice(1) || "generate");
+Promise.all([refreshJobs(),refreshVideos(),refreshSystem()]).catch(error => showToast(error.message, true));
+let polling = false;
+setInterval(async () => {
+  if (polling) return;
+  polling = true;
+  try { await refreshJobs(); if (state.page === "settings") await refreshSystem(); }
+  catch (error) { $("#sidebar-status").textContent = "Connection interrupted"; $("#sidebar-signal").className = "signal-dot error"; }
+  finally { polling = false; }
+}, 2500);

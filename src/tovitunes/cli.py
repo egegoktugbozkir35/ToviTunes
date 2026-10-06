@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
+from typing import Literal
 
 from tovitunes.artifacts.character_intake import ingest_prepared, load_recipe, prepare_assets
 from tovitunes.artifacts.character_lock import (
@@ -36,10 +37,8 @@ from tovitunes.benchmark.runner import (
 )
 from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
-from tovitunes.creative.factory import creative_generator
-from tovitunes.creative.metadata import MetadataWriter
-from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot, eligibility
+from tovitunes.continuation import plan_continuation
+from tovitunes.creative.service import eligibility
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.analysis_runtime import prepare_models, runtime_doctor
@@ -50,9 +49,12 @@ from tovitunes.music.models import load_rubric as load_music_rubric
 from tovitunes.music.providers import FakeMusicProvider, MusicProvider
 from tovitunes.music.timing_runtime import prepare_timing
 from tovitunes.music.vertex_lyria import VertexLyriaProvider
+from tovitunes.orchestrator import build_orchestrator
 from tovitunes.persistence.db import Database
-from tovitunes.pipeline.planner import Goal, load_snapshot, plan, requirements
 from tovitunes.pipeline.production import ProductionHandoff, plan_handoff
+from tovitunes.pipeline.targets import ProductionTarget
+
+Goal = Literal["audio", "storyboard", "render", "release"]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -68,12 +70,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_commands.add_parser("eligible")
     creative_commands.add_parser("doctor")
     creative_commands.add_parser("history")
-    reconcile = creative_commands.add_parser("reconcile")
-    reconcile.add_argument("--request-id", required=True)
-    reconcile.add_argument("--action", choices=["abandon-remote-result"], required=True)
-    reconcile.add_argument("--actor", required=True)
-    reconcile.add_argument("--reason", required=True)
-    reconcile.add_argument("--evidence-uri")
     request_status = creative_commands.add_parser("request-status")
     request_status.add_argument("--request-id", required=True)
     creative_generate = creative_commands.add_parser("generate-next")
@@ -94,7 +90,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command in {"produce", "auto-resume"}:
             autonomous.add_argument("--episode-key", required=True)
         autonomous.add_argument("--confirm-provider-generation", action="store_true")
-    storyboard = production_commands.add_parser("prepare-storyboard")
+    storyboard = production_commands.add_parser(
+        "prepare-storyboard", help="import historical V1 benchmark evidence (provider-free)"
+    )
     storyboard.add_argument("--concept", required=True)
     storyboard.add_argument("--episode-key", required=True)
     storyboard.add_argument("--music-blind-id", required=True)
@@ -401,18 +399,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "creative":
         database = Database(config.database_path)
         database.migrate()
-        if args.creative_command in {"reconcile", "request-status"}:
+        if args.creative_command == "request-status":
             from tovitunes.creative.recovery import request_status as inspect_request
-            from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 
             try:
-                if args.creative_command == "reconcile":
-                    CreativeReconciliations(database).abandon(
-                        args.request_id,
-                        actor=args.actor,
-                        rationale=args.reason,
-                        evidence_uri=args.evidence_uri,
-                    )
                 inspection = inspect_request(database, config.creative_llm, args.request_id)
             except (ValueError, KeyError) as exc:
                 parser.error(
@@ -478,25 +468,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        before = call_snapshot(database)
-        transport = NvidiaNIMClient(config.creative_llm)
-        try:
-            with creative_generator(database, config.creative_llm, transport) as generator:
-                workflow = CreativeWorkflow(config, generator, catalog=catalog)
-                if args.creative_command == "metadata":
-                    creative_result = MetadataWriter(workflow).generate(args.episode_key)
-                else:
-                    creative_result = workflow.generate_next(
-                        run_id=args.run_id, episode_key=args.episode_key
-                    )
-        except (ValueError, KeyError, OSError, RuntimeError) as exc:
-            print(
-                json.dumps({"provider_calls": call_report(database, before)}, sort_keys=True),
-                file=sys.stderr,
-            )
-            parser.error(str(exc))
-        finally:
-            transport.close()
+        target = (
+            ProductionTarget.RENDER
+            if args.creative_command == "metadata"
+            else ProductionTarget.DRAFT
+        )
+        application = build_orchestrator(config)
+        creative_result = (
+            application.resume(args.episode_key, target)
+            if args.episode_key
+            else application.generate(target)
+        )
         print(json.dumps(creative_result, sort_keys=True))
         return 0
     if args.command == "production":
@@ -507,23 +489,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "produce",
                 "auto-resume",
             }:
-                from tovitunes.pipeline.short_production import ShortProductionWorkflow
-
-                short_workflow = ShortProductionWorkflow(config)
+                target = ProductionTarget.PUBLISH
+                key = (
+                    args.episode_key
+                    if args.production_command in {"produce", "auto-resume"}
+                    else None
+                )
+                application = build_orchestrator(config)
                 short_result = (
-                    short_workflow.produce_next(confirmed=args.confirm_provider_generation)
-                    if args.production_command in {"generate-next-short", "auto-next"}
-                    else short_workflow.produce(
-                        args.episode_key, confirmed=args.confirm_provider_generation
-                    )
+                    (application.resume(key, target) if key else application.generate(target))
+                    if args.confirm_provider_generation
+                    else plan_continuation(config, key, target=target)
                 )
                 print(json.dumps(short_result, sort_keys=True))
                 return 0
             if args.production_command in {"render", "render-v4"}:
-                from tovitunes.render.production import ProductionRenderer
-
-                render_result = ProductionRenderer(config).render(
-                    args.episode_key, visual_story=args.production_command == "render-v4"
+                render_result = build_orchestrator(config).resume(
+                    args.episode_key, ProductionTarget.RENDER
                 )
                 print(json.dumps(render_result, sort_keys=True))
                 return 0
@@ -897,38 +879,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("an existing database and asset root are required")
     database = Database(config.database_path)
     store = AssetStore(config.data_root, database, initialize=False)
-    goal: Goal = args.goal
-    snapshot = load_snapshot(store, args.episode_id)
-    result = plan(snapshot, goal)
-    if args.command == "plan":
-        print(json.dumps(asdict(result), sort_keys=True))
-    else:
-        slots = []
-        for requirement in requirements(
-            goal, snapshot.scene_ids, snapshot.production_audio_handoff
-        ):
-            fact = snapshot.slots.get((requirement.kind, requirement.slot_key))
-            slots.append(
-                {
-                    "requirement": requirement.key,
-                    "selected_artifact_id": fact.selected_id if fact else None,
-                    "candidate_count": len(fact.candidates) if fact else 0,
-                }
-            )
-        print(
-            json.dumps(
-                {
-                    "episode_id": snapshot.episode_id,
-                    "objective_approval": snapshot.objective_approval,
-                    "character_pack_readiness": snapshot.character_pack_readiness,
-                    "goal": goal,
-                    "scene_ids": snapshot.scene_ids,
-                    "next_action": asdict(result),
-                    "requirements": slots,
-                },
-                sort_keys=True,
-            )
-        )
+    key = database.get_episode(args.episode_id).external_key
+    target = ProductionTarget.PUBLISH if args.goal == "release" else ProductionTarget.RENDER
+    print(json.dumps(plan_continuation(config, key, target=target), sort_keys=True))
+
     return 0
 
 

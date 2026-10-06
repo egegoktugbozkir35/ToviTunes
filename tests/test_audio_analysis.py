@@ -779,6 +779,9 @@ def test_historical_rejected_analysis_deserializes_without_rewrite(case, monkeyp
         before = db.execute("SELECT analysis_json FROM music_audio_analysis").fetchone()[0]
     store.analyze_audio(blind_id, 2, AnalysisConfig())
     with store.database.connect() as db:
-        assert db.execute(
-            "SELECT analysis_json FROM music_audio_analysis WHERE version=1"
-        ).fetchone()[0] == before
+        assert (
+            db.execute("SELECT analysis_json FROM music_audio_analysis WHERE version=1").fetchone()[
+                0
+            ]
+            == before
+        )

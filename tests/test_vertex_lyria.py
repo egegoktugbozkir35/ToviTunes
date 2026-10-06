@@ -147,7 +147,13 @@ def test_exact_lyrics_v2_prompt_contract() -> None:
     timed_lines = prompt.split("Lyrics:\n")[1].splitlines()
     assert [line[8:] for line in timed_lines] == [line.text for line in lyrics.lines]
     assert [line[:7] for line in timed_lines] == [
-        "[00:03]", "[00:07]", "[00:11]", "[00:16]", "[00:21]", "[00:25]", "[00:31]"
+        "[00:03]",
+        "[00:07]",
+        "[00:11]",
+        "[00:16]",
+        "[00:21]",
+        "[00:25]",
+        "[00:31]",
     ]
     assert "[00:00] Instrumental intro only; no vocal words." in prompt
     assert "[00:33] All vocal words must be finished; short instrumental ending only." in prompt
@@ -194,8 +200,17 @@ def test_stored_contract_rejected_before_adc_or_http(contract: object) -> None:
 
 @pytest.mark.parametrize(
     "mutation",
-    ["count", "section_order", "brief_section_order", "line_order", "spelling", "required_sections",
-     "duration_min", "duration_max", "maximum"],
+    [
+        "count",
+        "section_order",
+        "brief_section_order",
+        "line_order",
+        "spelling",
+        "required_sections",
+        "duration_min",
+        "duration_max",
+        "maximum",
+    ],
 )
 def test_canonical_mutation_fails_before_provider(
     monkeypatch: pytest.MonkeyPatch, mutation: str
@@ -204,23 +219,33 @@ def test_canonical_mutation_fails_before_provider(
     if mutation == "count":
         lyrics = lyrics.model_copy(update={"lines": lyrics.lines[:-1]})
     elif mutation == "section_order":
-        lyrics = lyrics.model_copy(update={"lines": (
-            lyrics.lines[0].model_copy(update={"section": "teaching_line"}), *lyrics.lines[1:]
-        )})
+        lyrics = lyrics.model_copy(
+            update={
+                "lines": (
+                    lyrics.lines[0].model_copy(update={"section": "teaching_line"}),
+                    *lyrics.lines[1:],
+                )
+            }
+        )
     elif mutation == "line_order":
-        lyrics = lyrics.model_copy(update={"lines": (
-            lyrics.lines[1], lyrics.lines[0], *lyrics.lines[2:]
-        )})
+        lyrics = lyrics.model_copy(
+            update={"lines": (lyrics.lines[1], lyrics.lines[0], *lyrics.lines[2:])}
+        )
     elif mutation == "spelling":
-        lyrics = lyrics.model_copy(update={"lines": (
-            lyrics.lines[0].model_copy(update={"text": "Changed spelling!"}), *lyrics.lines[1:]
-        )})
+        lyrics = lyrics.model_copy(
+            update={
+                "lines": (
+                    lyrics.lines[0].model_copy(update={"text": "Changed spelling!"}),
+                    *lyrics.lines[1:],
+                )
+            }
+        )
     elif mutation == "required_sections":
         brief = brief.model_copy(update={"sections": brief.sections[:-1]})
     elif mutation == "brief_section_order":
-        brief = brief.model_copy(update={"sections": (
-            brief.sections[1], brief.sections[0], *brief.sections[2:]
-        )})
+        brief = brief.model_copy(
+            update={"sections": (brief.sections[1], brief.sections[0], *brief.sections[2:])}
+        )
     elif mutation == "duration_min":
         brief = brief.model_copy(update={"preferred_duration_seconds": (35, 40)})
     elif mutation == "duration_max":
@@ -245,9 +270,9 @@ def test_invalid_internal_schedule_fails_locally(
     if mutation == "count":
         timeline = replace(timeline, lines=timeline.lines[:-1])
     elif mutation == "unordered":
-        timeline = replace(timeline, lines=(
-            replace(timeline.lines[0], seconds=7), *timeline.lines[1:]
-        ))
+        timeline = replace(
+            timeline, lines=(replace(timeline.lines[0], seconds=7), *timeline.lines[1:])
+        )
     elif mutation == "intro":
         timeline = replace(timeline, intro_end=4)
     elif mutation == "cutoff":
@@ -262,8 +287,10 @@ def test_invalid_internal_schedule_fails_locally(
 
 @pytest.mark.parametrize("command", ["plan", "run"])
 def test_attempt_two_cli_isolation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-    capsys: pytest.CaptureFixture[str], command: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
 ) -> None:
     calls = {"adc": 0, "http": 0}
 
@@ -282,10 +309,19 @@ def test_attempt_two_cli_isolation(
     config.write_text(
         f"database_path: {db.as_posix()}\n"
         f"data_root: {(tmp_path / 'absent-data').as_posix()}\n"
-        f"brand_root: {(ROOT / 'brands/tovitunes').as_posix()}\n", encoding="utf-8"
+        f"brand_root: {(ROOT / 'brands/tovitunes').as_posix()}\n",
+        encoding="utf-8",
     )
-    args = ["--config", str(config), "music-benchmark", command,
-            "--provider", "google", "--attempt", "2"]
+    args = [
+        "--config",
+        str(config),
+        "music-benchmark",
+        command,
+        "--provider",
+        "google",
+        "--attempt",
+        "2",
+    ]
     if command == "run":
         args.append("--dry-run")
     assert main(args) == 0
@@ -601,9 +637,7 @@ def test_pending_without_interaction_id_cannot_trigger_resume_get(tmp_path: Path
 def test_supplied_invalid_interaction_id_fails_closed(tmp_path: Path, invalid_id: Any) -> None:
     payload = interaction()
     payload["id"] = invalid_id
-    store, provider, item = setup(
-        tmp_path, lambda request: httpx.Response(200, json=payload)
-    )
+    store, provider, item = setup(tmp_path, lambda request: httpx.Response(200, json=payload))
     result = store.run(item, provider)
     assert result["status"] == "ambiguous"
     assert store.request(result["request_id"])["provider_request_id"] is None
@@ -629,9 +663,7 @@ def test_known_id_retrieval_rejects_changed_identity(tmp_path: Path) -> None:
     assert first["status"] == "ambiguous"
     result = store.provider_resume(first["request_id"], provider)
     assert result["status"] == "ambiguous"
-    assert store.request(first["request_id"])["provider_request_id"] == (
-        "vertex-interaction-123"
-    )
+    assert store.request(first["request_id"])["provider_request_id"] == ("vertex-interaction-123")
     with store.database.connect() as db:
         assert db.execute("SELECT count(*) FROM music_receipts").fetchone()[0] == 0
     assert methods == ["POST", "GET"]

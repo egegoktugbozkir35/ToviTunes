@@ -1,7 +1,9 @@
-"""Read-only operator projection; no transports, response bodies or secret configuration."""
+"""Historical request audit projection; no production recovery effects."""
 
 from tovitunes.config import CreativeLLMConfig
-from tovitunes.creative.provider import MODEL_FAILURES, stored_failure
+from tovitunes.creative.failures import FailureScope, classify_creative_failure
+from tovitunes.creative.provider import stored_failure
+from tovitunes.errors import ProviderError
 from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import CreativeRequestLedger
@@ -16,8 +18,14 @@ def request_status(
     identity = (row["provider"], row["model"])
     position = chain.index(identity) if identity in chain else None
     may_advance = (
-        (row["status"] == "ambiguous" and decision is not None)
-        or (row["status"] == "failed" and stored_failure(row) in MODEL_FAILURES)
+        (row["status"] == "ambiguous")
+        or (
+            row["status"] == "failed"
+            and classify_creative_failure(
+                ProviderError("stored failure", category=stored_failure(row))
+            ).scope
+            is FailureScope.MODEL
+        )
         or (row["status"] == "succeeded_response_invalid" and row["attempt"] == 2)
     )
     next_model = None

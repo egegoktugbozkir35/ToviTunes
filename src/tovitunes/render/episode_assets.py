@@ -1,6 +1,7 @@
 """Plan-driven episode images using the existing Qwen adapter and normalization contract."""
 
 import json
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,6 +17,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
+from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
 from tovitunes.render.lesson_objects import _prepare_qwen_white_background, _provider, normalize
 
@@ -144,13 +146,22 @@ def generate_assets(
     working: Path,
     visual_direction: str,
     provider: ImageProvider | None = None,
+    *,
+    progress: Callable[[str, str], None] | None = None,
+    assert_owner: Callable[[], None],
 ) -> dict[str, str]:
     provider = provider or _provider(config)
     if provider.provider != "qwen_comfyui":
         raise ValueError("production illustrations require the existing Qwen adapter")
     ledger = RequestLedger(store.database)
     assets: dict[str, str] = {}
-    for requirement in visual.required_assets:
+    for index, requirement in enumerate(visual.required_assets, 1):
+        assert_owner()
+        if progress:
+            progress(
+                "VISUAL_ASSETS",
+                f"Generating or reusing visual {index} of {len(visual.required_assets)}",
+            )
         slot = requirement.asset_key
         existing = store.selected("episode", episode.episode_id, "visual_asset", slot)
         if existing:
@@ -254,6 +265,7 @@ def generate_assets(
 
             def remote_start() -> None:
                 nonlocal started
+                assert_owner()
                 ledger.transition(request_id, "remote_started")
                 started = True
 
@@ -301,6 +313,10 @@ def generate_assets(
                         ),
                     )
                     db.commit()
+            except ExecutionOwnershipError:
+                if started:
+                    ledger.transition(request_id, "ambiguous")
+                raise
             except Exception as exc:
                 outcome = exc.outcome if isinstance(exc, ProviderFailure) else "ambiguous"
                 ledger.transition(
@@ -315,6 +331,7 @@ def generate_assets(
                     "AMBIGUOUS" if started and outcome != "terminal_failure" else "FAILED",
                     request_id,
                 ) from exc
+        assert_owner()
         store.admit_preview(source_record.identity.artifact_id)
         image = normalize(
             _prepare_qwen_white_background(

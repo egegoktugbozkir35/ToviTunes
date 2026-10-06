@@ -12,7 +12,8 @@ All new image generation uses the same local Qwen-Image 2.1 ComfyUI graph,
 at `http://127.0.0.1:8188`. The graph pins `qwen_image_2.1_Q8_0.gguf`,
 `qwen3vl_8b_int8_convrot.safetensors`, and
 `qwen_image_2.1_vae_bf16.safetensors`. Install and run ComfyUI separately.
-ToviTunes does not install, launch, or stop it.
+Install ComfyUI and its model files once. The Studio launcher now reuses a healthy
+service or starts a discoverable/configured installation; see [the application architecture](MPT_ARCHITECTURE_MIGRATION.md).
 
 `environment_generation` defaults to 768 × 1376 source PNGs, which the existing
 environment pipeline validates and normalizes to 1080 × 1920. Qwen T2I has no
@@ -31,7 +32,8 @@ ACE-Step is **not installed as part of this PR**. Install it outside the
 ToviTunes checkout from the [official ACE-Step 1.5 repository](https://github.com/ace-step/ACE-Step-1.5).
 Its own environment/cache downloads the model weights. Do not place weights,
 the ACE-Step source, or its Python dependencies in this repository. ToviTunes
-uses only the local REST API at `http://127.0.0.1:8001` and does not start or
+uses the local REST API at `http://127.0.0.1:8001`. Studio can start an installed
+ACE-Step environment; standalone adapter/doctor commands do not start or
 stop the service. The official project is MIT licensed; each generated audio
 candidate still needs separate originality, approval, and commercial-rights
 review.

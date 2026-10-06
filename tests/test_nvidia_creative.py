@@ -203,7 +203,7 @@ def test_remote_connection_failure_is_ambiguous_and_never_resent(request_owner, 
 
     provider, context = generate(request_owner, handler)
     for _ in range(2):
-        with pytest.raises(ProviderError, match="resend|recovery"):
+        with pytest.raises(ProviderError, match="resend|resent|recovery"):
             provider.generate(Answer, [], context=context)
     assert len(calls) == 1
     assert rows(request_owner[0])[0]["status"] == "ambiguous"
@@ -261,7 +261,7 @@ def test_start_without_receipt_is_marked_ambiguous_on_resume(request_owner):
             "response_sha256=NULL WHERE request_id=?",
             (result.local_request_id,),
         )
-    with pytest.raises(ProviderError, match="do not resend"):
+    with pytest.raises(ProviderError, match="never resent"):
         provider.generate(Answer, [], context=context)
     assert rows(request_owner[0])[0]["status"] == "ambiguous"
 

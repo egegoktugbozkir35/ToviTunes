@@ -25,14 +25,15 @@ from tovitunes.creative.nvidia import NvidiaNIMClient
 from tovitunes.creative.prompts import topic_messages
 from tovitunes.creative.provider import DurableStructuredGenerator, canonical
 from tovitunes.creative.resilience import ResilientStructuredGenerator
+from tovitunes.creative.service import CreativeService
 from tovitunes.creative.similarity import normalize_topic
 from tovitunes.creative.topic_memory import TopicMemory, duplicate_reason, validate_candidate
 from tovitunes.creative.topics import TopicPlanner
 from tovitunes.creative.validation import validate_episode_spec, validate_lyrics, validate_music
-from tovitunes.creative.workflow import CreativeWorkflow
 from tovitunes.domain.episode import Episode
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import FakeDraftGenerator, GeneratedDraft
+from tovitunes.pipeline.targets import ProductionTarget
 
 
 def idea(kind="size", **updates):
@@ -106,7 +107,12 @@ def editorial(tmp_path, catalog, brand_root, monkeypatch):
     database = Database(config.database_path)
     database.migrate()
     fake = FakeNIMTransport()
-    workflow = CreativeWorkflow(config, DurableStructuredGenerator(database, fake), catalog=catalog)
+    workflow = CreativeService(
+        config,
+        DurableStructuredGenerator(database, fake),
+        catalog=catalog,
+        assert_owner=lambda: None,
+    )
     return workflow, fake
 
 
@@ -223,12 +229,14 @@ def test_restart_after_persisted_brief_before_episode_reservation_reuses_selecti
         flow, "_reserve_brief", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
     )
     with pytest.raises(KeyboardInterrupt):
-        flow.generate_next()
+        flow.prepare()
     memory = TopicMemory(Database(flow.config.database_path), flow.catalog)
     assert memory.history()[0]["subject"] == "Big and small"
     assert fake.calls == ["TopicPool"]
-    restarted = CreativeWorkflow(flow.config, flow.provider, catalog=flow.catalog)
-    result = restarted.generate_next()
+    restarted = CreativeService(
+        flow.config, flow.provider, catalog=flow.catalog, assert_owner=lambda: None
+    )
+    result = restarted.prepare()
     assert result["episode_key"].startswith("big-and-small-")
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
@@ -243,7 +251,7 @@ def test_memory_precedes_creative_artifacts_and_expensive_media(editorial, monke
         return original(model, messages, **kwargs)
 
     monkeypatch.setattr(flow.provider, "generate", generate)
-    flow.generate_next()
+    flow.prepare()
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
 
@@ -252,7 +260,7 @@ def test_novel_domain_outside_policy_examples_is_allowed(editorial):
     fake.responses["TopicPool"] = [
         TopicPool(candidates=(idea("texture", score=10), idea())).model_dump_json()
     ]
-    result = flow.generate_next()
+    result = flow.prepare()
     ep = flow.database.get_episode(result["episode_id"])
     assert ep.subject == "Smooth and rough" and "textures" not in LEARNING_POLICY.example_domains
     assert ep.curriculum_revision_id is None
@@ -439,7 +447,7 @@ def test_vocabulary_bounds_are_strict(words):
 
 def test_learning_facts_remain_exact_across_episode_and_downstream_specs(editorial):
     flow, _ = editorial
-    result = flow.generate_next()
+    result = flow.prepare()
     episode = flow.database.get_episode(result["episode_id"])
     brief = TopicMemory(flow.database, flow.catalog).get(episode.learning_brief_id)
     assert (
@@ -500,7 +508,7 @@ def test_kimi_failure_glm_topic_success_persists_actual_model_provenance(editori
         for m in (config.model, *config.fallback_models)
     ]
     flow.provider = ResilientStructuredGenerator(flow.database, chain)
-    flow.generate_next()
+    flow.prepare()
     with closing(flow.database.connect()) as db:
         rows = [dict(r) for r in db.execute("SELECT * FROM generation_requests ORDER BY rowid")]
         brief = dict(db.execute("SELECT * FROM learning_briefs").fetchone())
@@ -513,7 +521,7 @@ def test_kimi_failure_glm_topic_success_persists_actual_model_provenance(editori
 
 def test_doctor_history_and_config_make_no_provider_calls(editorial, tmp_path, capsys):
     flow, _ = editorial
-    flow.generate_next()
+    flow.prepare()
     path = tmp_path / "config.yaml"
     path.write_text(
         f"database_path: {flow.database.path.as_posix()}\n"
@@ -559,10 +567,12 @@ def test_legacy_blue_resume_reuses_exact_selections(editorial):
     flow, fake = editorial
     episode = Episode.create(flow.catalog, "blue", "colors-blue-001")
     flow.database.create_episode(flow.catalog, episode)
-    first = flow.generate_next(episode_key="colors-blue-001")
+    first = flow.prepare(episode_key="colors-blue-001")
     before = list(fake.calls)
-    fresh = CreativeWorkflow(flow.config, flow.provider, catalog=flow.catalog)
-    second = fresh.generate_next(episode_key="colors-blue-001")
+    fresh = CreativeService(
+        flow.config, flow.provider, catalog=flow.catalog, assert_owner=lambda: None
+    )
+    second = fresh.prepare(episode_key="colors-blue-001")
     assert fake.calls == before == ["EpisodeSpec", "LyricsSpec", "MusicSpec"]
     assert first["episode_spec_artifact_id"] == second["episode_spec_artifact_id"]
     assert (
@@ -581,7 +591,7 @@ def test_real_pre_editorial_migration_preserves_red_publication_and_blue_creativ
     from test_web_youtube_v1 import artifact, context, ready
 
     from tovitunes.catalog import load_brand
-    from tovitunes.pipeline.short_production import ShortProductionWorkflow
+    from tovitunes.orchestrator import build_orchestrator
 
     monkeypatch.setattr("socket.socket.connect", lambda *a: pytest.fail("live call"))
     migration_dir = tmp_path / "pre-editorial-migrations"
@@ -639,13 +649,21 @@ def test_real_pre_editorial_migration_preserves_red_publication_and_blue_creativ
     assert database.get_episode(blue.episode_id).model_dump_json() == blue.model_dump_json()
     assert database.get_episode(red.episode_id).model_dump_json() == red.model_dump_json()
     fake = FakeNIMTransport()
-    flow = CreativeWorkflow(
-        config, DurableStructuredGenerator(database, fake), catalog=flow_catalog
+    flow = CreativeService(
+        config,
+        DurableStructuredGenerator(database, fake),
+        catalog=flow_catalog,
+        assert_owner=lambda: None,
     )
-    result = flow.generate_next(episode_key="colors-blue-001")
+    result = flow.prepare(episode_key="colors-blue-001")
     assert result["episode_spec_artifact_id"] == spec_record.identity.artifact_id
     assert fake.calls == []
     immutable = {p: p.read_bytes() for p in bytes_before}
-    production = ShortProductionWorkflow(config).produce(red.external_key, confirmed=True)
+    production = build_orchestrator(config).resume(
+        red.external_key, target=ProductionTarget.PUBLISH
+    )
     assert production["historical"] and production["status"] == "COMPLETE"
+    assert all(p.read_bytes() == value for p, value in immutable.items())
+    protected = build_orchestrator(config).resume(blue.external_key, target=ProductionTarget.RENDER)
+    assert protected["historical"] and protected["status"] == "BLOCKED"
     assert all(p.read_bytes() == value for p, value in immutable.items())

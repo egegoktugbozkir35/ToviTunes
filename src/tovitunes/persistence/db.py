@@ -3,14 +3,21 @@
 import json
 import sqlite3
 from collections.abc import Iterator
-from contextlib import closing
-from datetime import UTC, datetime
+from contextlib import closing, contextmanager
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from importlib import resources
 from pathlib import Path
+from uuid import uuid4
 
 from tovitunes.catalog import BrandCatalog
 from tovitunes.domain.episode import Episode, PinnedCharacterPack
+from tovitunes.errors import (
+    ExecutionOwnershipConflictError,
+    ExecutionOwnershipError,
+    ExecutionOwnershipLostError,
+)
+from tovitunes.execution import ProductionExecutionLease
 
 
 def _sql_statements(sql: str) -> Iterator[str]:
@@ -238,3 +245,203 @@ class Database:
                 lifecycle=row["lifecycle"],
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        with closing(self.connect()) as connection:
+            yield connection
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield connection
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+    def _execution_now(self) -> datetime:
+        return datetime.now(UTC)
+
+    @staticmethod
+    def _row_to_execution_lease(row: sqlite3.Row) -> ProductionExecutionLease:
+        try:
+            acquired_at = datetime.fromisoformat(row["acquired_at"])
+            heartbeat_at = datetime.fromisoformat(row["heartbeat_at"])
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if any(
+                value.tzinfo is None or value.utcoffset() is None
+                for value in (acquired_at, heartbeat_at, expires_at)
+            ):
+                raise ValueError("lease timestamps must include a UTC offset")
+        except (TypeError, ValueError) as exc:
+            raise ExecutionOwnershipError(
+                "the persisted production execution lease is invalid; refusing to continue"
+            ) from exc
+        return ProductionExecutionLease(
+            owner_token=row["owner_token"],
+            operation=row["operation"],
+            item_id=row["item_id"],
+            acquired_at=acquired_at,
+            heartbeat_at=heartbeat_at,
+            expires_at=expires_at,
+        )
+
+    @staticmethod
+    def _validate_execution_ttl(ttl: timedelta) -> None:
+        if ttl.total_seconds() <= 0:
+            raise ValueError("production execution lease TTL must be positive")
+
+    def get_production_execution_lease(self) -> ProductionExecutionLease | None:
+        """Return the persisted lease row, including an expired row, for diagnostics."""
+
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM production_execution_lease WHERE singleton = 1"
+            ).fetchone()
+        return self._row_to_execution_lease(row) if row is not None else None
+
+    def acquire_production_execution(
+        self,
+        *,
+        operation: str,
+        item_id: str | None = None,
+        ttl: timedelta,
+    ) -> ProductionExecutionLease:
+        """Atomically claim the singleton lease, replacing it only after expiration."""
+
+        operation = operation.strip()
+        if not operation:
+            raise ValueError("production execution operation cannot be empty")
+        normalized_item_id = item_id.strip() if item_id is not None else None
+        if normalized_item_id == "":
+            normalized_item_id = None
+        self._validate_execution_ttl(ttl)
+        owner_token = str(uuid4())
+        with self._transaction() as connection:
+            now = self._execution_now()
+            lease = ProductionExecutionLease(
+                owner_token=owner_token,
+                operation=operation,
+                item_id=normalized_item_id,
+                acquired_at=now,
+                heartbeat_at=now,
+                expires_at=now + ttl,
+            )
+            row = connection.execute(
+                "SELECT * FROM production_execution_lease WHERE singleton = 1"
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """
+                    INSERT INTO production_execution_lease (
+                        singleton, owner_token, operation, item_id,
+                        acquired_at, heartbeat_at, expires_at
+                    ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        lease.owner_token,
+                        lease.operation,
+                        lease.item_id,
+                        lease.acquired_at.isoformat(),
+                        lease.heartbeat_at.isoformat(),
+                        lease.expires_at.isoformat(),
+                    ),
+                )
+            else:
+                current = self._row_to_execution_lease(row)
+                if current.expires_at > now:
+                    raise ExecutionOwnershipConflictError(
+                        "another production execution is currently active"
+                    )
+                connection.execute(
+                    """
+                    UPDATE production_execution_lease
+                    SET owner_token = ?, operation = ?, item_id = ?,
+                        acquired_at = ?, heartbeat_at = ?, expires_at = ?
+                    WHERE singleton = 1
+                    """,
+                    (
+                        lease.owner_token,
+                        lease.operation,
+                        lease.item_id,
+                        lease.acquired_at.isoformat(),
+                        lease.heartbeat_at.isoformat(),
+                        lease.expires_at.isoformat(),
+                    ),
+                )
+        return lease
+
+    def renew_production_execution(
+        self,
+        owner_token: str,
+        *,
+        ttl: timedelta,
+    ) -> ProductionExecutionLease:
+        """Extend a live lease only when the caller still owns its exact token."""
+
+        self._validate_execution_ttl(ttl)
+        with self._transaction() as connection:
+            now = self._execution_now()
+            expires_at = now + ttl
+            row = connection.execute(
+                "SELECT * FROM production_execution_lease WHERE singleton = 1"
+            ).fetchone()
+            if row is None:
+                raise ExecutionOwnershipLostError("production execution ownership has been lost")
+            current = self._row_to_execution_lease(row)
+            if current.owner_token != owner_token or current.expires_at <= now:
+                raise ExecutionOwnershipLostError(
+                    "production execution ownership has been lost or expired"
+                )
+            cursor = connection.execute(
+                """
+                UPDATE production_execution_lease
+                SET heartbeat_at = ?, expires_at = ?
+                WHERE singleton = 1 AND owner_token = ?
+                """,
+                (now.isoformat(), expires_at.isoformat(), owner_token),
+            )
+            if cursor.rowcount != 1:
+                raise ExecutionOwnershipLostError("production execution ownership has been lost")
+        return ProductionExecutionLease(
+            owner_token=current.owner_token,
+            operation=current.operation,
+            item_id=current.item_id,
+            acquired_at=current.acquired_at,
+            heartbeat_at=now,
+            expires_at=expires_at,
+        )
+
+    def assert_production_execution_owner(self, owner_token: str) -> ProductionExecutionLease:
+        """Verify that a token is still the live singleton owner without mutating it."""
+
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM production_execution_lease WHERE singleton = 1"
+            ).fetchone()
+        now = self._execution_now()
+        if row is None:
+            raise ExecutionOwnershipLostError("production execution ownership has been lost")
+        lease = self._row_to_execution_lease(row)
+        if lease.owner_token != owner_token or lease.expires_at <= now:
+            raise ExecutionOwnershipLostError(
+                "production execution ownership has been lost or expired"
+            )
+        return lease
+
+    def release_production_execution(self, owner_token: str) -> None:
+        """Delete the singleton row only when the exact current owner releases it."""
+
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM production_execution_lease
+                WHERE singleton = 1 AND owner_token = ?
+                """,
+                (owner_token,),
+            )
+            if cursor.rowcount != 1:
+                raise ExecutionOwnershipLostError("production execution ownership has been lost")

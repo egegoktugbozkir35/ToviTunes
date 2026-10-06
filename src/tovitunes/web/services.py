@@ -10,12 +10,8 @@ from typing import Any
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
-from tovitunes.creative.factory import creative_generator
-from tovitunes.creative.metadata import MetadataWriter
-from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.workflow import CreativeWorkflow, eligibility
+from tovitunes.continuation import plan_continuation
 from tovitunes.persistence.db import Database
-from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 
@@ -30,17 +26,6 @@ def _selected(db: Any, owner_scope: str, owner_id: str, kind: str) -> list[dict[
             (owner_scope, owner_id, kind),
         )
     ]
-
-
-def _stage(name: str, artifacts: list[dict[str, Any]], empty: str) -> dict[str, Any]:
-    if not artifacts:
-        return {"name": name, "status": "BLOCKED", "reason": empty, "artifacts": []}
-    return {
-        "name": name,
-        "status": "COMPLETE",
-        "reason": f"{len(artifacts)} selected artifact(s)",
-        "artifacts": artifacts,
-    }
 
 
 def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
@@ -81,77 +66,6 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
         }
     preflight = evaluate_release(config, episode_key)
     publication = PublicationService(config).latest(eid)
-    stages = [
-        _stage(
-            "Creative",
-            selected["episode_spec"] or selected["production_handoff"],
-            "No selected creative spec or production handoff",
-        ),
-        _stage("Music", selected["audio_master"], "No selected audio master"),
-        _stage("Storyboard", selected["timed_storyboard"], "No selected timed storyboard"),
-        _stage(
-            "Visual Assets",
-            brand["environment_set"] + brand["lesson_object_manifest"],
-            "No selected reviewed visual assets",
-        ),
-        _stage("Render", selected["final_render"], "No selected final render"),
-        _stage("Review", selected["media_qa"], "No selected media QA"),
-        {
-            "name": "Release",
-            "status": "READY" if preflight.public_release_allowed else "BLOCKED",
-            "reason": "Commercial rights cleared"
-            if preflight.public_release_allowed
-            else "See release preflight checks",
-            "artifacts": [],
-        },
-        {
-            "name": "YouTube",
-            "status": "COMPLETE"
-            if publication and publication["outcome"] == "succeeded"
-            else "READY"
-            if preflight.private_test_upload_allowed
-            else "BLOCKED",
-            "reason": "Private upload recorded"
-            if publication and publication["outcome"] == "succeeded"
-            else "Private test upload available"
-            if preflight.private_test_upload_allowed
-            else "See private-test blockers",
-            "artifacts": [],
-        },
-    ]
-    for stage in stages:
-        related = [
-            c
-            for c in preflight.checks
-            if not c.passed and (stage["name"] in {"Render", "Review", "Release", "YouTube"})
-        ]
-        if stage["name"] == "Render" and not preflight.render_ready:
-            stage["status"] = "BLOCKED"
-            stage["reason"] = related[0].reason if related else "Render evidence is invalid"
-        if stage["name"] == "Review" and any(
-            c.name == "media_qa_passed" and not c.passed for c in preflight.checks
-        ):
-            stage["status"] = "NEEDS REVIEW"
-            stage["reason"] = "Media QA is not current or did not pass"
-        if stage["name"] == "Visual Assets":
-            blocker = next(
-                (
-                    c
-                    for c in preflight.checks
-                    if not c.passed
-                    and c.name in {"character_pack", "environment_set", "lesson_object_manifest"}
-                ),
-                None,
-            )
-            if blocker:
-                stage["status"], stage["reason"] = "BLOCKED", blocker.reason
-        if (
-            stage["name"] == "YouTube"
-            and publication
-            and publication["outcome"] in {"ambiguous", "remote_started"}
-        ):
-            stage["status"] = "BLOCKED"
-            stage["reason"] = "Manual reconciliation required"
     media = None
     if preflight.render_artifact_id:
         store = AssetStore(config.data_root, database, initialize=False)
@@ -190,10 +104,11 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
                 }
         except (KeyError, ValueError, OSError):
             pass
+    continuation = plan_continuation(config, episode_key)
     return {
         "episode": episode,
-        "production": ShortProductionWorkflow(config).plan(episode_key),
-        "stages": stages,
+        "production": continuation,
+        "stages": continuation["stages"],
         "selected": selected,
         "brand_assets": brand,
         "preflight": preflight.as_dict(),
@@ -203,23 +118,6 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
         "render_manifest": full_manifest,
         "publication_metadata": metadata,
     }
-
-
-def generate_publication_metadata(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
-    """Use the same durable provider and MetadataWriter as the creative CLI."""
-    if not evaluate_release(config, episode_key).render_ready:
-        raise ValueError("Selected final render is not ready for publication metadata")
-    transport = NvidiaNIMClient(config.creative_llm)
-    try:
-        with creative_generator(
-            Database(config.database_path), config.creative_llm, transport
-        ) as generator:
-            workflow = CreativeWorkflow(config, generator)
-            result = MetadataWriter(workflow).generate(episode_key)
-            result["preflight"] = evaluate_release(config, episode_key).as_dict()
-            return result
-    finally:
-        transport.close()
 
 
 def episodes(config: RuntimeConfig) -> list[dict[str, Any]]:
@@ -250,10 +148,6 @@ def system_status(config: RuntimeConfig, active_job: dict[str, Any] | None) -> d
         with closing(database.connect()) as db:
             for kind in ("environment_set", "lesson_object_manifest", "lesson_object"):
                 selected[kind] = _selected(db, "brand", catalog.version.revision_id, kind)
-    try:
-        creative = eligibility(database, catalog) if config.database_path.is_file() else None
-    except (ValueError, OSError):
-        creative = None
     yt = config.publication.youtube
     return {
         "runtime": "local",
@@ -274,6 +168,6 @@ def system_status(config: RuntimeConfig, active_job: dict[str, Any] | None) -> d
         "youtube_token_present": yt.token_file.is_file(),
         "youtube_contains_synthetic_media": yt.contains_synthetic_media,
         "expected_channel_id": config.expected_youtube_channel_id,
-        "creative_eligibility": creative,
+        "creative_planning": "open_editorial",
         "active_job": active_job,
     }

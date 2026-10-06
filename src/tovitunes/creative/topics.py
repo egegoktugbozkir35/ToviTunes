@@ -1,4 +1,4 @@
-"""Bounded durable editorial pools; downstream production stays in ShortProductionWorkflow."""
+"""Bounded editorial pools; downstream production belongs to the application orchestrator."""
 
 import json
 import math
