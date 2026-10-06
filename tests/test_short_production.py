@@ -1045,18 +1045,60 @@ def test_uncertain_or_failed_publication_never_uploads_again(ready, monkeypatch,
 
 
 @pytest.mark.parametrize("entrypoint", ["existing_episode", "next_episode"])
-def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(case, entrypoint):
+def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(
+    case,
+    entrypoint,
+    monkeypatch,
+):
     from test_creative_fallback import CHAIN, build, records, reply
 
     from tovitunes.catalog import load_brand
+    from tovitunes.creative.provider import ProviderError
+    from tovitunes.creative.resilience import ResilientStructuredGenerator
     from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 
+    # MockTransport still runs NIM's credential preflight. Never depend on a host/CI secret.
+    monkeypatch.setenv("NVIDIA_API_KEY", "offline-creative-recovery-key")
     flow, config, store = (case[k] for k in ("flow", "config", "store"))
     database = store.database
     historical = database.get_episode(case["red"].episode_id).model_dump_json()
     calls = []
+    failures = []
+    original_generate = ResilientStructuredGenerator.generate
+
+    def diagnose_generate(generator, *args, **kwargs):
+        try:
+            return original_generate(generator, *args, **kwargs)
+        except Exception as exc:
+            frames = []
+            trace = exc.__traceback__
+            while trace is not None:
+                frames.append(
+                    {
+                        "file": Path(trace.tb_frame.f_code.co_filename).name,
+                        "function": trace.tb_frame.f_code.co_name,
+                    }
+                )
+                trace = trace.tb_next
+            # No exception text, locals, prompts, response bodies, credentials or URLs.
+            failures.append(
+                {
+                    "type": type(exc).__name__,
+                    "category": exc.category.value if isinstance(exc, ProviderError) else None,
+                    "ambiguous": exc.ambiguous if isinstance(exc, ProviderError) else None,
+                    "frames": frames,
+                }
+            )
+            raise
+
+    monkeypatch.setattr(ResilientStructuredGenerator, "generate", diagnose_generate)
+    before_requests = len(records(database))
 
     def interrupted(request):
+        uses_offline_key = (
+            request.headers.get("Authorization") == "Bearer offline-creative-recovery-key"
+        )
+        assert uses_offline_key, "mock transport must use the test-scoped placeholder credential"
         calls.append(json.loads(request.content)["model"])
         return httpx.Response(504, text="remote-body-with-secret-and-signed-URL")
 
@@ -1073,7 +1115,22 @@ def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(
             return flow.produce_next(confirmed=True)
 
     stopped = invoke()
-    assert stopped["status"] == "AMBIGUOUS" and stopped["current_stage"] == "CREATIVE"
+    diagnostics = {
+        "status": stopped["status"],
+        "current_stage": stopped["current_stage"],
+        "mock_provider_calls": len(calls),
+        "exceptions": failures,
+        "new_requests": [
+            {key: row[key] for key in ("kind", "provider", "model", "status", "error_kind")}
+            for row in records(database)[before_requests:]
+        ],
+    }
+    assert stopped["status"] == "AMBIGUOUS" and stopped["current_stage"] == "CREATIVE", json.dumps(
+        diagnostics, sort_keys=True
+    )
+    assert failures[-1]["type"] == "CreativeAmbiguity", json.dumps(diagnostics, sort_keys=True)
+    assert failures[-1]["category"] == "ambiguous" and failures[-1]["ambiguous"] is True
+    assert calls == [CHAIN[0]], json.dumps(diagnostics, sort_keys=True)
     evidence = stopped["blocker"]
     target = records(database)[-1]
     assert evidence["request_id"] == target["request_id"]
@@ -1082,7 +1139,9 @@ def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(
     assert evidence["recovery_action"] == "abandon_remote_result"
     assert "creative reconcile --request-id" in evidence["recovery_command"]
     assert "failed" not in evidence.get("reason", "").lower()
-    assert "remote-body-with-secret-and-signed-URL" not in json.dumps(stopped)
+    for forbidden in ("remote-body-with-secret-and-signed-URL", "offline-creative-recovery-key"):
+        assert forbidden not in json.dumps(stopped)
+        assert forbidden not in json.dumps(diagnostics)
     assert invoke()["status"] == "AMBIGUOUS" and calls == [CHAIN[0]]
     CreativeReconciliations(database).abandon(
         target["request_id"], actor="human:operator", rationale="No usable remote result."

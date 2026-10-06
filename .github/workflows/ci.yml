@@ -20,5 +20,7 @@ jobs:
       - run: uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
       - run: uv run ruff check .
       - run: uv run mypy src
+      - name: Creative ambiguity production recovery regression
+        run: uv run --locked pytest -q tests/test_short_production.py -k creative_ambiguity_reports_safe_recovery_and_normal_production_resumes
       - run: uv run pytest -q
 
