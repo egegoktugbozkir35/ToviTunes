@@ -23,6 +23,7 @@ from tovitunes.creative.provider import (
     ProviderError,
     StructuredGenerator,
 )
+from tovitunes.creative.resilience import CreativeChainExhausted
 from tovitunes.creative.workflow import CreativeWorkflow, episode_by_key
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
@@ -503,6 +504,7 @@ class ShortProductionWorkflow:
         self.database.migrate()
         execution = production_execution(self.database, "short-production:next")
         leases, lease = execution.__enter__()
+        run_id = None
         try:
             with closing(self.database.connect()) as db:
                 active = db.execute(
@@ -561,8 +563,13 @@ class ShortProductionWorkflow:
                 "provider_calls": None,
                 "status": "AMBIGUOUS" if ambiguous else "FAILED",
                 "current_stage": "CREATIVE",
+                "run_id": run_id,
                 "blocker": exc.evidence
                 if isinstance(exc, CreativeAmbiguity)
+                else {"error_kind": "chain_exhausted"}
+                if isinstance(exc, CreativeChainExhausted)
+                else {"error_kind": exc.category.value}
+                if isinstance(exc, ProviderError)
                 else (f"CREATIVE failed ({type(exc).__name__}); inspect durable creative attempts"),
             }
         finally:
@@ -1394,6 +1401,10 @@ class ShortProductionWorkflow:
                 )
             if isinstance(exc, CreativeAmbiguity):
                 evidence.update(exc.evidence)
+            elif isinstance(exc, CreativeChainExhausted):
+                evidence["error_kind"] = "chain_exhausted"
+            elif isinstance(exc, ProviderError):
+                evidence["error_kind"] = exc.category.value
             self._event(episode, stage, status, evidence)
             return {
                 **self.plan(episode_key, target=target),

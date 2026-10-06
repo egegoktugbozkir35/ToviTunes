@@ -66,6 +66,7 @@ class FailureCategory(StrEnum):
     AUTHENTICATION = "authentication"
     CONFIGURATION = "configuration"
     PROVIDER_REJECTED = "provider_rejected"
+    RATE_LIMITED = "rate_limited"
     AMBIGUOUS = "ambiguous"
 
 
@@ -74,12 +75,38 @@ MODEL_FAILURES = {
     FailureCategory.MODEL_UNAVAILABLE,
     FailureCategory.INCOMPLETE_ANSWER,
     FailureCategory.STRUCTURED_OUTPUT,
+    FailureCategory.PROVIDER_REJECTED,
 }
+
+
+def http_failure(status: int) -> FailureCategory:
+    """Only a typed model rejection authorizes next-model fallback.
+
+    Bare 4xx responses cannot distinguish bad configuration from model rejection.
+    Endpoint throttling and credentials cannot be repaired by changing the model.
+    """
+    if status in {401, 403}:
+        return FailureCategory.AUTHENTICATION
+    if status == 429:
+        return FailureCategory.RATE_LIMITED
+    if status >= 500 or status in {408, 409, 425}:
+        return FailureCategory.AMBIGUOUS
+    return FailureCategory.CONFIGURATION
 
 
 def stored_failure(row: Row) -> FailureCategory:
     if row["status"] == "ambiguous":
         return FailureCategory.AMBIGUOUS
+    if (
+        row["status"] == "failed"
+        and row["provider"] == "nvidia"
+        and row["error_kind"] == "provider_rejected"
+    ):
+        # Older transports labeled bare HTTP 4xx (including throttling) as rejection.
+        # Recognize only their exact fixed diagnostic, never arbitrary provider prose.
+        for status in range(400, 500):
+            if row["error_reason"] == f"NVIDIA NIM HTTP {status} for {row['model']}":
+                return http_failure(status)
     # Compatibility with the exact old transport's conclusive empty-answer terminal error.
     # Never infer safety from substrings, generic ProviderError, or ambiguous rows.
     if (

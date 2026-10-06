@@ -20,6 +20,7 @@ from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.production import ProductionRenderer
+from tovitunes.web.diagnostics import studio_job
 from tovitunes.web.jobs import JobBusy, JobManager, safe_error
 from tovitunes.web.services import (
     episode_detail,
@@ -177,7 +178,7 @@ def create_app(
 
     @app.get("/api/jobs")
     def job_list() -> list[dict[str, Any]]:
-        return [job.model_dump() for job in jobs.list()]
+        return [studio_job(config, job) for job in jobs.list()]
 
     def production_workflow() -> ShortProductionWorkflow:
         return ShortProductionWorkflow(config, progress=jobs.update_progress)
@@ -210,7 +211,7 @@ def create_app(
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str) -> dict[str, Any]:
         try:
-            return jobs.get(job_id).model_dump()
+            return studio_job(config, jobs.get(job_id))
         except KeyError as exc:
             raise HTTPException(404, "Job unavailable") from exc
 

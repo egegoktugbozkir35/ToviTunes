@@ -27,6 +27,7 @@ from tovitunes.creative.provider import (
 from tovitunes.creative.resilience import ResilientStructuredGenerator, generation_audit
 from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot
 from tovitunes.domain.episode import Episode
+from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import InvalidRequestTransition
 
@@ -175,7 +176,7 @@ def test_explicit_machine_readable_model_unavailable(owner, status):
     assert "offline-secret" not in json.dumps(records(database))
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 429, 500, 503])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 409, 422, 425, 429, 500, 503, 504])
 def test_auth_bad_configuration_and_unclassified_http_fail_closed(owner, status):
     database, context = owner
     calls = []
@@ -186,7 +187,196 @@ def test_auth_bad_configuration_and_unclassified_http_fail_closed(owner, status)
     assert len(calls) == 1
     saved = records(database)
     assert len(saved) == 1
-    assert saved[0]["status"] == ("ambiguous" if status >= 500 or status == 408 else "failed")
+    assert saved[0]["status"] == (
+        "ambiguous" if status >= 500 or status in {408, 409, 425} else "failed"
+    )
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_empty_ambiguous_abandoned_rejected_then_success(owner, monkeypatch, restart):
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        model = json.loads(request.content)["model"]
+        calls.append(model)
+        if model == CHAIN[0]:
+            return reply("")
+        if model == CHAIN[1]:
+            return httpx.Response(504, text="Bearer offline-secret signed-url?token=private")
+        if model == CHAIN[2]:
+            return httpx.Response(
+                422,
+                json={
+                    "error": {
+                        "code": "provider_rejected",
+                        "message": "offline-secret raw-provider-body",
+                    }
+                },
+            )
+        return reply(identity=f"deepseek-success-{len(calls)}")
+
+    with pytest.raises(ProviderError) as failure:
+        run(build(database, handler), context)
+    assert failure.value.ambiguous
+    originals = records(database)
+    assert calls == list(CHAIN[:2])
+    with pytest.raises(ProviderError):
+        run(build(database, handler), context)
+    assert records(database) == originals and calls == list(CHAIN[:2])
+    reconciliations = CreativeReconciliations(database)
+    decision = dict(
+        reconciliations.abandon(
+            originals[1]["request_id"],
+            actor="human:operator",
+            rationale="Remote result inaccessible; continue with next configured model",
+        )
+    )
+    generator = build(database, handler)
+    if restart:
+        history = generator._history
+
+        def crash_after_rejection(context):
+            rows = history(context)
+            if rows[-1]["model"] == CHAIN[2] and rows[-1]["status"] == "failed":
+                raise SystemExit("process interrupted after durable provider rejection")
+            return rows
+
+        monkeypatch.setattr(generator, "_history", crash_after_rejection)
+        with pytest.raises(SystemExit):
+            run(generator, context)
+        assert calls == list(CHAIN[:3])
+        retained = records(database)
+        assert retained[-1]["status"] == "failed"
+        assert retained[-1]["error_kind"] == "provider_rejected"
+        generator = build(Database(database.path), handler)
+    else:
+        retained = originals
+    draft = run(generator, context)
+    saved = records(database)
+    assert draft.model == CHAIN[3] and draft.output.value == 7
+    assert calls == list(CHAIN)
+    assert [r["fallback_index"] for r in saved] == [0, 1, 2, 3]
+    assert [r["previous_attempt_id"] for r in saved] == [None] + [
+        r["request_id"] for r in saved[:-1]
+    ]
+    assert [r["fallback_reason"] for r in saved] == [
+        None,
+        "empty_answer",
+        "operator_abandoned_ambiguous",
+        "provider_rejected",
+    ]
+    assert saved[: len(retained)] == retained
+    assert saved[1]["status"] == "ambiguous" and saved[2]["status"] == "failed"
+    assert dict(reconciliations.get(originals[1]["request_id"])) == decision
+    with pytest.raises(ValueError, match="immutable"):
+        reconciliations.abandon(originals[1]["request_id"], actor="human:other", rationale="change")
+    assert run(build(database, lambda r: pytest.fail("resend")), context) == draft
+    assert records(database) == saved
+    assert run(build(database, handler), replace(context, kind="lyrics")).model == CHAIN[3]
+    assert calls == list(CHAIN) + [CHAIN[3]]
+    assert all(
+        secret not in json.dumps(saved)
+        for secret in ("offline-secret", "raw-provider-body", "signed-url", "Bearer")
+    )
+
+
+@pytest.mark.parametrize("status", [200, 400, 404, 422])
+def test_conclusive_provider_rejection_advances_once_and_exhausts(owner, status):
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(
+            status, json={"error": {"code": "provider_rejected", "message": "offline-secret"}}
+        )
+
+    for _ in range(2):
+        with pytest.raises(ProviderError, match="chain exhausted"):
+            run(build(database, handler, emergency=True), context)
+    assert calls == list(CHAIN)
+    assert all(r["status"] == "failed" for r in records(database))
+
+
+@pytest.mark.parametrize(
+    "code,category",
+    [
+        ("invalid_api_key", "authentication"),
+        ("authentication_error", "authentication"),
+        ("invalid_request_error", "configuration"),
+        ("rate_limit_exceeded", "rate_limited"),
+        ("insufficient_quota", "rate_limited"),
+        ("server_error", "ambiguous"),
+    ],
+)
+@pytest.mark.parametrize("status", [200, 400, 422])
+def test_typed_endpoint_errors_never_advance(owner, code, category, status):
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {"code": code, "message": "offline-secret"}})
+
+    for _ in range(2):
+        with pytest.raises(ProviderError) as exc:
+            run(build(database, handler, emergency=True), context)
+        assert exc.value.category.value == category
+    assert len(calls) == 1 and len(records(database)) == 1
+
+
+@pytest.mark.parametrize("status,category", [(400, "configuration"), (429, "rate_limited")])
+def test_old_bare_http_rejection_does_not_become_fallback_safe(owner, status, category):
+    database, context = owner
+    with pytest.raises(ProviderError):
+        run(build(database, lambda r: httpx.Response(status)), context)
+    with database.connect() as db:
+        db.execute("UPDATE generation_requests SET error_kind='provider_rejected'")
+    before = records(database)
+    with pytest.raises(ProviderError) as exc:
+        run(build(database, lambda r: pytest.fail("resend or fallback")), context)
+    assert exc.value.category.value == category
+    assert records(database) == before
+
+
+@pytest.mark.parametrize(
+    "body,category",
+    [
+        ({"code": "unrecognized_auth_code", "type": "authentication_error"}, "authentication"),
+        ({"code": 401}, "authentication"),
+        ({"code": "provider_rejected", "type": "invalid_request_error"}, "configuration"),
+        ({"code": 429}, "rate_limited"),
+    ],
+)
+def test_endpoint_error_type_and_numeric_codes_take_priority(owner, body, category):
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"error": body | {"message": "offline-secret"}})
+
+    with pytest.raises(ProviderError) as exc:
+        run(build(database, handler), context)
+    assert exc.value.category.value == category
+    assert len(calls) == 1
+
+
+def test_explicit_model_unavailable_with_generic_request_error_type_advances(owner):
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        if len(calls) == 1:
+            return httpx.Response(
+                404, json={"error": {"code": "model_not_found", "type": "invalid_request_error"}}
+            )
+        return reply()
+
+    assert run(build(database, handler), context).model == CHAIN[1]
+    assert calls == list(CHAIN[:2])
 
 
 @pytest.mark.parametrize(

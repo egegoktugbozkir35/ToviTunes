@@ -30,10 +30,11 @@ delays, same-model retry loops or automatic resends.
 | `incomplete_answer` | A known terminal finish reason (`length`, `content_filter`, `tool_calls`, `function_call`) reports an unusable answer; advance to the next NVIDIA model. Unknown completion markers remain ambiguous. |
 | `structured_output` | Invalid JSON/schema/domain answer permits one visible repair on that model. Only after a conclusively invalid repair may the next model start. |
 | `endpoint_unreachable` | A `ConnectError` with a typed DNS (`socket.gaierror`) or connection-refused cause, before response interaction, can use enabled local Ollama. Never cycle NVIDIA models for this condition. |
-| `authentication` | HTTP 401/403; fail closed with no fallback. |
-| `configuration` | Missing key, changed request settings, corrupt receipt, unrecognized legacy failure or local configuration error; fail closed. |
-| `provider_rejected` | Unclassified provider rejection, bad request, bare 404, rate limiting; fail closed. |
-| `ambiguous` | Read/write timeout, connection loss, generic connect error or connect timeout without proof of non-interaction, HTTP 408/5xx, interrupted/malformed stream, or started request without a receipt; stop and reconcile evidence. |
+| `authentication` | HTTP 401/403 or typed authentication code/type; fail closed with no fallback. |
+| `configuration` | Bare unclassified 4xx, typed invalid-request/configuration error, missing key, changed settings, corrupt receipt, unrecognized legacy failure or local configuration error; fail closed. |
+| `provider_rejected` | Explicit conclusive provider/model rejection with a matching durable `failed` row; advance to the next configured model. No same-request resend. |
+| `rate_limited` | HTTP 429, typed throttling or quota errors; stop without model fallback because the condition is endpoint-wide. |
+| `ambiguous` | Read/write timeout, connection loss, generic connect error or connect timeout without proof of non-interaction, HTTP 408/409/425/5xx, interrupted/malformed stream, or started request without a receipt; stop and reconcile evidence. |
 
 Local operator/curriculum validation, lease and persistence exceptions do not authorize fallback.
 Even a typed exception requires matching durable terminal evidence before preparing another request.
@@ -74,10 +75,14 @@ CLI process. It does not leak across episodes/runs. Existing stage requests are 
 Lease budgets cover the bounded chain and optional emergency requests; ownership is checked before
 each preparation/start and artifact operation.
 
-Compatibility recognizes only a stored **failed** NVIDIA row with `error_kind=ProviderError` and
+Empty-answer compatibility recognizes only a stored **failed** NVIDIA row with `error_kind=ProviderError` and
 the exact prior transport error `NVIDIA NIM returned empty answer content`. That prior transport
 produced this error after completed response handling. It is interpreted as `empty_answer` in memory;
 the old row is never relabeled. Generic legacy errors and ambiguous rows remain blocked.
+Older bare HTTP 4xx errors labeled `provider_rejected` are recognized by the exact fixed
+transport diagnostic and reclassified in memory. Bare bad-request/configuration and rate-limit
+failures do not become safe model fallback simply because the rejection category now advances.
+The original row remains unchanged. Typed conclusive provider rejections advance normally.
 The old NIM fingerprint settings serialization is preserved, excluding fallback configuration so
 enabling a chain does not hide historical requests. Changed inference settings fail closed.
 
@@ -150,7 +155,7 @@ configured primary. The decision is an authorization to move on, never a fabrica
 | Invalid structured response | One repair on this model; a conclusively invalid repair advances automatically. |
 | Ambiguous, no decision | Stop; no retry, fallback or resend. |
 | Ambiguous, explicit abandonment | Next configured model; preserve the ambiguous original. |
-| Authentication, configuration or local preflight validation failure | Stop without fallback. |
+| Authentication, configuration, rate limiting or local preflight validation failure | Stop without fallback. |
 | Final configured model consumed | Report chain exhaustion; never repeat the primary or use emergency Ollama. |
 
 For example, Kimi ambiguity plus abandonment advances to GLM. A completed GLM empty answer then

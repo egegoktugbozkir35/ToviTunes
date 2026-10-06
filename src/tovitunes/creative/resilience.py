@@ -25,6 +25,10 @@ from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import GeneratedDraft
 
 
+class CreativeChainExhausted(ProviderError):
+    """Conclusive terminal chain outcome, with no retry or wraparound."""
+
+
 class ResilientStructuredGenerator:
     def __init__(
         self,
@@ -184,7 +188,7 @@ class ResilientStructuredGenerator:
             elif index + 1 < len(self.transports):
                 index += 1
             else:
-                raise ProviderError(
+                raise CreativeChainExhausted(
                     "configured creative model chain exhausted; no requests resent",
                     category=category,
                 )

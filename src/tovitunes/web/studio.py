@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.learning import LearningBrief
+from tovitunes.creative.provider import FailureCategory
 from tovitunes.creative.workflow import episode_by_key
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
@@ -21,6 +22,7 @@ from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
+from tovitunes.web.diagnostics import OUTCOMES
 from tovitunes.web.jobs import JobBusy, JobManager
 
 
@@ -198,11 +200,21 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
                 for k in ("request_id", "provider", "model", "kind", "recovery_action")
                 if k in blocker
             }
+            category = blocker.get("error_kind")
+            if category in {c.value for c in FailureCategory} | {"chain_exhausted"}:
+                safe["blocker"]["error_kind"] = category
         else:
             safe["blocker"] = {}
         # Stage failures can include third-party text. Only our fixed messages cross the API.
         safe["blocker"]["reason"] = (
-            "ACE-Step's result is uncertain. Check the retained task without creating a new song."
+            "Configured creative model chain exhausted. See the per-model outcomes."
+            if safe["blocker"].get("error_kind") == "chain_exhausted"
+            else "Creative model " + OUTCOMES[safe["blocker"]["error_kind"]] + "."
+            if safe["blocker"].get("error_kind") in OUTCOMES
+            else (
+                "ACE-Step's result is uncertain. Check the retained task "
+                "without creating a new song."
+            )
             if safe["blocker"].get("recovery_action") == "resume_music_task"
             else "The Creative Director's result could not be recovered."
             if safe["blocker"].get("recovery_action") == "abandon_remote_result"
@@ -214,7 +226,7 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
             if result.get("status") == "PENDING_PROVIDER"
             else "Configured review or release policy requires attention."
             if result.get("status") == "NEEDS_REVIEW"
-            else "This stage could not complete. Check System and resume its retained work."
+            else "This stage could not complete. Check Settings and resume its retained work."
         )
     if isinstance(blocker, dict) and isinstance(blocker.get("release"), dict):
         checks = blocker["release"].get("checks", [])

@@ -13,7 +13,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.creative.factory import creative_generator
 from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
-from tovitunes.creative.workflow import CreativeWorkflow, eligibility
+from tovitunes.creative.workflow import CreativeWorkflow
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.publication.preflight import evaluate_release
@@ -250,10 +250,6 @@ def system_status(config: RuntimeConfig, active_job: dict[str, Any] | None) -> d
         with closing(database.connect()) as db:
             for kind in ("environment_set", "lesson_object_manifest", "lesson_object"):
                 selected[kind] = _selected(db, "brand", catalog.version.revision_id, kind)
-    try:
-        creative = eligibility(database, catalog) if config.database_path.is_file() else None
-    except (ValueError, OSError):
-        creative = None
     yt = config.publication.youtube
     return {
         "runtime": "local",
@@ -274,6 +270,6 @@ def system_status(config: RuntimeConfig, active_job: dict[str, Any] | None) -> d
         "youtube_token_present": yt.token_file.is_file(),
         "youtube_contains_synthetic_media": yt.contains_synthetic_media,
         "expected_channel_id": config.expected_youtube_channel_id,
-        "creative_eligibility": creative,
+        "creative_planning": "open_editorial",
         "active_job": active_job,
     }

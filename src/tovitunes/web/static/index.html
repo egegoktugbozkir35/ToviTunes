@@ -1,10 +1,189 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ToviTunes Studio</title><link rel="stylesheet" href="/static/styles.css"></head>
-<body><header class="topbar"><a class="brand" href="#create"><span class="mark">♪</span><span><strong>ToviTunes</strong><small>STUDIO</small></span></a><nav aria-label="Studio"><button data-page="create" aria-current="page">Create</button><button data-page="library">Library</button><button data-page="system">System</button></nav><span class="local">● Your local studio</span></header>
-<main><div id="notice" role="status" aria-live="polite"></div>
-<section id="page-create" class="page"><div class="hero"><div><p class="eyebrow">LITTLE LESSONS. BIG IMAGINATION.</p><h1>A new little world,<br>one song at a time.</h1><p>Let Tovi choose a fresh lesson and bring it to life.<br>You choose how far to take it.</p></div><div class="hero-art" aria-hidden="true"><span class="note n1">♫</span><div class="record"><div class="record-label">tovi<span>♪</span></div></div><span class="note n2">✦</span><span class="art-caption">Made for curious little minds</span></div></div>
-<div class="create-actions"><article class="action-card"><span class="step-number">01 / THE IDEA</span><h2>Start with a song.</h2><p>A fresh lesson, story, lyrics and music direction. Saved for whenever you’re ready.</p><button class="button" data-create="draft">Generate Draft <span>↗</span></button></article><article class="action-card render-card"><span class="step-number">02 / THE VIDEO</span><h2>Make it move.</h2><p>Turn the lesson into music, illustrations and a finished video you can watch.</p><button class="button" data-create="render">Generate Draft + Render <span>↗</span></button></article><article class="action-card publish-card"><span class="step-number">03 / THE RELEASE</span><h2>Share a little joy.</h2><p>Create the video and publish to your connected YouTube channel, using your release policy.</p><button class="button" data-create="publish">Generate Draft + Render + Publish <span>↗</span></button></article></div>
-<section class="activity"><div class="section-heading"><h2>Your production desk</h2><span>Work is saved as it progresses</span></div><div id="active-task" aria-live="polite"></div><div id="task-history"></div></section></section>
-<section id="page-library" class="page" hidden><div class="page-heading"><p class="eyebrow">YOUR LITTLE WORLDS</p><h1>The library.</h1><p>Pick up where you left off. Every next step reuses your saved work.</p></div><div class="library-tabs" role="group" aria-label="Library category"><button data-category="drafts" class="selected">Drafts <span id="count-drafts">0</span></button><button data-category="renders">Renders <span id="count-renders">0</span></button><button data-category="published">Published <span id="count-published">0</span></button></div><div id="library-cards" class="library-grid"></div></section>
-<section id="page-system" class="page" hidden><div class="page-heading"><p class="eyebrow">BEHIND THE SCENES</p><h1>Studio system.</h1><p>Local services start automatically when you open Studio. Check their status here.</p></div><div id="system-cards" class="system-grid"></div><div class="system-help"><h2>YouTube connection</h2><p>Connect the channel configured for this studio. Its identity is checked before publication.</p><button class="button secondary" id="youtube-connect">Connect YouTube</button><button class="button secondary" id="system-refresh">Refresh status</button><div id="youtube-identity" role="status"></div></div><details class="diagnostics"><summary>Advanced diagnostics</summary><dl id="system-details"></dl></details></section>
-</main><footer><span>ToviTunes Studio</span><span>Small lessons, thoughtfully made.</span></footer><dialog id="preview"><button id="close-preview" class="close" aria-label="Close preview">×</button><div id="preview-content"></div></dialog><script src="/static/app.js" defer></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ToviTunes local content production studio">
+  <title>ToviTunes Content Studio</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>ToviTunes</strong><small>Content Studio</small></span>
+      </div>
+      <nav class="nav-list">
+        <button class="nav-item" data-view="dashboard" type="button">
+          <span aria-hidden="true">⌁</span> Dashboard
+        </button>
+        <button class="nav-item active" data-view="generate" type="button">
+          <span aria-hidden="true">＋</span> Generate
+        </button>
+        <button class="nav-item" data-view="videos" type="button">
+          <span aria-hidden="true">▶</span> Videos
+        </button>
+        <button class="nav-item" data-view="settings" type="button">
+          <span aria-hidden="true">⚙</span> Settings
+        </button>
+      </nav>
+      <div class="sidebar-status">
+        <span class="eyebrow">Local control</span>
+        <div class="signal-row"><span class="signal-dot" id="sidebar-signal"></span><span id="sidebar-status">Connecting</span></div>
+        <small>Bound to this computer</small>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow" id="page-kicker">Production control</span>
+          <h1 id="page-title">Generate videos</h1>
+        </div>
+        <div class="topbar-status">
+          <span class="status-pill neutral" id="creative-pill">Creative checking</span>
+          <span class="status-pill neutral" id="youtube-pill">YouTube checking</span>
+        </div>
+      </header>
+
+      <section class="view" id="view-generate" data-page="generate">
+        <div class="generate-grid">
+          <form class="panel generation-console" id="generate-form">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">New production run</span>
+                <h2>Choose how far to take the next lesson</h2>
+              </div>
+              <span class="sequence-label">01 / Configure</span>
+            </div>
+
+            <div class="field-grid">
+              <label class="field"><span>Creative planning</span><input value="Open editorial planning" readonly><small>A fresh lesson, story and song for Tovi.</small></label>
+              <label class="field"><span>Production</span><input value="One episode · saved at every stage" readonly><small>Continue saved drafts from Videos.</small></label>
+            </div>
+            <div class="count-row"><div><label>Let the Creative Director lead</label><small>Lessons are chosen from your editorial brief and topic memory.</small></div><span class="badge running">ToviTunes</span></div>
+            <div class="action-stack">
+              <span class="eyebrow">02 / Start pipeline</span>
+              <div class="secondary-actions">
+                <button class="action-button secondary" data-create="draft" type="button">
+                  <strong>Generate Draft</strong>
+                  <span>Lesson, story, lyrics & music direction</span>
+                </button>
+                <button class="action-button secondary" data-create="render" type="button">
+                  <strong>Generate + Render</strong>
+                  <span>Create persisted MP4s</span>
+                </button>
+              </div>
+              <button class="action-button publish" data-create="publish" id="publish-action" type="button">
+                <span class="publish-icon" aria-hidden="true">▶</span>
+                <span><strong>Generate, Render &amp; Publish</strong><small>Create and publish to your connected channel</small></span>
+                <span aria-hidden="true">→</span>
+              </button>
+              <p class="availability-note" id="publish-note">Checking YouTube publishing configuration…</p>
+            </div>
+          </form>
+
+          <div class="right-rail">
+            <section class="panel job-panel" aria-labelledby="job-heading">
+              <div class="panel-heading compact">
+                <div>
+                  <span class="eyebrow">Queue monitor</span>
+                  <h2 id="job-heading">Current job</h2>
+                </div>
+                <span class="live-indicator"><i></i> Live</span>
+              </div>
+              <div class="empty-state" id="current-job">
+                <span class="empty-glyph" aria-hidden="true">◇</span>
+                <strong>No active job</strong>
+                <p>Start a run to see its queue and completion state here.</p>
+              </div>
+              <div class="job-history" id="job-history"></div>
+            </section>
+
+            <section class="panel readiness-panel" aria-labelledby="readiness-heading">
+              <div class="panel-heading compact">
+                <div>
+                  <span class="eyebrow">Preflight signals</span>
+                  <h2 id="readiness-heading">System readiness</h2>
+                </div>
+              </div>
+              <dl class="readiness-list">
+                <div><dt>Pipeline API</dt><dd id="api-readiness"><span class="mini-dot"></span> Checking</dd></div>
+                <div><dt>Creative Director</dt><dd id="creative-readiness"><span class="mini-dot"></span> Checking</dd></div>
+                <div><dt>YouTube</dt><dd id="youtube-readiness"><span class="mini-dot"></span> Checking</dd></div>
+                <div><dt>Worker capacity</dt><dd><span class="mini-dot ready"></span> 1 production job</dd></div>
+              </dl>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-dashboard" data-page="dashboard" hidden>
+        <div class="metric-grid" id="dashboard-metrics"></div>
+        <section class="panel activity-panel">
+          <div class="panel-heading compact">
+            <div><span class="eyebrow">Studio library</span><h2>Recent activity</h2></div>
+            <button class="text-button" data-navigate="videos" type="button">View all videos →</button>
+          </div>
+          <div id="dashboard-activity" class="activity-list"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-videos" data-page="videos" hidden>
+        <section class="panel videos-panel">
+          <div class="panel-heading video-heading">
+            <div><span class="eyebrow">Persisted production</span><h2>Videos</h2></div>
+            <label class="filter-control">State
+              <select id="video-filter">
+                <option value="">All states</option>
+                <option value="drafts">Draft / brief ready</option>
+                <option value="renders">Rendered</option>
+                <option value="published">Published</option>
+                <option value="attention">Needs attention</option>
+              </select>
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Video</th><th>Content</th><th>State</th><th>Publication</th><th>Updated</th><th>Actions</th></tr></thead>
+              <tbody id="videos-body"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="videos-empty" hidden>
+            <span class="empty-glyph" aria-hidden="true">□</span>
+            <strong>No videos in this view</strong>
+            <p>Generated items will appear here from the persisted Studio library.</p>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-settings" data-page="settings" hidden>
+        <div class="settings-grid">
+          <section class="panel settings-form">
+            <div class="panel-heading"><div><span class="eyebrow">Local services</span><h2>Studio readiness</h2></div><button class="button" id="system-refresh" type="button">Refresh</button></div>
+            <div id="service-list" class="service-list"></div>
+            <div class="settings-section"><h2>YouTube connection</h2><p class="availability-note">Connect the channel configured for this studio. Publication verifies its identity.</p><button class="button solid" id="youtube-connect" type="button">Connect YouTube</button></div>
+          </section>
+
+          <section class="panel system-panel">
+            <div class="panel-heading compact"><div><span class="eyebrow">Read only</span><h2>System configuration</h2></div></div>
+            <dl class="system-list" id="system-list"></dl>
+            <div class="security-callout"><span aria-hidden="true">◆</span><p><strong>Secrets stay outside the browser.</strong><br>API keys, provider response bodies, and OAuth tokens are never returned by this UI.</p></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="video-dialog" class="detail-dialog">
+    <div class="dialog-shell">
+      <header><div><span class="eyebrow">Persisted video</span><h2 id="detail-title">Video detail</h2></div><button class="icon-button" id="close-dialog" type="button" aria-label="Close video detail">×</button></header>
+      <div id="detail-content" class="detail-content"></div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

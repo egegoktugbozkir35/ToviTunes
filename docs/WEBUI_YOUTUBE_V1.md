@@ -1,7 +1,7 @@
 # Local WebUI and YouTube private tests, V1
 
-Studio V1 supersedes the original frontend described below. For the current Create /
-Library / System workflow, durable jobs and automatic local startup, see
+Studio V1 supersedes the original frontend described below. For the current Dashboard /
+Generate / Videos / Settings workflow, durable jobs and automatic local startup, see
 [Studio V1](STUDIO_V1.md). The historical endpoints and publication gates remain supported.
 
 ## Install and start

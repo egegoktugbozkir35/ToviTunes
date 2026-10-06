@@ -8,7 +8,13 @@ from typing import Any
 import httpx
 
 from tovitunes.config import CreativeLLMConfig
-from tovitunes.creative.provider import ChatResponse, FailureCategory, Message, ProviderError
+from tovitunes.creative.provider import (
+    ChatResponse,
+    FailureCategory,
+    Message,
+    ProviderError,
+    http_failure,
+)
 
 
 class NvidiaNIMClient:
@@ -54,13 +60,44 @@ class NvidiaNIMClient:
         if body.get("error") is not None:
             # Do not echo arbitrary remote error bodies (they may contain request secrets).
             error = body["error"]
-            code = error.get("code") if isinstance(error, dict) else None
+            codes = (
+                {
+                    str(error[key]).casefold()
+                    for key in ("code", "type")
+                    if isinstance(error.get(key), (str, int))
+                }
+                if isinstance(error, dict)
+                else set()
+            )
             category = (
-                FailureCategory.MODEL_UNAVAILABLE
-                if code in {"model_not_found", "model_unavailable", "model_not_supported"}
+                FailureCategory.AUTHENTICATION
+                if codes
+                & {
+                    "401",
+                    "403",
+                    "invalid_api_key",
+                    "authentication_error",
+                    "unauthorized",
+                    "forbidden",
+                }
+                else FailureCategory.RATE_LIMITED
+                if codes & {"429", "rate_limit_exceeded", "rate_limit_error", "insufficient_quota"}
+                else FailureCategory.CONFIGURATION
+                if codes & {"400", "invalid_request", "invalid_parameter"}
+                else FailureCategory.AMBIGUOUS
+                if codes
+                & {"408", "500", "502", "503", "504", "server_error", "timeout", "request_timeout"}
+                else FailureCategory.MODEL_UNAVAILABLE
+                if codes & {"model_not_found", "model_unavailable", "model_not_supported"}
+                else FailureCategory.CONFIGURATION
+                if "invalid_request_error" in codes
                 else FailureCategory.PROVIDER_REJECTED
             )
-            raise ProviderError("NVIDIA NIM returned a provider error", category=category)
+            raise ProviderError(
+                "NVIDIA NIM returned a provider error",
+                category=category,
+                ambiguous=category == FailureCategory.AMBIGUOUS,
+            )
 
     @staticmethod
     def _finish(finish: object) -> None:
@@ -131,6 +168,7 @@ class NvidiaNIMClient:
                         record_identity(remote_id)
                         break
                 if response.status_code >= 400:
+                    category = http_failure(response.status_code)
                     if response.status_code in {400, 404, 422}:
                         response.read()
                         try:
@@ -141,12 +179,8 @@ class NvidiaNIMClient:
                             self._provider_error(error_body)
                     raise ProviderError(
                         f"NVIDIA NIM HTTP {response.status_code} for {self.model_name}",
-                        ambiguous=response.status_code >= 500 or response.status_code == 408,
-                        category=(
-                            FailureCategory.AUTHENTICATION
-                            if response.status_code in {401, 403}
-                            else FailureCategory.PROVIDER_REJECTED
-                        ),
+                        ambiguous=category == FailureCategory.AMBIGUOUS,
+                        category=category,
                     )
                 if "text/event-stream" not in response.headers.get("content-type", "").casefold():
                     response.read()

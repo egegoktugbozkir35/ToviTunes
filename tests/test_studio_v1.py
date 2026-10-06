@@ -22,6 +22,7 @@ from tovitunes.pipeline import short_production
 from tovitunes.pipeline.targets import ProductionTarget, stages_for, steps_for
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.web import app as web_app
+from tovitunes.web.diagnostics import studio_job
 from tovitunes.web.jobs import Job, JobManager
 from tovitunes.web.launcher import open_when_ready, resolve_config
 from tovitunes.web.studio import library
@@ -362,6 +363,139 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
         assert client.post(f"/api/studio/jobs/{failed.job_id}/recover").status_code == 409
         system = client.get("/api/system").json()
         assert system["services"]["ollama"]["status"] == "disabled"
+    app.state.jobs.close()
+
+
+def test_studio_subject_pool_chain_shows_safe_live_fallback(case, monkeypatch):
+    from test_creative_fallback import CHAIN, build, records, reply
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "offline-studio-key")
+    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
+    flow = case["flow"]
+    database = case["store"].database
+    calls = []
+    gate, started = threading.Event(), threading.Event()
+    fake = FakeNIMTransport()
+
+    def handler(request):
+        payload = json.loads(request.content)
+        model = payload["model"]
+        calls.append(model)
+        if model == CHAIN[0]:
+            return reply("")
+        if model == CHAIN[1]:
+            return httpx.Response(504, text="private-provider-body signed-url?token=private")
+        if model == CHAIN[2]:
+            return httpx.Response(
+                422,
+                json={
+                    "error": {"code": "provider_rejected", "message": "Bearer offline-studio-key"}
+                },
+            )
+        started.set()
+        assert gate.wait(10)
+        return reply(
+            fake.chat(payload["messages"], record_identity=lambda _: None).content,
+            identity=f"studio-chain-{len(calls)}",
+        )
+
+    flow.creative_provider = build(database, handler)
+    app = web_app.create_app(case["config"])
+    flow.progress = app.state.jobs.update_progress
+    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
+    try:
+        with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+            response = client.post("/api/studio/create", json={"target": "draft"})
+            job_id = response.json()["job_id"]
+            paused = wait(app.state.jobs, job_id)
+            assert paused.status == "ambiguous"
+            assert calls == list(CHAIN[:2])
+            first_projection = client.get(f"/api/jobs/{job_id}").json()
+            assert first_projection["result"]["run_id"]
+            assert first_projection["creative_diagnostics"]["attempts"][-1]["status"] == "ambiguous"
+            response = client.post(f"/api/studio/jobs/{job_id}/recover")
+            assert response.status_code == 202 and response.json()["job_id"] == job_id
+            assert started.wait(10)
+            running = client.get(f"/api/jobs/{job_id}").json()
+            diagnostics = running["creative_diagnostics"]
+            assert (
+                diagnostics["message"] == "Nemotron rejected the request. Continuing with DeepSeek…"
+            )
+            assert [a["fallback_index"] for a in diagnostics["attempts"]] == [0, 1, 2, 3]
+            assert diagnostics["attempts"][1]["reconciled"] is True
+            assert diagnostics["attempts"][1]["status"] == "ambiguous"
+            assert diagnostics["attempts"][2]["status"] == "failed"
+            for secret in ("offline-studio-key", "private-provider-body", "signed-url", "Bearer"):
+                assert secret not in json.dumps(running)
+            gate.set()
+            completed = wait(app.state.jobs, job_id)
+            assert completed.status == "complete", completed
+            rows = [
+                r
+                for r in records(database)
+                if r["run_id"] == paused.result["run_id"] and r["kind"] == "subject_pool"
+            ]
+            assert [r["model"] for r in rows] == list(CHAIN)
+            assert [r["previous_attempt_id"] for r in rows] == [None] + [
+                r["request_id"] for r in rows[:-1]
+            ]
+            assert rows[-1]["fallback_reason"] == "provider_rejected"
+            assert all(calls.count(model) == 1 for model in CHAIN[:3])
+            assert client.get("/api/system").json()["creative_planning"] == "open_editorial"
+            assert "creative_eligibility" not in client.get("/api/system").json()
+    finally:
+        gate.set()
+        app.state.jobs.close()
+
+
+def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
+    from test_creative_fallback import CHAIN, build
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "offline-studio-key")
+    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
+    flow = case["flow"]
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(
+            422,
+            json={
+                "error": {
+                    "code": "provider_rejected",
+                    "message": "Bearer offline-studio-key signed-url",
+                }
+            },
+        )
+
+    flow.creative_provider = build(case["store"].database, handler)
+    app = web_app.create_app(case["config"])
+    flow.progress = app.state.jobs.update_progress
+    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        response = client.post("/api/studio/create", json={"target": "draft"})
+        job_id = response.json()["job_id"]
+        failed = wait(app.state.jobs, job_id)
+        assert failed.status == "failed" and failed.blocker["error_kind"] == "chain_exhausted"
+        result = client.get(f"/api/jobs/{job_id}").json()
+        diagnostics = result["creative_diagnostics"]
+        assert diagnostics["exhausted"] is True
+        assert len(diagnostics["attempts"]) == 4
+        assert all(a["error_kind"] == "provider_rejected" for a in diagnostics["attempts"])
+        assert diagnostics == client.get("/api/jobs").json()[0]["creative_diagnostics"]
+        # Old PR41 paused jobs had no run_id or typed blocker. The latest job still
+        # projects its active durable next-run; older unrelated jobs must not inherit it.
+        old_payload = failed.model_copy(update={"result": None, "blocker": {}})
+        assert len(studio_job(case["config"], old_payload)["creative_diagnostics"]["attempts"]) == 4
+        unrelated = old_payload.model_copy(update={"job_id": "older-unrelated-job"})
+        assert studio_job(case["config"], unrelated)["creative_diagnostics"]["attempts"] == []
+        assert all(
+            secret not in json.dumps(result)
+            for secret in ("offline-studio-key", "Bearer", "signed-url")
+        )
+        assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
+        assert wait(app.state.jobs, job_id).status == "failed"
+        assert calls == list(CHAIN)
     app.state.jobs.close()
 
 

@@ -7,15 +7,17 @@ ToviTunes is a local production studio for preschool learning videos. The **loca
 Double-click **start-ui.bat** on Windows. Studio opens at **http://127.0.0.1:8766**.
 The launcher uses `config.yaml`, falling back to `config.example.yaml`. It reuses healthy
 local services, starts installed ACE-Step/ComfyUI when discoverable or configured, and
-shows startup problems in **System**. Ollama is optional and only started when configured.
+shows startup problems in **Settings**. Ollama is optional and only started when configured.
 
-**Create** offers exactly three actions: **Generate Draft**, **Generate Draft + Render**,
-and **Generate Draft + Render + Publish**. They share one durable workflow with different
-stopping targets. **Library** lets you view a saved draft, render it later, watch a finished
+**Generate** offers exactly three actions: **Generate Draft**, **Generate + Render**,
+and **Generate, Render & Publish**. They share one durable workflow with different
+stopping targets. **Videos** lets you view a saved draft, render it later, watch a finished
 video, or publish that same render. Task progress and recovery survive browser/server restarts.
+The MPT sidebar and two-column production console put safe per-model outcomes in Queue Monitor.
+**Dashboard** summarizes saved content; open editorial planning chooses the next lesson.
 
 The sample config disables YouTube. Configure the intended channel and OAuth client once,
-then use **System → Connect YouTube**. An explicit Publish click authorizes publication
+then use **Settings → Connect YouTube**. An explicit Publish click authorizes publication
 without `automation.auto_publish`; configured release, rights, review and visibility policy
 still apply. That flag continues to govern unattended commands.
 
@@ -66,4 +68,3 @@ print(db.get_episode(episode.episode_id).model_dump_json(indent=2))
 See [the architecture proposal](docs/ARCHITECTURE_PROPOSAL.md), [artifact store guide](docs/ARTIFACT_STORE.md), [continuation guide](docs/CONTINUATION.md), [creative draft guide](docs/CREATIVE.md), [offline music benchmark rubric](docs/MUSIC_BENCHMARK.md), [character pack intake](docs/CHARACTER_PACK_INTAKE.md), [offline visual benchmark protocol](docs/VISUAL_BENCHMARK.md), and [development guide](docs/DEVELOPMENT.md) for scope and verification commands.
 
 For local validation, install the `dev`, `web`, `youtube`, and `video-render` extras, then run `uv run ruff check .`, `uv run mypy src`, and `uv run pytest -q`.
-

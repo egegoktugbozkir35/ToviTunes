@@ -1,11 +1,13 @@
 # ToviTunes Studio V1
 
-Double-click `start-ui.bat`, choose **Draft**, **Draft + Render**, or **Draft + Render +
-Publish**, and watch the production desk. Use **Library** to render an existing draft or
-publish a retained video. **System** contains technical health and local startup recovery.
+Double-click `start-ui.bat`, open **Generate**, choose **Generate Draft**, **Generate + Render**,
+or **Generate, Render & Publish**, and watch **Queue Monitor**. Use **Videos** to render an
+existing draft or publish a retained video. **Settings** contains technical health and local
+startup recovery. **Dashboard** summarizes saved content and recent activity.
 No run/request/artifact identifiers or provider choices are required in the creative flow.
-After a task exists, Create compacts the introduction and keeps the latest running, paused
-or completed task as the primary production card.
+The MPT production console uses two columns: production controls and a live Queue Monitor.
+Open editorial planning and topic memory are the creative brain; the operator surface does
+not compute or display legacy Colors concept eligibility.
 
 ## Setup once, operate in the browser
 
@@ -13,7 +15,7 @@ Use your existing `config.yaml` and production data. With no personal config the
 falls back to `config.example.yaml` and opens an empty library. Install provider environments,
 model files, FFmpeg/FFprobe, and the normal Tovi pack once; the launcher starts installed
 services, rather than installing/downloading large model stacks. Configure your NVIDIA
-environment credential and YouTube OAuth client/channel once. **System → Connect YouTube**
+environment credential and YouTube OAuth client/channel once. **Settings → Connect YouTube**
 performs the normal browser authorization and identity check.
 
 The default UI address stays `http://127.0.0.1:8766`. Repeated double-clicks reopen the healthy
@@ -104,12 +106,27 @@ the creative abandonment action. Studio results allowlist safe identifiers/categ
 translate error messages; request validation and exceptions do not echo submitted secrets or
 remote response bodies. Existing localhost/origin guards and historical endpoints are retained.
 
+Conclusive `provider_rejected` failures now advance in the configured order only after the
+ledger proves `failed`. Authentication, configuration, endpoint-wide rate limiting, and
+uncertain transport outcomes still stop. Bare HTTP 4xx errors stay configuration failures;
+401/403 are authentication failures, 429 is rate limited, and 408/409/425 or 5xx are ambiguous.
+Recognized provider error codes/types can identify conclusive model rejection, even inside
+an HTTP 200 response or a completed error event. An exact old bare-HTTP diagnostic remains
+fail-closed on restart, including old throttling rows labeled `provider_rejected`.
+
+Queue Monitor reads typed durable outcomes for the owning planning run/episode. For example:
+**Nemotron rejected the request. Continuing with DeepSeek…** Chain exhaustion is explicit and
+lists each model's safe outcome. Reconciled ambiguity stays ambiguous, with an immutable
+operator decision shown separately. Diagnostic messages come from fixed category text and
+display labels, never provider prose, response bodies, keys, bearer tokens or signed URLs.
+Request links, fallback indexes and reasons remain in the authoritative ledger.
+
 ## One-click local services
 
 The small BAT calls `python -m tovitunes.web.launcher`. Python claims the UI port before
 starting services, resolves configuration, creates the app, starts bounded readiness workers,
 and opens the browser when the UI health endpoint is ready. Provider startup failure does not
-prevent the browser or Studio from opening. System exposes **Retry startup** for local services.
+prevent the browser or Studio from opening. Settings exposes **Retry startup** for local services.
 
 The supervisor checks ACE-Step `/health`, ComfyUI `/system_stats`, and configured Ollama
 `/api/tags`. Healthy services are reused and never owned/killed. Missing services use optional
@@ -150,12 +167,16 @@ are reported without remote generation calls.
 `pipeline/targets.py` defines targets/milestones; `short_production.py` owns orchestration;
 `creative/workflow.py` and `render/episode_assets.py` report actual substeps; `web/jobs.py`
 persists progress; `web/studio.py` holds the product API/library/recovery; `web/supervisor.py`
-and `web/launcher.py` own the local stack. Static HTML/CSS/JS supplies the three-page operator
+and `web/launcher.py` own the local stack. Static HTML/CSS/JS supplies the four-page operator
 surface without a frontend build system. Publication service records future channel identity.
 
-MPT donor study: its typed milestone progress, single active job card, mode-specific labels
-and orchestrator resume boundary informed Studio's simplicity. ToviTunes continues to use its
-own production services, schemas, artifact graph and provider safety ledgers.
+The frontend directly adapts `app/web/static/index.html`, `styles.css` and `app.js` from
+`egegoktugbozkir35/ollama-mpt-youtube` at current donor commit
+`1b82232ed794ccf611cb939ff95a1a52f3b06f52`. The donor CSS visual system is retained verbatim,
+followed by small ToviTunes adapters. The donor shell, navigation, table/dialog layout,
+formatting, API and toast helpers use the existing Studio endpoints instead of donor backend
+routes. No React, Vite or second production pipeline is introduced. ProductionTarget, durable
+jobs, launcher/supervisor and PR #40 reconciliation remain authoritative.
 
 ## Offline validation
 
@@ -173,13 +194,18 @@ fixtures; they never touch the operator's existing data or published output.
 ## Screenshots
 
 Captured in an isolated local browser session with offline provider fixtures. The operator
-clicked Generate Draft, View Draft, Render and Watch; no live provider or YouTube call occurred.
+clicked Generate Draft, reconciled GLM, observed the Nemotron → DeepSeek fallback, and opened
+saved drafts. No live provider or YouTube call occurred; production Red/Blue data was untouched.
 Desktop (1280px) and narrow (360px) layouts were inspected without adding browser test tooling.
 
-![Three primary Create actions](screenshots/studio-create.jpg)
+![MPT production controls and Queue Monitor](screenshots/studio-generate.jpg)
 
-![Retained render in the library](screenshots/studio-render-library.jpg)
+![Durable Studio videos](screenshots/studio-videos.jpg)
 
 ![Whole-task progress and safe provider recovery](screenshots/studio-recovery.jpg)
 
-![System health kept out of the creative workflow](screenshots/studio-system.jpg)
+![Conclusive rejection continuing with DeepSeek](screenshots/studio-fallback.jpg)
+
+![Complete chain exhaustion with per-model outcomes](screenshots/studio-exhaustion.jpg)
+
+![Local service health in Settings](screenshots/studio-settings.jpg)

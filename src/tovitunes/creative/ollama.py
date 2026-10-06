@@ -5,7 +5,13 @@ from collections.abc import Callable, Sequence
 import httpx
 
 from tovitunes.config import OllamaCreativeConfig
-from tovitunes.creative.provider import ChatResponse, FailureCategory, Message, ProviderError
+from tovitunes.creative.provider import (
+    ChatResponse,
+    FailureCategory,
+    Message,
+    ProviderError,
+    http_failure,
+)
 
 
 class OllamaClient:
@@ -48,10 +54,11 @@ class OllamaClient:
                 },
             )
             if response.status_code >= 400:
+                category = http_failure(response.status_code)
                 raise ProviderError(
                     "Ollama rejected generation",
-                    ambiguous=response.status_code >= 500,
-                    category=FailureCategory.PROVIDER_REJECTED,
+                    ambiguous=category == FailureCategory.AMBIGUOUS,
+                    category=category,
                 )
             body = response.json()
             if body.get("done") is not True:
