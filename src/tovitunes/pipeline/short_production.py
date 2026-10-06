@@ -44,6 +44,7 @@ from tovitunes.persistence.db import Database
 from tovitunes.pipeline.execution import production_execution
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import accept_episode_source, extract_alignment, extract_beats
+from tovitunes.pipeline.targets import STAGES, ProductionTarget, stages_for
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.environment_sets import EnvironmentSet, generate_set, selected_set
@@ -52,19 +53,6 @@ from tovitunes.render.models import RenderManifest
 from tovitunes.render.production import ProductionRenderer, load_inputs, validate_manifest
 from tovitunes.youtube.client import UploadAmbiguous
 
-STAGES = (
-    "CREATIVE",
-    "MUSIC",
-    "AUDIO_ANALYSIS",
-    "VISUAL_PLAN",
-    "VISUAL_ASSETS",
-    "STORYBOARD",
-    "RENDER",
-    "MEDIA_QA",
-    "METADATA",
-    "RELEASE",
-    "YOUTUBE",
-)
 _STAGE_ARTIFACTS = {
     "CREATIVE": ("episode_spec", "lyrics", "music_spec"),
     "MUSIC": ("audio_master",),
@@ -99,14 +87,14 @@ class ShortProductionWorkflow:
     @contextmanager
     def _creative(self) -> Iterator[CreativeWorkflow]:
         if self.creative_provider is not None:
-            yield CreativeWorkflow(self.config, self.creative_provider)
+            yield CreativeWorkflow(self.config, self.creative_provider, progress=self.progress)
         else:
             primary = NvidiaNIMClient(self.config.creative_llm)
             try:
                 with creative_generator(
                     self.database, self.config.creative_llm, primary
                 ) as provider:
-                    yield CreativeWorkflow(self.config, provider)
+                    yield CreativeWorkflow(self.config, provider, progress=self.progress)
             finally:
                 primary.close()
 
@@ -148,7 +136,9 @@ class ShortProductionWorkflow:
         if self.progress:
             self.progress(stage, status)
 
-    def plan(self, episode_key: str | None = None) -> dict[str, Any]:
+    def plan(
+        self, episode_key: str | None = None, *, target: ProductionTarget = ProductionTarget.PUBLISH
+    ) -> dict[str, Any]:
         """Read-only projection: events explain blockers, artifacts/ledgers prove completion."""
         report: dict[str, Any] = {
             "episode_key": episode_key,
@@ -466,6 +456,13 @@ class ShortProductionWorkflow:
             (stage for stage in report["stages"] if stage["status"] != "COMPLETE"),
             report["stages"][-1],
         )
+        report["target"] = target.value
+        if target != ProductionTarget.PUBLISH:
+            report["publication_would_be_attempted"] = False
+        report["stages"] = [s for s in report["stages"] if s["name"] in stages_for(target)]
+        first = next(
+            (s for s in report["stages"] if s["status"] != "COMPLETE"), report["stages"][-1]
+        )
         report["current_stage"] = first["name"]
         if first["status"] == "NOT_STARTED":
             first["status"] = "READY"
@@ -491,9 +488,15 @@ class ShortProductionWorkflow:
             report["status"] = first["status"]
         return report
 
-    def produce_next(self, *, confirmed: bool = False) -> dict[str, Any]:
+    def produce_next(
+        self,
+        *,
+        confirmed: bool = False,
+        target: ProductionTarget = ProductionTarget.PUBLISH,
+        operator_publish: bool = False,
+    ) -> dict[str, Any]:
         if not confirmed:
-            return self.plan()
+            return self.plan(target=target)
         self.database = Database(self.config.database_path)
         self.database.migrate()
         execution = production_execution(self.database, "short-production:next")
@@ -531,7 +534,9 @@ class ShortProductionWorkflow:
                         (episode.episode_id, run_id),
                     )
                     db.commit()
-            result = self.produce(key, confirmed=True)
+            result = self.produce(
+                key, confirmed=True, target=target, operator_publish=operator_publish
+            )
             if result["status"] == "COMPLETE":
                 with closing(self.database.connect()) as db:
                     db.execute(
@@ -542,19 +547,17 @@ class ShortProductionWorkflow:
             result["run_id"] = run_id
             return result
         except Exception as exc:
-            result = self.plan()
+            result = self.plan(target=target)
             ambiguous = isinstance(exc, ProviderError) and exc.ambiguous
             return {
                 **result,
                 "dry_run": False,
                 "provider_calls": None,
-                "status": "AMBIGUOUS"
-                if ambiguous
-                else "FAILED",
+                "status": "AMBIGUOUS" if ambiguous else "FAILED",
                 "current_stage": "CREATIVE",
-                "blocker": exc.evidence if isinstance(exc, CreativeAmbiguity) else (
-                    f"CREATIVE failed ({type(exc).__name__}); inspect durable creative attempts"
-                ),
+                "blocker": exc.evidence
+                if isinstance(exc, CreativeAmbiguity)
+                else (f"CREATIVE failed ({type(exc).__name__}); inspect durable creative attempts"),
             }
         finally:
             execution.__exit__(None, None, None)
@@ -1046,6 +1049,8 @@ class ShortProductionWorkflow:
         )
 
     def _render(self, episode: Episode) -> dict[str, Any]:
+        if self.progress:
+            self.progress("RENDER", "Encoding final video or validating retained render")
         inputs = load_inputs(self.config, episode.external_key, local_preview=True)
         final = self._selected(episode, "final_render", "main_v4")
         manifest = self._selected(episode, "render_manifest", "main_v4")
@@ -1092,9 +1097,9 @@ class ShortProductionWorkflow:
             creative.store.local_preview = True
             return MetadataWriter(creative).generate(episode.external_key)
 
-    def _publication(self, episode: Episode) -> dict[str, Any]:
+    def _publication(self, episode: Episode, *, operator_publish: bool = False) -> dict[str, Any]:
         release = evaluate_release(self.config, episode.external_key)
-        if not self.config.automation.auto_publish:
+        if not (operator_publish or self.config.automation.auto_publish):
             status = (
                 "NEEDS_REVIEW"
                 if self.config.automation.require_human_review
@@ -1110,13 +1115,19 @@ class ShortProductionWorkflow:
         if not allowed:
             raise ProductionStop(
                 "NEEDS_REVIEW" if self.config.automation.require_human_review else "BLOCKED",
-                "Configured release gates block automatic publication",
+                "Configured release gates block publication",
                 {"release": release.as_dict()},
             )
         if not self.config.publication.youtube.enabled:
             raise ProductionStop("BLOCKED", "YouTube is disabled in publication configuration")
         service = PublicationService(self.config)
         history = service.history(episode.episode_id)
+        if any(
+            row.get("expected_channel_id")
+            and row["expected_channel_id"] != self.config.expected_youtube_channel_id
+            for row in history
+        ):
+            raise ProductionStop("BLOCKED", "Retained publication belongs to another channel")
         if any(
             row["outcome"] in {"remote_started", "ambiguous"}
             or (
@@ -1133,7 +1144,9 @@ class ShortProductionWorkflow:
                 "FAILED", "Previous YouTube upload failed; operator recovery required"
             )
         try:
-            uploaded = service.upload_private(episode.external_key)
+            uploaded = next((row for row in history if row["outcome"] == "succeeded"), None)
+            if uploaded is None:
+                uploaded = service.upload_private(episode.external_key)
         except UploadAmbiguous as exc:
             raise ProductionStop("AMBIGUOUS", "YouTube upload needs manual reconciliation") from exc
         if self.config.automation.publish_visibility == "public":
@@ -1154,9 +1167,16 @@ class ShortProductionWorkflow:
                 )
         return {"status": "COMPLETE", "publication": uploaded}
 
-    def produce(self, episode_key: str, *, confirmed: bool = False) -> dict[str, Any]:
+    def produce(
+        self,
+        episode_key: str,
+        *,
+        confirmed: bool = False,
+        target: ProductionTarget = ProductionTarget.PUBLISH,
+        operator_publish: bool = False,
+    ) -> dict[str, Any]:
         if not confirmed:
-            return self.plan(episode_key)
+            return self.plan(episode_key, target=target)
         self.database = Database(self.config.database_path)
         self.database.migrate()
         episode = episode_by_key(self.database, episode_key)
@@ -1189,7 +1209,7 @@ class ShortProductionWorkflow:
         if (published and not v2) or (
             handoff and json.loads(handoff[0]).get("model") == "production_storyboard_v1"
         ):
-            result = self.plan(episode_key)
+            result = self.plan(episode_key, target=target)
             return {
                 **result,
                 "dry_run": False,
@@ -1231,7 +1251,57 @@ class ShortProductionWorkflow:
                 )
                 return result
 
+            if published:
+                # Once uploaded, selected output is immutable. A later explicit Publish may
+                # promote the retained private upload, but must never regenerate metadata/media.
+                publication = {"status": "COMPLETE"}
+                if target == ProductionTarget.PUBLISH:
+                    publication = run(
+                        "YOUTUBE",
+                        lambda: self._publication(episode, operator_publish=operator_publish),
+                    )
+                return {
+                    **self.plan(episode_key, target=target),
+                    **publication,
+                    "dry_run": False,
+                    "target": target.value,
+                }
+
+            def finish(rendered: dict[str, Any]) -> dict[str, Any]:
+                publication: dict[str, Any] = {"status": "COMPLETE"}
+                if target == ProductionTarget.PUBLISH:
+                    run("RELEASE", lambda: evaluate_release(self.config, episode_key).as_dict())
+                    publication = run(
+                        "YOUTUBE",
+                        lambda: self._publication(episode, operator_publish=operator_publish),
+                    )
+                return {
+                    **self.plan(episode_key, target=target),
+                    **rendered,
+                    **publication,
+                    "dry_run": False,
+                    "target": target.value,
+                    "provider_calls": None,
+                    "ready_local_preview": True,
+                }
+
             inputs = run("CREATIVE", lambda: self._creative_inputs(episode))
+            if target == ProductionTarget.DRAFT:
+                return {
+                    **self.plan(episode_key, target=target),
+                    "status": "COMPLETE",
+                    "dry_run": False,
+                    "target": target.value,
+                }
+            # A validated final render is a continuation boundary. Never rerender or rebuild
+            # upstream selections merely to publish it or reopen the Studio.
+            retained = self.plan(episode_key, target=target)
+            states = {s["name"]: s["status"] for s in retained["stages"]}
+            if states.get("RENDER") == states.get("MEDIA_QA") == "COMPLETE":
+                rendered = run("RENDER", lambda: self._render(episode))
+                run("MEDIA_QA", lambda: self._media_qa(episode))
+                run("METADATA", lambda: self._metadata(episode))
+                return finish(rendered)
             # MusicBenchmark creates this directory before returned bytes are ingested.
             music_root = self.config.data_root / "music-benchmark"
             music_root.mkdir(exist_ok=True)
@@ -1254,7 +1324,10 @@ class ShortProductionWorkflow:
                     self.working,
                     self.catalog.creative_bible.visual_direction,
                     self.image_provider,
+                    progress=self.progress,
                 )
+                if self.progress:
+                    self.progress("VISUAL_ASSETS", "Generating or reusing environment")
                 return assets, self._environment(episode, visual, plan_id)
 
             assets, environment_id = run("VISUAL_ASSETS", visuals)
@@ -1267,17 +1340,7 @@ class ShortProductionWorkflow:
             rendered = run("RENDER", lambda: self._render(episode))
             run("MEDIA_QA", lambda: self._media_qa(episode))
             run("METADATA", lambda: self._metadata(episode))
-            run("RELEASE", lambda: evaluate_release(self.config, episode_key).as_dict())
-            publication = run("YOUTUBE", lambda: self._publication(episode))
-            result = self.plan(episode_key)
-            return {
-                **result,
-                **rendered,
-                **publication,
-                "dry_run": False,
-                "provider_calls": None,
-                "ready_local_preview": True,
-            }
+            return finish(rendered)
         except (ProductionStop, ImageStageBlocked) as exc:
             evidence = {
                 "reason": str(exc),
@@ -1285,7 +1348,7 @@ class ShortProductionWorkflow:
             }
             self._event(episode, stage, exc.status, evidence)
             return {
-                **self.plan(episode_key),
+                **self.plan(episode_key, target=target),
                 "dry_run": False,
                 "provider_calls": None,
                 "status": exc.status,
@@ -1306,7 +1369,7 @@ class ShortProductionWorkflow:
                 evidence.update(exc.evidence)
             self._event(episode, stage, status, evidence)
             return {
-                **self.plan(episode_key),
+                **self.plan(episode_key, target=target),
                 "dry_run": False,
                 "provider_calls": None,
                 "status": status,

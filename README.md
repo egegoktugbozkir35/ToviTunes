@@ -4,23 +4,24 @@ ToviTunes is a local production studio for preschool learning videos. The **loca
 
 ## Start the operator studio
 
-From the repository root on Windows:
+Double-click **start-ui.bat** on Windows. Studio opens at **http://127.0.0.1:8766**.
+The launcher uses `config.yaml`, falling back to `config.example.yaml`. It reuses healthy
+local services, starts installed ACE-Step/ComfyUI when discoverable or configured, and
+shows startup problems in **System**. Ollama is optional and only started when configured.
 
-```powershell
-uv sync --python 3.11 --locked --extra web --extra youtube --extra video-render
-Copy-Item config.example.yaml config.yaml
-.\start-ui.bat
-```
+**Create** offers exactly three actions: **Generate Draft**, **Generate Draft + Render**,
+and **Generate Draft + Render + Publish**. They share one durable workflow with different
+stopping targets. **Library** lets you view a saved draft, render it later, watch a finished
+video, or publish that same render. Task progress and recovery survive browser/server restarts.
 
-Open **http://127.0.0.1:8766**. The batch script uses `config.yaml` when present, and `config.example.yaml` otherwise. The Python equivalent is:
+The sample config disables YouTube. Configure the intended channel and OAuth client once,
+then use **System → Connect YouTube**. An explicit Publish click authorizes publication
+without `automation.auto_publish`; configured release, rights, review and visibility policy
+still apply. That flag continues to govern unattended commands.
 
-```powershell
-uv run --locked --extra web --extra youtube --extra video-render python -m tovitunes.web --config config.yaml
-```
-
-The sample config keeps YouTube disabled. Set `expected_youtube_channel_id`, enable `publication.youtube.enabled`, and supply a local installed-app OAuth client secret only when you are ready to connect. The UI retains the existing private-test and gated public-promotion actions. See [WebUI and YouTube V1](docs/WEBUI_YOUTUBE_V1.md) for setup, routes, preflight policy, and recovery behavior.
-
-The WebUI now includes **Generate Next Short** and episode-level **Resume Production**, backed by the same durable application service as `production auto-next` / `production produce`. Provider generation requires explicit confirmation. Automatic publication defaults to disabled; optional private/public publication uses the existing release gates and ledger. See [Autonomous Short pipeline V1](docs/AUTONOMOUS_SHORT_PIPELINE_V1.md) for commands, configuration, artifact contracts and crash recovery.
+See [Studio V1](docs/STUDIO_V1.md) for setup, target boundaries, service discovery, durable
+library/progress rules and browser recovery. The existing CLI/API entry points remain
+available for advanced operation with their previous publication semantics.
 
 ## Development and production reference
 

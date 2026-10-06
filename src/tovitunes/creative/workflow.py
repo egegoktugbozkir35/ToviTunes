@@ -168,8 +168,10 @@ class CreativeWorkflow:
         provider: StructuredGenerator,
         *,
         catalog: BrandCatalog | None = None,
+        progress: Callable[[str, str], None] | None = None,
     ) -> None:
         self.config, self.provider = config, provider
+        self.progress = progress
         self.catalog = catalog or load_brand(config.brand_root)
         self.database = Database(config.database_path)
         self.database.migrate()
@@ -344,6 +346,8 @@ class CreativeWorkflow:
         run_id: str | None = None,
         episode_key: str | None = None,
     ) -> dict[str, Any]:
+        if self.progress:
+            self.progress("CREATIVE", "TOPIC_RUNNING")
         before = call_snapshot(self.database)
         if self.catalog.definition.language != "en" or self.catalog.definition.characters != (
             "tovi",
@@ -392,6 +396,9 @@ class CreativeWorkflow:
                         assert_owner=assert_owner,
                     )
                     brief = planner.select(row["run_id"], facts)[0]
+                    if self.progress:
+                        self.progress("CREATIVE", "TOPIC_COMPLETE")
+                        self.progress("CREATIVE", "BRIEF_RUNNING")
                     assert_owner()
                     episode = self._reserve_brief(row, brief)
                 else:
@@ -430,6 +437,8 @@ class CreativeWorkflow:
                         (episode.episode_id, datetime.now(UTC).isoformat(), row["run_id"]),
                     )
                     db.commit()
+            if self.progress:
+                self.progress("CREATIVE", "BRIEF_COMPLETE")
             digest = (
                 committed_curriculum_digest(self.config.brand_root, self.catalog)
                 if episode.learning_source == "legacy_curriculum"
@@ -479,6 +488,8 @@ class CreativeWorkflow:
             ("lyrics", service.draft_lyrics),
             ("music_spec", service.draft_music_spec),
         ):
+            if self.progress:
+                self.progress("CREATIVE", kind.upper() + "_RUNNING")
             assert_owner()
             # Calling the generator is safe even for a selected stage: exact fingerprints reuse
             # its receipt, and a crash after ingest reuses its local-request artifact identity.
@@ -490,4 +501,6 @@ class CreativeWorkflow:
             if selected is None or selected.identity != record.identity:
                 service.select_structural(record.identity.artifact_id)
             result[f"{kind}_artifact_id"] = record.identity.artifact_id
+            if self.progress:
+                self.progress("CREATIVE", kind.upper() + "_COMPLETE")
         return result

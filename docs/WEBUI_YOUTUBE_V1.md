@@ -1,8 +1,12 @@
 # Local WebUI and YouTube private tests, V1
 
+Studio V1 supersedes the original frontend described below. For the current Create /
+Library / System workflow, durable jobs and automatic local startup, see
+[Studio V1](STUDIO_V1.md). The historical endpoints and publication gates remain supported.
+
 ## Install and start
 
-Run `uv sync --python 3.11 --locked --extra web --extra youtube --extra video-render` and then `start-ui.bat` from the repository root on Windows. The Python invocation is `uv run python -m tovitunes.web --config config.yaml`. The app binds `127.0.0.1:8765` and prints its local URL, config path, and database path. The browser requires the existing production database and data root to show episode evidence. The sample configuration alone starts an empty local studio.
+Run `uv sync --python 3.11 --locked --extra web --extra youtube --extra video-render` and then `start-ui.bat` from the repository root on Windows. The Python invocation is `uv run python -m tovitunes.web --config config.yaml`. The app binds `127.0.0.1:8766` and prints its local URL, config path, and database path. The browser requires the existing production database and data root to show episode evidence. The sample configuration alone starts an empty local studio.
 
 ## Architecture and routes
 

@@ -92,3 +92,19 @@ creative_llm:
     timeout_seconds: 240
     temperature: 0.7
 
+
+# Optional one-click service startup. Existing healthy endpoints are always reused.
+# Install provider environments/models once, then let start-ui.bat manage their startup.
+local_services:
+  auto_discover: true
+  ace_step:
+    startup_timeout_seconds: 120
+    # command: [uv, run, --no-sync, acestep-api, --host, 127.0.0.1, --port, '8001']
+    # cwd: ../ACE-Step-1.5
+  comfyui:
+    startup_timeout_seconds: 120
+    # command: [../ComfyUI/.venv/Scripts/python.exe, ../ComfyUI/main.py, --listen, 127.0.0.1, --port, '8188']
+    # cwd: ../ComfyUI
+  ollama:
+    startup_timeout_seconds: 30
+    # Only used when configured creative fallback or topic embeddings require Ollama.

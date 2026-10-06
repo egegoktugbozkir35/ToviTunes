@@ -1,6 +1,7 @@
 """Plan-driven episode images using the existing Qwen adapter and normalization contract."""
 
 import json
+from collections.abc import Callable
 from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -144,13 +145,20 @@ def generate_assets(
     working: Path,
     visual_direction: str,
     provider: ImageProvider | None = None,
+    *,
+    progress: Callable[[str, str], None] | None = None,
 ) -> dict[str, str]:
     provider = provider or _provider(config)
     if provider.provider != "qwen_comfyui":
         raise ValueError("production illustrations require the existing Qwen adapter")
     ledger = RequestLedger(store.database)
     assets: dict[str, str] = {}
-    for requirement in visual.required_assets:
+    for index, requirement in enumerate(visual.required_assets, 1):
+        if progress:
+            progress(
+                "VISUAL_ASSETS",
+                f"Generating or reusing visual {index} of {len(visual.required_assets)}",
+            )
         slot = requirement.asset_key
         existing = store.selected("episode", episode.episode_id, "visual_asset", slot)
         if existing:

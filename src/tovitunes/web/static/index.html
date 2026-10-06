@@ -1,29 +1,10 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ToviTunes Studio</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand"><span class="mark">♪</span><div><strong>ToviTunes</strong><small>Local studio</small></div></div>
-    <span class="local">● LOCAL OPERATOR</span>
-  </header>
-  <main>
-    <section class="hero">
-      <div><p class="eyebrow">PRODUCTION DESK</p><h1>Make every little moment count.</h1><p>See the evidence behind each lesson, review its render, and prepare a private test.</p></div>
-      <div class="actions"><button id="generate-next" class="button">Generate Next Short</button><button id="refresh" class="button secondary">Refresh dashboard</button></div>
-    </section>
-    <div id="notice" role="status" aria-live="polite"></div>
-    <section class="overview"><div class="section-heading"><h2>Studio health</h2><span id="last-refresh"></span></div><div id="system" class="health-grid"></div></section>
-    <section class="workspace"><aside class="episodes"><div class="section-heading"><h2>Episodes</h2><span id="episode-count"></span></div><div id="episode-list"></div></aside>
-      <div class="detail"><div id="episode-detail" class="empty"><span class="empty-icon">♫</span><h2>Select an episode</h2><p>Its production journey will appear here.</p></div></div>
-    </section>
-    <section class="jobs"><div class="section-heading"><h2>Activity</h2><span>One production job at a time</span></div><div id="job-list" class="job-list"></div></section>
-  </main>
-  <footer>ToviTunes · Private test uploads never clear commercial rights.</footer>
-  <script src="/static/app.js" defer></script>
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ToviTunes Studio</title><link rel="stylesheet" href="/static/styles.css"></head>
+<body><header class="topbar"><a class="brand" href="#create"><span class="mark">♪</span><span><strong>ToviTunes</strong><small>STUDIO</small></span></a><nav aria-label="Studio"><button data-page="create" aria-current="page">Create</button><button data-page="library">Library</button><button data-page="system">System</button></nav><span class="local">● Your local studio</span></header>
+<main><div id="notice" role="status" aria-live="polite"></div>
+<section id="page-create" class="page"><div class="hero"><div><p class="eyebrow">LITTLE LESSONS. BIG IMAGINATION.</p><h1>A new little world,<br>one song at a time.</h1><p>Let Tovi choose a fresh lesson and bring it to life.<br>You choose how far to take it.</p></div><div class="hero-art" aria-hidden="true"><span class="note n1">♫</span><div class="record"><div class="record-label">tovi<span>♪</span></div></div><span class="note n2">✦</span><span class="art-caption">Made for curious little minds</span></div></div>
+<div class="create-actions"><article class="action-card"><span class="step-number">01 / THE IDEA</span><h2>Start with a song.</h2><p>A fresh lesson, story, lyrics and music direction. Saved for whenever you’re ready.</p><button class="button" data-create="draft">Generate Draft <span>↗</span></button></article><article class="action-card render-card"><span class="step-number">02 / THE VIDEO</span><h2>Make it move.</h2><p>Turn the lesson into music, illustrations and a finished video you can watch.</p><button class="button" data-create="render">Generate Draft + Render <span>↗</span></button></article><article class="action-card publish-card"><span class="step-number">03 / THE RELEASE</span><h2>Share a little joy.</h2><p>Create the video and publish to your connected YouTube channel, using your release policy.</p><button class="button" data-create="publish">Generate Draft + Render + Publish <span>↗</span></button></article></div>
+<section class="activity"><div class="section-heading"><h2>Your production desk</h2><span>Work is saved as it progresses</span></div><div id="active-task" aria-live="polite"></div><div id="task-history"></div></section></section>
+<section id="page-library" class="page" hidden><div class="page-heading"><p class="eyebrow">YOUR LITTLE WORLDS</p><h1>The library.</h1><p>Pick up where you left off. Every next step reuses your saved work.</p></div><div class="library-tabs" role="group" aria-label="Library category"><button data-category="drafts" class="selected">Drafts <span id="count-drafts">0</span></button><button data-category="renders">Renders <span id="count-renders">0</span></button><button data-category="published">Published <span id="count-published">0</span></button></div><div id="library-cards" class="library-grid"></div></section>
+<section id="page-system" class="page" hidden><div class="page-heading"><p class="eyebrow">BEHIND THE SCENES</p><h1>Studio system.</h1><p>Local services start automatically when you open Studio. Check their status here.</p></div><div id="system-cards" class="system-grid"></div><div class="system-help"><h2>YouTube connection</h2><p>Connect the channel configured for this studio. Its identity is checked before publication.</p><button class="button secondary" id="youtube-connect">Connect YouTube</button><button class="button secondary" id="system-refresh">Refresh status</button><div id="youtube-identity" role="status"></div></div><details class="diagnostics"><summary>Advanced diagnostics</summary><dl id="system-details"></dl></details></section>
+</main><footer><span>ToviTunes Studio</span><span>Small lessons, thoughtfully made.</span></footer><dialog id="preview"><button id="close-preview" class="close" aria-label="Close preview">×</button><div id="preview-content"></div></dialog><script src="/static/app.js" defer></script></body></html>

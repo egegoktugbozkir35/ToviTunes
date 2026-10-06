@@ -320,6 +320,46 @@ class ProductionAutomationConfig(BaseModel):
     analysis_version: int = Field(default=1, gt=0)
 
 
+class LocalServiceLaunchConfig(BaseModel):
+    """Executable argument arrays only; never shell command strings or credentials."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    command: tuple[str, ...] = Field(default=(), max_length=40)
+    cwd: Path | None = None
+    startup_timeout_seconds: float = Field(default=120, gt=0, le=600)
+
+    @field_validator("command")
+    @classmethod
+    def safe_command(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if values and Path(values[0]).stem.casefold() in {
+            "cmd",
+            "powershell",
+            "pwsh",
+            "sh",
+            "bash",
+            "wscript",
+            "cscript",
+        }:
+            raise ValueError("launcher commands must be executables, not command shells")
+        for value in values:
+            if not value or len(value) > 2000 or any(ord(c) < 32 for c in value):
+                raise ValueError("invalid launcher argument")
+            if any(
+                word in value.casefold()
+                for word in ("api-key", "api_key", "token=", "password", "bearer ", "secret")
+            ):
+                raise ValueError("credentials must not be supplied in launcher arguments")
+        return values
+
+
+class LocalServicesConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    ace_step: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
+    comfyui: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
+    ollama: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
+    auto_discover: bool = True
+
+
 class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -340,6 +380,7 @@ class RuntimeConfig(BaseModel):
     )
     music_generation: MusicGenerationConfig = Field(default_factory=MusicGenerationConfig)
     automation: ProductionAutomationConfig = Field(default_factory=ProductionAutomationConfig)
+    local_services: LocalServicesConfig = Field(default_factory=LocalServicesConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -409,4 +450,18 @@ def load_config(path: Path) -> RuntimeConfig:
                         if not candidate.is_absolute()
                         else candidate.resolve()
                     )
+    services = raw.get("local_services", {})
+    if isinstance(services, dict):
+        for name in ("ace_step", "comfyui", "ollama"):
+            launch = services.get(name, {})
+            if isinstance(launch, dict) and launch.get("cwd"):
+                launch["cwd"] = (config_file.parent / Path(launch["cwd"]).expanduser()).resolve()
+            if isinstance(launch, dict) and isinstance(launch.get("command"), list):
+                # Resolve relative executable/script paths against the configuration file.
+                launch["command"] = [
+                    str((config_file.parent / Path(arg).expanduser()).resolve())
+                    if ("/" in arg or "\\" in arg) and not arg.startswith("--")
+                    else arg
+                    for arg in launch["command"]
+                ]
     return RuntimeConfig.model_validate(raw)

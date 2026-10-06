@@ -511,7 +511,7 @@ def test_two_attested_character_roots_clear_append_only(ready):
         )
 
 
-def test_web_public_endpoint_and_confirmation(ready):
+def test_web_public_endpoint_and_studio_authorization(ready):
     (config, _, _, _), _, _, _ = ready
     with TestClient(create_app(config), base_url="http://127.0.0.1:8765") as client:
         assert (
@@ -520,10 +520,16 @@ def test_web_public_endpoint_and_confirmation(ready):
             ).status_code
             == 409
         )
-    script = (Path(__file__).resolve().parents[1] / "src/tovitunes/web/static/app.js").read_text()
-    assert "window.confirm('Publish this ToviTunes Short publicly" in script
-    assert "publish.disabled=true" in script
-    assert "video_id" not in script.split("/youtube/publish", 1)[1].split("POST", 1)[0]
+    root = Path(__file__).resolve().parents[1] / "src/tovitunes/web/static"
+    script = (root / "app.js").read_text(encoding="utf-8")
+    html = (root / "index.html").read_text(encoding="utf-8")
+    # The explicit Studio Publish click is authorization. Backend release/rights/identity
+    # checks remain authoritative; the frontend never supplies an arbitrary YouTube video ID.
+    assert 'data-create="publish"' in html
+    assert '"/api/studio/create"' in script
+    assert "target:button.dataset.create" in script
+    assert "/youtube/publish" not in script
+
 
 
 def test_web_metadata_action_uses_existing_writer(ready, monkeypatch):

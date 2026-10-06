@@ -89,6 +89,14 @@ class PublicationService:
                 raise KeyError(episode_key)
             eid = str(episode[0])
             with closing(self.database.connect()) as db:
+                mismatch = db.execute(
+                    "SELECT 1 FROM publication_attempts WHERE episode_id=? "
+                    "AND outcome IN ('succeeded','remote_started','ambiguous') "
+                    "AND expected_channel_id IS NOT NULL AND expected_channel_id<>? LIMIT 1",
+                    (eid, self.config.expected_youtube_channel_id),
+                ).fetchone()
+                if mismatch:
+                    raise ValueError("Retained publication belongs to another configured channel")
                 unresolved = db.execute(
                     "SELECT attempt_id FROM publication_attempts WHERE episode_id=? "
                     "AND outcome IN ('remote_started','ambiguous') LIMIT 1",
@@ -100,11 +108,10 @@ class PublicationService:
                         "manual reconciliation required"
                     )
                 prior = db.execute(
-                    "SELECT * FROM publication_attempts WHERE episode_id=? AND render_sha256=? "
-                    "AND metadata_fingerprint=? AND outcome IN "
+                    "SELECT * FROM publication_attempts WHERE episode_id=? AND outcome IN "
                     "('succeeded','remote_started','ambiguous') "
                     "ORDER BY prepared_at DESC LIMIT 1",
-                    (eid, preflight.render_sha256, preflight.metadata_fingerprint),
+                    (eid,),
                 ).fetchone()
             if prior is not None:
                 if prior["outcome"] == "succeeded":
@@ -128,8 +135,8 @@ class PublicationService:
                 db.execute(
                     "INSERT INTO publication_attempts "
                     "(attempt_id,episode_id,platform,mode,render_artifact_id,render_sha256,"
-                    "metadata_fingerprint,prepared_at,outcome,privacy_status) "
-                    "VALUES (?,?,'youtube','private_test',?,?,?,?,'prepared','private')",
+                    "metadata_fingerprint,prepared_at,outcome,privacy_status,expected_channel_id) "
+                    "VALUES (?,?,'youtube','private_test',?,?,?,?,'prepared','private',?)",
                     (
                         attempt_id,
                         eid,
@@ -137,6 +144,7 @@ class PublicationService:
                         preflight.render_sha256,
                         preflight.metadata_fingerprint,
                         _now(),
+                        self.config.expected_youtube_channel_id,
                     ),
                 )
                 db.commit()

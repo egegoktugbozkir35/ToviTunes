@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -26,19 +27,25 @@ from tovitunes.web.services import (
     generate_publication_metadata,
     system_status,
 )
-from tovitunes.youtube.client import YouTubeClient, YouTubeError
+from tovitunes.web.studio import studio_router
+from tovitunes.web.supervisor import LocalServiceSupervisor
+from tovitunes.youtube.client import ChannelMismatch, YouTubeClient, YouTubeError
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
 _ARTIFACT = re.compile(r"^[0-9a-fA-F-]{36}$")
 _MEDIA_MIME = {"video/mp4", "image/png", "image/jpeg", "image/webp", "audio/mpeg"}
 
 
-def create_app(config: RuntimeConfig) -> FastAPI:
+def create_app(
+    config: RuntimeConfig, *, supervisor: LocalServiceSupervisor | None = None
+) -> FastAPI:
     app = FastAPI(title="ToviTunes Operator", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
     database = Database(config.database_path)
     database.migrate()
-    jobs = JobManager()
+    jobs = JobManager(database)
+    supervisor = supervisor or LocalServiceSupervisor(config)
+    app.state.supervisor = supervisor
     app.state.jobs = jobs
     app.state.config = config
     static = resources.files("tovitunes.web").joinpath("static")
@@ -61,6 +68,12 @@ def create_app(config: RuntimeConfig) -> FastAPI:
                     )
         response: Response = await call_next(request)
         return response
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": "Invalid action. Choose a valid production target."}, status_code=422
+        )
 
     @app.exception_handler(Exception)
     async def safe_exception(_: Request, exc: Exception) -> JSONResponse:
@@ -93,18 +106,63 @@ def create_app(config: RuntimeConfig) -> FastAPI:
             (j.model_dump() for j in jobs.list() if j.status in {"queued", "running"}), None
         )
         result = system_status(config, active)
-        if (
-            config.publication.youtube.enabled
-            and config.publication.youtube.token_file.is_file()
-            and config.expected_youtube_channel_id
-        ):
-            try:
-                result["connected_channel"] = YouTubeClient(config.publication.youtube).channel(
-                    config.expected_youtube_channel_id
+        verified = next(
+            (
+                j
+                for j in jobs.list()
+                if j.operation == "youtube_connect"
+                and j.status in {"succeeded", "complete", "failed"}
+            ),
+            None,
+        )
+        youtube_state = "disconnected"
+        if verified and result["youtube_token_present"]:
+            youtube_state = (
+                "mismatch"
+                if verified.error_category == "ChannelMismatch"
+                or (
+                    verified.result
+                    and verified.result.get("channel_id") != config.expected_youtube_channel_id
                 )
-            except YouTubeError as exc:
-                result["youtube_connection_error"] = str(exc)
+                else "connected"
+                if verified.status in {"succeeded", "complete"}
+                else "disconnected"
+            )
+        result["services"] = supervisor.status()
+        result["services"].update(
+            {
+                "creative_director": {
+                    "status": "ready"
+                    if result["nvidia_key_configured"] and result["creative_provider_configured"]
+                    else "configuration issue"
+                },
+                "ffmpeg": {
+                    "status": "ready"
+                    if result["ffmpeg_available"] and result["ffprobe_available"]
+                    else "missing"
+                },
+                "database": {"status": "ready" if result["database_present"] else "unavailable"},
+                "tovi_pack": {
+                    "status": "ready"
+                    if any(p["readiness"] == "approved" for p in result["character_pack"])
+                    else "configuration issue"
+                },
+                "youtube": {
+                    "status": youtube_state,
+                    "message": "Channel identity is verified on Connect and before publication.",
+                },
+            }
+        )
         return result
+
+    @app.post("/api/system/services/{name}/retry", status_code=202)
+    def retry_service(name: str) -> dict[str, Any]:
+        if name not in supervisor.urls:
+            raise HTTPException(404, "Local service unavailable")
+        if any(j.status in {"queued", "running"} for j in jobs.list()):
+            raise HTTPException(409, "Wait for the active production task")
+        supervisor.start_background(name)
+        return {"status": "starting"}
 
     @app.get("/api/episodes")
     def episode_list() -> list[dict[str, Any]]:
@@ -123,6 +181,8 @@ def create_app(config: RuntimeConfig) -> FastAPI:
 
     def production_workflow() -> ShortProductionWorkflow:
         return ShortProductionWorkflow(config, progress=jobs.update_progress)
+
+    app.include_router(studio_router(config, jobs, production_workflow, checked_key))
 
     @app.get("/api/production/plan")
     def production_plan(episode_key: str | None = None) -> dict[str, Any]:
@@ -213,13 +273,16 @@ def create_app(config: RuntimeConfig) -> FastAPI:
     def youtube_connect() -> dict[str, Any]:
         if not config.publication.youtube.enabled or not config.expected_youtube_channel_id:
             raise HTTPException(409, "Configure and enable YouTube first")
-        return submit(
-            "youtube_connect",
-            None,
-            lambda: YouTubeClient(config.publication.youtube).channel(
+
+        def connect() -> dict[str, Any]:
+            channel = YouTubeClient(config.publication.youtube).channel(
                 config.expected_youtube_channel_id or "", interactive=True
-            ),
-        )
+            )
+            if not channel.get("matches_expected"):
+                raise ChannelMismatch("Connected channel differs from configured channel")
+            return channel
+
+        return submit("youtube_connect", None, connect)
 
     @app.post("/api/episodes/{episode_key}/youtube/upload-private", status_code=202)
     def upload_private(episode_key: str) -> dict[str, Any]:
