@@ -158,8 +158,8 @@ class JobManager:
                         )
                         action = job.blocker.get("recovery_action")
                         job.recovery_action = (
-                            "abandon_remote_result"
-                            if action == "abandon_remote_result"
+                            str(action)
+                            if action in {"abandon_remote_result", "resume_music_task"}
                             else None
                             if job.status == "ambiguous"
                             else "resume"

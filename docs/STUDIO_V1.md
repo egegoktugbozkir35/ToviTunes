@@ -91,6 +91,11 @@ For PR #40 creative ambiguity with `abandon_remote_result`, **Continue with next
 2. Makes zero provider calls during reconciliation.
 3. Resumes the same job/episode target using the configured generic fallback chain.
 
+A timed-out ACE-Step request with a retained provider task identity exposes
+**Resume retained ACE-Step task**. This explicitly invokes the existing provider-retrieval
+path for that task and then resumes the same job/target; it never submits another song.
+Missing task identity stays fail-closed. Pending retrieval keeps the same recovery action.
+
 Conclusive subsequent model failures still fall back automatically. A new ambiguity pauses
 again; receipt-bearing ambiguity is not silently abandoned. YouTube ambiguity never receives
 the creative abandonment action. Studio results allowlist safe identifiers/categories and

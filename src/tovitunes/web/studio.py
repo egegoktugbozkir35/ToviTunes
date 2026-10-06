@@ -202,7 +202,9 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
             safe["blocker"] = {}
         # Stage failures can include third-party text. Only our fixed messages cross the API.
         safe["blocker"]["reason"] = (
-            "The Creative Director's result could not be recovered."
+            "ACE-Step's result is uncertain. Check the retained task without creating a new song."
+            if safe["blocker"].get("recovery_action") == "resume_music_task"
+            else "The Creative Director's result could not be recovered."
             if safe["blocker"].get("recovery_action") == "abandon_remote_result"
             else "YouTube outcome is uncertain. Reconciliation is required before continuing."
             if result.get("status") == "AMBIGUOUS" and result.get("current_stage") == "YOUTUBE"
@@ -242,6 +244,7 @@ def studio_router(
         key: str | None,
         reconcile: str | None = None,
         resume_job_id: str | None = None,
+        resume_music_task: bool = False,
     ) -> dict[str, Any]:
         def runner() -> dict[str, Any]:
             if reconcile:
@@ -258,12 +261,14 @@ def studio_router(
                     target=target,
                     confirmed=True,
                     operator_publish=target == ProductionTarget.PUBLISH,
+                    resume_music_task=resume_music_task,
                 )
                 if key
                 else flow.produce_next(
                     target=target,
                     confirmed=True,
                     operator_publish=target == ProductionTarget.PUBLISH,
+                    resume_music_task=resume_music_task,
                 )
             )
             return safe_production_result(result)
@@ -309,7 +314,13 @@ def studio_router(
         )
         if job.recovery_action == "abandon_remote_result" and not request_id:
             raise HTTPException(409, "Recovery evidence is unavailable")
-        return submit(job.target, job.episode_key, request_id, job.job_id)
+        return submit(
+            job.target,
+            job.episode_key,
+            request_id,
+            job.job_id,
+            resume_music_task=job.recovery_action == "resume_music_task",
+        )
 
     @router.post("/jobs/{job_id}/stop")
     def stop(job_id: str) -> dict[str, Any]:

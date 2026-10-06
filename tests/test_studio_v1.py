@@ -641,3 +641,51 @@ def test_system_reports_channel_mismatch_without_repeated_remote_calls(context, 
             assert client.get("/api/system").json()["services"]["youtube"]["status"] == "mismatch"
         assert calls == [config.expected_youtube_channel_id]
     app.state.jobs.close()
+
+
+def test_web_music_ambiguity_retrieves_same_task_only_after_explicit_recovery(case, monkeypatch):
+    from tovitunes.pipeline.short_production import ProductionStop
+
+    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
+    flow = case["flow"]
+    app = web_app.create_app(case["config"])
+    flow.progress = app.state.jobs.update_progress
+    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
+    case["music_behavior"]["state"] = "ambiguous"
+    key = case["episode"].external_key
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        response = client.post(f"/api/studio/episodes/{key}/continue", json={"target": "render"})
+        job = wait(app.state.jobs, response.json()["job_id"])
+        assert job.status == "ambiguous" and job.recovery_action == "resume_music_task"
+        before = list(case["music_events"])
+        assert (
+            flow.produce(key, target=ProductionTarget.RENDER, confirmed=True)["status"]
+            == "AMBIGUOUS"
+        )
+        assert case["music_events"] == before  # a normal call never authorizes uncertain retrieval
+        case["music_behavior"]["state"] = "pending"
+        assert client.post(f"/api/studio/jobs/{job.job_id}/recover").status_code == 202
+        pending = wait(app.state.jobs, job.job_id)
+        assert (
+            pending.status == "pending_provider" and pending.recovery_action == "resume_music_task"
+        )
+        assert pending.job_id == job.job_id and pending.target == job.target
+        case["music_behavior"]["state"] = "success"
+        monkeypatch.setattr(
+            flow,
+            "_visual",
+            lambda *a: (_ for _ in ()).throw(
+                ProductionStop("BLOCKED", "Offline fixture stops after audio analysis")
+            ),
+        )
+        assert client.post(f"/api/studio/jobs/{job.job_id}/recover").status_code == 202
+        resumed = wait(app.state.jobs, job.job_id)
+        assert resumed.execution == 3 and resumed.current_stage == "VISUAL_PLAN"
+        assert case["music_events"].count("/release_task") == 1
+        assert not case["image_events"]
+        with closing(case["store"].database.connect()) as db:
+            assert (
+                db.execute("SELECT provider_request_id FROM music_requests").fetchone()[0]
+                == "retained-task"
+            )
+    app.state.jobs.close()

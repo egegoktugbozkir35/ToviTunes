@@ -83,6 +83,7 @@ class ShortProductionWorkflow:
         self.config = config
         self.creative_provider, self.music_provider = creative_provider, music_provider
         self.image_provider, self.progress = image_provider, progress
+        self.resume_music_task = False
 
     @contextmanager
     def _creative(self) -> Iterator[CreativeWorkflow]:
@@ -494,6 +495,7 @@ class ShortProductionWorkflow:
         confirmed: bool = False,
         target: ProductionTarget = ProductionTarget.PUBLISH,
         operator_publish: bool = False,
+        resume_music_task: bool = False,
     ) -> dict[str, Any]:
         if not confirmed:
             return self.plan(target=target)
@@ -535,7 +537,11 @@ class ShortProductionWorkflow:
                     )
                     db.commit()
             result = self.produce(
-                key, confirmed=True, target=target, operator_publish=operator_publish
+                key,
+                confirmed=True,
+                target=target,
+                operator_publish=operator_publish,
+                resume_music_task=resume_music_task,
             )
             if result["status"] == "COMPLETE":
                 with closing(self.database.connect()) as db:
@@ -630,12 +636,22 @@ class ShortProductionWorkflow:
                 if receipt:
                     result = benchmark.reconcile(request["request_id"])
                 elif request["status"] == "ambiguous":
-                    raise ProductionStop(
-                        "AMBIGUOUS",
-                        "Music interaction is uncertain; use music-benchmark "
-                        "provider-resume/reconciliation",
-                        {"request_id": request["request_id"]},
-                    )
+                    if request["provider_request_id"] and self.resume_music_task:
+                        provider = self.music_provider or AceStepLocalProvider(
+                            self.config.music_generation
+                        )
+                        result = benchmark.provider_resume(request["request_id"], provider)
+                    else:
+                        raise ProductionStop(
+                            "AMBIGUOUS",
+                            "Music interaction is uncertain; inspect its retained task",
+                            {
+                                "request_id": request["request_id"],
+                                "recovery_action": "resume_music_task"
+                                if request["provider_request_id"]
+                                else None,
+                            },
+                        )
                 elif request["status"] in {"retryable_failure", "terminal_failure"}:
                     raise ProductionStop(
                         "FAILED",
@@ -695,7 +711,16 @@ class ShortProductionWorkflow:
                 else "FAILED"
             )
             raise ProductionStop(
-                status, "Music has not completed; no new candidate was generated", result
+                status,
+                "Music has not completed; no new candidate was generated",
+                {
+                    **result,
+                    "recovery_action": "resume_music_task"
+                    if status in {"AMBIGUOUS", "PENDING_PROVIDER"}
+                    and benchmark.request(request["request_id"])["status"] == "ambiguous"
+                    and benchmark.request(request["request_id"])["provider_request_id"]
+                    else None,
+                },
             )
         request_id, blind_id = str(result["request_id"]), str(result["blind_id"])
         request = benchmark.request(request_id)
@@ -1174,7 +1199,9 @@ class ShortProductionWorkflow:
         confirmed: bool = False,
         target: ProductionTarget = ProductionTarget.PUBLISH,
         operator_publish: bool = False,
+        resume_music_task: bool = False,
     ) -> dict[str, Any]:
+        self.resume_music_task = resume_music_task
         if not confirmed:
             return self.plan(episode_key, target=target)
         self.database = Database(self.config.database_path)
