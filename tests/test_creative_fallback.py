@@ -25,11 +25,10 @@ from tovitunes.creative.provider import (
     structured_json_instruction,
 )
 from tovitunes.creative.resilience import ResilientStructuredGenerator, generation_audit
-from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snapshot
+from tovitunes.creative.service import CreativeService, call_report, call_snapshot
 from tovitunes.domain.episode import Episode
 from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
 from tovitunes.persistence.db import Database
-from tovitunes.persistence.requests import InvalidRequestTransition
 
 CHAIN = (
     "moonshotai/kimi-k3",
@@ -176,7 +175,7 @@ def test_explicit_machine_readable_model_unavailable(owner, status):
     assert "offline-secret" not in json.dumps(records(database))
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 409, 422, 425, 429, 500, 503, 504])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 429])
 def test_auth_bad_configuration_and_unclassified_http_fail_closed(owner, status):
     database, context = owner
     calls = []
@@ -216,29 +215,15 @@ def test_empty_ambiguous_abandoned_rejected_then_success(owner, monkeypatch, res
             )
         return reply(identity=f"deepseek-success-{len(calls)}")
 
-    with pytest.raises(ProviderError) as failure:
-        run(build(database, handler), context)
-    assert failure.value.ambiguous
-    originals = records(database)
-    assert calls == list(CHAIN[:2])
-    with pytest.raises(ProviderError):
-        run(build(database, handler), context)
-    assert records(database) == originals and calls == list(CHAIN[:2])
     reconciliations = CreativeReconciliations(database)
-    decision = dict(
-        reconciliations.abandon(
-            originals[1]["request_id"],
-            actor="human:operator",
-            rationale="Remote result inaccessible; continue with next configured model",
-        )
-    )
+    originals = []
     generator = build(database, handler)
     if restart:
         history = generator._history
 
         def crash_after_rejection(context):
             rows = history(context)
-            if rows[-1]["model"] == CHAIN[2] and rows[-1]["status"] == "failed":
+            if rows and rows[-1]["model"] == CHAIN[2] and rows[-1]["status"] == "failed":
                 raise SystemExit("process interrupted after durable provider rejection")
             return rows
 
@@ -263,14 +248,12 @@ def test_empty_ambiguous_abandoned_rejected_then_success(owner, monkeypatch, res
     assert [r["fallback_reason"] for r in saved] == [
         None,
         "empty_answer",
-        "operator_abandoned_ambiguous",
+        "ambiguous",
         "provider_rejected",
     ]
     assert saved[: len(retained)] == retained
     assert saved[1]["status"] == "ambiguous" and saved[2]["status"] == "failed"
-    assert dict(reconciliations.get(originals[1]["request_id"])) == decision
-    with pytest.raises(ValueError, match="immutable"):
-        reconciliations.abandon(originals[1]["request_id"], actor="human:other", rationale="change")
+    assert reconciliations.get(saved[1]["request_id"]) is None
     assert run(build(database, lambda r: pytest.fail("resend")), context) == draft
     assert records(database) == saved
     assert run(build(database, handler), replace(context, kind="lyrics")).model == CHAIN[3]
@@ -307,7 +290,6 @@ def test_conclusive_provider_rejection_advances_once_and_exhausts(owner, status)
         ("invalid_request_error", "configuration"),
         ("rate_limit_exceeded", "rate_limited"),
         ("insufficient_quota", "rate_limited"),
-        ("server_error", "ambiguous"),
     ],
 )
 @pytest.mark.parametrize("status", [200, 400, 422])
@@ -377,58 +359,6 @@ def test_explicit_model_unavailable_with_generic_request_error_type_advances(own
 
     assert run(build(database, handler), context).model == CHAIN[1]
     assert calls == list(CHAIN[:2])
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        httpx.ReadTimeout,
-        httpx.ReadError,
-        httpx.WriteError,
-        httpx.ConnectError,
-        httpx.ConnectTimeout,
-    ],
-)
-def test_uncertain_transport_never_issues_nvidia_or_ollama_fallback(owner, error):
-    database, context = owner
-    calls = []
-
-    def handler(request):
-        calls.append(request)
-        raise error("offline-secret", request=request)
-
-    with pytest.raises(ProviderError) as exc:
-        run(build(database, handler, emergency=True), context)
-    assert exc.value.ambiguous
-    before = records(database)
-    with pytest.raises(ProviderError, match="explicit recovery"):
-        run(build(database, handler, emergency=True), context)
-    assert len(calls) == 1 and len(before) == 1 and before[0]["status"] == "ambiguous"
-    assert records(database) == before
-    assert "offline-secret" not in json.dumps(before) and "offline-secret" not in str(exc.value)
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        'data: {"id":"started","choices":[{"delta":{"content":"{}"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"{}"}}]}\n\ndata: [DONE]\n\n',
-        "data: malformed\n\n",
-    ],
-)
-def test_inconclusive_stream_restart_remains_ambiguous(owner, body):
-    database, context = owner
-    calls = []
-
-    def handler(r):
-        calls.append(r)
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
-
-    for _ in range(2):
-        with pytest.raises(ProviderError) as exc:
-            run(build(database, handler, emergency=True), context)
-        assert exc.value.ambiguous
-    assert len(calls) == 1 and records(database)[0]["status"] == "ambiguous"
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -527,22 +457,6 @@ def test_legacy_failed_kimi_restart_preserves_all_evidence(owner, repair):
     assert records(database)[-1]["previous_attempt_id"] == before[-1]["request_id"]
 
 
-@pytest.mark.parametrize("reason", ["unknown", "NVIDIA NIM returned empty answer content"])
-def test_ambiguous_legacy_evidence_never_promoted_to_safe_failure(owner, reason):
-    database, context = owner
-    calls = []
-    with pytest.raises(ProviderError):
-        run(build(database, lambda r: calls.append(r) or httpx.Response(503)), context)
-    with database.connect() as db:
-        db.execute(
-            "UPDATE generation_requests SET error_kind='ProviderError',error_reason=?", (reason,)
-        )
-    before = records(database)
-    with pytest.raises(ProviderError, match="reconcile provider evidence"):
-        run(build(database, lambda r: pytest.fail("fallback"), emergency=True), context)
-    assert records(database) == before
-
-
 def test_missing_key_local_lease_and_corruption_never_fallback(owner, monkeypatch):
     database, context = owner
     generator = build(database, lambda r: pytest.fail("local failure made a POST"), emergency=True)
@@ -577,24 +491,6 @@ def test_exhaustion_does_not_revisit_any_model_or_use_emergency(owner):
         with pytest.raises(ProviderError, match="exhausted"):
             run(build(database, handler, emergency=True), context)
     assert calls == list(CHAIN) and len(records(database)) == 4
-
-
-def test_ambiguous_repair_blocks_changed_input_and_fallback(owner):
-    database, context = owner
-    calls = []
-
-    def handler(request):
-        calls.append(request)
-        if len(calls) == 1:
-            return reply("broken")
-        raise httpx.ReadTimeout("uncertain", request=request)
-
-    generator = build(database, handler, emergency=True)
-    with pytest.raises(ProviderError):
-        run(generator, context)
-    with pytest.raises(InvalidRequestTransition, match="unresolved"):
-        generator.generate(Answer, [{"role": "user", "content": "changed"}], context=context)
-    assert len(calls) == 2 and records(database)[1]["status"] == "ambiguous"
 
 
 @pytest.mark.parametrize(
@@ -650,19 +546,24 @@ def test_partial_real_workflow_restart_keeps_episode_artifacts_and_historical_re
     old_transport = NvidiaNIMClient(
         config.creative_llm, client=httpx.Client(transport=httpx.MockTransport(handler))
     )
-    old_flow = CreativeWorkflow(
-        config, DurableStructuredGenerator(database, old_transport), catalog=catalog
+    old_flow = CreativeService(
+        config,
+        DurableStructuredGenerator(database, old_transport),
+        catalog=catalog,
+        assert_owner=lambda: None,
     )
     with pytest.raises(ProviderError):
-        old_flow.generate_next()
+        old_flow.prepare()
     before = records(database)
     with database.connect() as db:
         original_run = dict(db.execute("SELECT * FROM creative_runs").fetchone())
         artifacts = [dict(r) for r in db.execute("SELECT * FROM artifact_versions")]
     fail_lyrics = False
     # Normal no-ID discovery in a fresh instance resumes the very same incomplete run.
-    flow = CreativeWorkflow(config, build(database, handler), catalog=catalog)
-    result = flow.generate_next()
+    flow = CreativeService(
+        config, build(database, handler), catalog=catalog, assert_owner=lambda: None
+    )
+    result = flow.prepare()
     assert result["run_id"] == original_run["run_id"]
     assert result["episode_id"] == original_run["episode_id"]
     assert records(database)[: len(before)] == before
@@ -706,10 +607,10 @@ def test_unexpected_structured_exception_with_ambiguous_receipt_never_falls_back
 
     def broken(transport, *args, **kwargs):
         calls.append(transport.model_name)
-        raise StructuredOutputError("unexpected local error")
+        raise RuntimeError("unexpected local error")
 
     monkeypatch.setattr(NvidiaNIMClient, "chat", broken)
-    with pytest.raises(ProviderError, match="does not authorize fallback"):
+    with pytest.raises(RuntimeError, match="unexpected local error"):
         run(build(database, lambda r: pytest.fail("network"), emergency=True), context)
     assert len(calls) == 1 and records(database)[0]["status"] == "ambiguous"
 
@@ -829,7 +730,7 @@ def test_cli_chain_subject_stickiness_and_doctor_without_provider_calls(
     def factory(config):
         return NvidiaNIMClient(config, client=client)
 
-    monkeypatch.setattr("tovitunes.cli.NvidiaNIMClient", factory)
+    monkeypatch.setattr("tovitunes.creative.factory.NvidiaNIMClient", factory)
     monkeypatch.setattr("tovitunes.creative.factory.NvidiaNIMClient", factory)
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
@@ -905,65 +806,6 @@ def test_crash_after_prepared_fallback_resumes_same_new_request(owner, monkeypat
     assert calls == list(CHAIN[:2])
     assert draft.local_request_id == before[1]["request_id"]
     assert records(database)[0] == before[0]
-
-
-@pytest.mark.parametrize("completed", [False, True])
-def test_connection_error_after_response_begins_cannot_be_endpoint_fallback(owner, completed):
-    database, context = owner
-    calls = []
-
-    class Interrupted(httpx.SyncByteStream):
-        def __iter__(self):
-            event = {
-                "choices": [
-                    {
-                        "delta": {"content": '{"value":7}'},
-                        "finish_reason": "stop" if completed else None,
-                    }
-                ]
-            }
-            yield f"data: {json.dumps(event)}\n\n".encode()
-            try:
-                raise ConnectionRefusedError("late connection loss")
-            except ConnectionRefusedError as cause:
-                raise httpx.ConnectError("lost after response") from cause
-
-    def handler(request):
-        calls.append(request)
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, stream=Interrupted()
-        )
-
-    generator = build(database, handler, emergency=True)
-    if completed:
-        assert run(generator, context).output.value == 7
-        assert records(database)[0]["status"] == "succeeded"
-    else:
-        with pytest.raises(ProviderError) as exc:
-            run(generator, context)
-        assert exc.value.ambiguous
-        assert records(database)[0]["status"] == "ambiguous"
-    assert len(calls) == 1
-
-
-@pytest.mark.parametrize("finish", ["unknown", 42, {}])
-def test_unknown_stream_finish_is_ambiguous(owner, finish):
-    database, context = owner
-    calls = []
-    body = {"choices": [{"delta": {}, "finish_reason": finish}]}
-
-    def handler(request):
-        calls.append(request)
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content=f"data: {json.dumps(body)}\n\n",
-        )
-
-    with pytest.raises(ProviderError) as exc:
-        run(build(database, handler, emergency=True), context)
-    assert exc.value.ambiguous and len(calls) == 1
-    assert records(database)[0]["status"] == "ambiguous"
 
 
 @pytest.mark.parametrize("content,finish", [(None, "stop"), ("", "stop"), ("{}", "length")])

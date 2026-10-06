@@ -4,13 +4,18 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
 from hashlib import sha256
 from sqlite3 import Row
 from typing import Any, Protocol, TypedDict, TypeVar
 
 from pydantic import BaseModel
 
+from tovitunes.errors import (
+    CreativeAmbiguity,
+    FailureCategory,
+    ProviderError,
+    StructuredOutputError,
+)
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import CreativeRequestLedger
 from tovitunes.pipeline.creative import GeneratedDraft
@@ -55,28 +60,6 @@ class GenerationContext:
 class ChatResponse:
     content: str
     request_id: str | None = None
-
-
-class FailureCategory(StrEnum):
-    EMPTY_ANSWER = "empty_answer"
-    MODEL_UNAVAILABLE = "model_unavailable"
-    INCOMPLETE_ANSWER = "incomplete_answer"
-    STRUCTURED_OUTPUT = "structured_output"
-    ENDPOINT_UNREACHABLE = "endpoint_unreachable"
-    AUTHENTICATION = "authentication"
-    CONFIGURATION = "configuration"
-    PROVIDER_REJECTED = "provider_rejected"
-    RATE_LIMITED = "rate_limited"
-    AMBIGUOUS = "ambiguous"
-
-
-MODEL_FAILURES = {
-    FailureCategory.EMPTY_ANSWER,
-    FailureCategory.MODEL_UNAVAILABLE,
-    FailureCategory.INCOMPLETE_ANSWER,
-    FailureCategory.STRUCTURED_OUTPUT,
-    FailureCategory.PROVIDER_REJECTED,
-}
 
 
 def http_failure(status: int) -> FailureCategory:
@@ -128,53 +111,6 @@ class RequestAudit(TypedDict):
     fallback_reason: str | None
     fallback_index: int
     previous_attempt_id: str | None
-
-
-class ProviderError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        ambiguous: bool = False,
-        category: FailureCategory = FailureCategory.CONFIGURATION,
-    ) -> None:
-        super().__init__(message)
-        self.ambiguous = ambiguous
-        self.category = FailureCategory.AMBIGUOUS if ambiguous else category
-
-
-class StructuredOutputError(ValueError):
-    pass
-
-
-class CreativeAmbiguity(ProviderError):
-    """Safe request identity for operator recovery; never carries a remote response body."""
-
-    def __init__(self, row: Row, message: str | None = None) -> None:
-        has_receipt = row["response_content"] is not None or row["response_sha256"] is not None
-        self.evidence: dict[str, object] = {
-            "request_id": row["request_id"],
-            "provider": row["provider"],
-            "model": row["model"],
-            "kind": row["kind"],
-            "recovery_action": (
-                "inspect_durable_receipt" if has_receipt else "abandon_remote_result"
-            ),
-            "recovery_command": (
-                f"creative request-status --request-id {row['request_id']}"
-                if has_receipt
-                else f"creative reconcile --request-id {row['request_id']} "
-                "--action abandon-remote-result --actor human:operator "
-                '--reason "Remote result is inaccessible; '
-                'continue through configured fallback chain"'
-            ),
-        }
-        super().__init__(
-            message
-            or f"creative request {row['request_id']} is ambiguous; "
-            "explicit recovery required; do not resend",
-            ambiguous=True,
-        )
 
 
 class ChatTransport(Protocol):
@@ -343,6 +279,10 @@ class DurableStructuredGenerator:
                             else "local failure after remote start; reconcile receipt"
                         ),
                     )
+                    if not isinstance(exc, ProviderError):
+                        # Retain uncertainty, but a programming/ownership failure cannot
+                        # authorize another external request in this invocation.
+                        raise
                     if ambiguous:
                         raise CreativeAmbiguity(
                             self.ledger.get(request_id),

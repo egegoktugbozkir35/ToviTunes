@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -12,9 +13,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from tovitunes.errors import ChannelMismatch
 from tovitunes.persistence.db import Database
-from tovitunes.pipeline.targets import CREATIVE_STEPS, ProductionTarget, steps_for
-from tovitunes.youtube.client import ChannelMismatch
+from tovitunes.pipeline.targets import ProductionTarget, steps_for
+from tovitunes.progress import PipelineProgress
 
 
 def _now() -> str:
@@ -68,26 +70,39 @@ class JobManager:
         self._active: str | None = None
         self.database = database
         if database:
-            with closing(database.connect()) as db:
-                for row in db.execute("SELECT payload_json FROM studio_jobs ORDER BY rowid"):
-                    job = Job.model_validate_json(row[0])
+            try:
+                with closing(database.connect()) as db:
+                    rows = db.execute(
+                        "SELECT payload_json FROM studio_jobs ORDER BY rowid"
+                    ).fetchall()
+                for row in rows:
+                    try:
+                        job = Job.model_validate_json(row[0])
+                    except ValueError:
+                        logging.getLogger(__name__).exception("ignored invalid diagnostic job")
+                        continue
                     if job.status in {"queued", "running"}:
                         job.status = "interrupted"
                         job.error = "Studio stopped during this task. Resume its durable work."
                         job.recovery_action = "resume"
                     self._jobs[job.job_id] = job
+            except Exception:
+                logging.getLogger(__name__).exception("failed to load diagnostic job history")
             for job in self._jobs.values():
                 self._save(job)
 
     def _save(self, job: Job) -> None:
-        if self.database:
-            with closing(self.database.connect()) as db:
-                db.execute(
-                    "INSERT INTO studio_jobs VALUES (?,?) ON CONFLICT(job_id) "
-                    "DO UPDATE SET payload_json=excluded.payload_json",
-                    (job.job_id, job.model_dump_json()),
-                )
-                db.commit()
+        try:
+            if self.database:
+                with closing(self.database.connect()) as db:
+                    db.execute(
+                        "INSERT INTO studio_jobs VALUES (?,?) ON CONFLICT(job_id) DO "
+                        "UPDATE SET payload_json=excluded.payload_json",
+                        (job.job_id, job.model_dump_json()),
+                    )
+                    db.commit()
+        except Exception:
+            logging.getLogger(__name__).exception("diagnostic job persistence failed")
 
     def submit(
         self,
@@ -159,7 +174,7 @@ class JobManager:
                         action = job.blocker.get("recovery_action")
                         job.recovery_action = (
                             str(action)
-                            if action in {"abandon_remote_result", "resume_music_task"}
+                            if action in {"resume_music_task"}
                             else None
                             if job.status == "ambiguous"
                             else "resume"
@@ -174,35 +189,16 @@ class JobManager:
         with self._lock:
             return self._jobs[job_id].model_copy(deep=True)
 
-    def update_progress(self, stage: str, status: str) -> None:
+    def update_progress(self, progress: PipelineProgress) -> None:
         with self._lock:
             if self._active is None:
                 return
             job = self._jobs[self._active]
-            job.progress = f"{stage}: {status}"
-            job.current_stage = stage
-            job.current_substage = status
-            if job.steps:
-                if stage == "CREATIVE":
-                    if status == "COMPLETE":
-                        done = len(CREATIVE_STEPS)
-                    elif status == "BRIEF_COMPLETE":
-                        done = 2
-                    else:
-                        step = status.removesuffix("_RUNNING").removesuffix("_COMPLETE")
-                        done = (
-                            CREATIVE_STEPS.index(step) + int(status.endswith("_COMPLETE"))
-                            if step in CREATIVE_STEPS
-                            else 0
-                        )
-                elif stage in job.steps:
-                    done = job.steps.index(stage) + int(status == "COMPLETE")
-                else:
-                    done = job.completed_steps
-                job.completed_steps = max(job.completed_steps, done)
-                job.progress_percent = min(
-                    99, max(job.progress_percent, 100 * done // job.total_steps)
-                )
+            job.progress = progress.detail
+            job.current_stage = progress.stage
+            job.current_substage = progress.detail
+            job.progress_percent = progress.percent
+            job.episode_key = progress.episode_key or job.episode_key
             self._save(job)
 
     def stop(self, job_id: str) -> Job:

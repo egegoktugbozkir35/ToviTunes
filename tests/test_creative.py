@@ -8,7 +8,6 @@ from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import CreativeDraftService, FakeDraftGenerator
-from tovitunes.pipeline.planner import plan_episode
 
 
 def _service(
@@ -28,7 +27,6 @@ def test_fake_creative_drafts_require_human_gates_and_preserve_alternatives(
     tmp_path: Path, catalog: BrandCatalog
 ) -> None:
     service, store, episode = _service(tmp_path, catalog)
-    assert plan_episode(store, episode.episode_id, "audio").requirement == "learning_objective"
     with pytest.raises(PermissionError):
         service.draft_episode_spec(episode.episode_id)
 
@@ -41,7 +39,6 @@ def test_fake_creative_drafts_require_human_gates_and_preserve_alternatives(
     assert chosen.provenance.prompt_version == "episode-concept-v1"
     with pytest.raises(ValueError, match="approval"):
         store.select(chosen.identity.artifact_id)
-    assert plan_episode(store, episode.episode_id, "audio").action == "review"
     service.review_candidate(
         rejected.identity.artifact_id, "rejected", actor="human", reason="weak hook"
     )
@@ -60,14 +57,12 @@ def test_fake_creative_drafts_require_human_gates_and_preserve_alternatives(
     assert music_data.lyrics_artifact_id == lyrics.identity.artifact_id
     assert music_data.target_duration_seconds == episode.target_duration_seconds
     service.review_candidate(music.identity.artifact_id, "approved", actor="human")
-    assert plan_episode(store, episode.episode_id, "audio").requirement == "audio_master"
 
     service.review_candidate(
         lyrics.identity.artifact_id, "rejected", actor="human", reason="revoked"
     )
     assert store.selected("episode", episode.episode_id, "lyrics", "main") is None
     assert store.eligibility(music.identity.artifact_id)[0] is False
-    assert plan_episode(store, episode.episode_id, "audio").requirement == "lyrics"
     assert store.get(rejected.identity.artifact_id).identity.kind == "episode_spec"
 
 
@@ -81,7 +76,5 @@ def test_objective_rejection_holds_existing_creative_work(
     service.review_objective(
         episode.episode_id, "rejected", actor="human", reason="objective needs revision"
     )
-    assert plan_episode(store, episode.episode_id, "audio").requirement == "learning_objective"
     with pytest.raises(PermissionError):
         service.draft_lyrics(episode.episode_id)
-

@@ -198,13 +198,6 @@ class TopicMemory:
                 if embedding:
                     item["embedding"] = json.loads(embedding[0])
             if item["episode_id"]:
-                event = db.execute(
-                    "SELECT stage,status FROM production_stage_events WHERE episode_id=? "
-                    "ORDER BY rowid DESC LIMIT 1",
-                    (item["episode_id"],),
-                ).fetchone()
-                if event:
-                    item["production_status"] = event[0] + ":" + event[1]
                 publication = db.execute(
                     "SELECT outcome,privacy_status FROM publication_attempts "
                     "WHERE episode_id=? ORDER BY rowid DESC LIMIT 1",

@@ -5,7 +5,7 @@
 """Pure geometry helper for fitting a source video onto a canvas.
 
 Computes crop + resize boxes for ``cover`` (fill canvas, crop overflow)
-and ``contain`` (letterbox, no crop) modes. No MoviePy/ffmpeg dependency —
+and ``contain`` (letterbox, no crop) modes. No MoviePy/ffmpeg dependency â€”
 pure arithmetic so it is trivially unit-testable.
 """
 
@@ -53,12 +53,12 @@ def compute_fit_box(
 
     if mode == "cover":
         if src_aspect > canvas_aspect:
-            # Source wider than canvas → crop width to match canvas aspect.
+            # Source wider than canvas â†’ crop width to match canvas aspect.
             new_w = int(round(sh * canvas_aspect))
             x = (sw - new_w) // 2
             return LayoutBox(crop_x=x, crop_y=0, crop_w=new_w, crop_h=sh, out_w=cw, out_h=ch)
         else:
-            # Source taller than (or equal to) canvas → crop height.
+            # Source taller than (or equal to) canvas â†’ crop height.
             new_h = int(round(sw / canvas_aspect))
             y = (sh - new_h) // 2
             return LayoutBox(crop_x=0, crop_y=y, crop_w=sw, crop_h=new_h, out_w=cw, out_h=ch)

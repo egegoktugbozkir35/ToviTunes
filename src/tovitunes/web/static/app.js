@@ -96,7 +96,7 @@ function jobCard(job, current = false) {
   const detail = labels[substage] || labels[job.current_stage] || "Waiting for production";
   const diagnostics = job.creative_diagnostics;
   const attempts = diagnostics?.attempts || [];
-  const recovery = job.recovery_action === "abandon_remote_result" ? "Continue with next model" : job.recovery_action === "resume_music_task" ? "Resume retained ACE-Step task" : "Retry / Resume";
+  const recovery = job.recovery_action === "resume_music_task" ? "Resume retained ACE-Step task" : "Retry / Resume";
   const status = job.stopped ? "stopped" : job.status;
   const knownStatus = ["running", "queued", "failed", "ambiguous", "interrupted", "pending_provider", "needs_review", "complete", "succeeded"].includes(status) ? status : "neutral";
   const error = diagnostics?.message || job.error;

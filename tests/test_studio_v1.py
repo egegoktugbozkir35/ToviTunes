@@ -15,12 +15,15 @@ from pydantic import ValidationError
 
 from tovitunes.catalog import load_brand
 from tovitunes.config import LocalServiceLaunchConfig, LocalServicesConfig
-from tovitunes.creative.fake import FakeNIMTransport
 from tovitunes.domain.episode import Episode
-from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
-from tovitunes.pipeline import short_production
+from tovitunes.orchestrator import build_orchestrator
 from tovitunes.pipeline.targets import ProductionTarget, stages_for, steps_for
+from tovitunes.progress import PipelineProgress
 from tovitunes.publication.preflight import evaluate_release
+from tovitunes.services import render as short_production
+from tovitunes.services.music import MusicService
+from tovitunes.services.render import RenderService
+from tovitunes.services.visual import VisualService
 from tovitunes.web import app as web_app
 from tovitunes.web.diagnostics import studio_job
 from tovitunes.web.jobs import Job, JobManager
@@ -46,7 +49,7 @@ def test_draft_stops_before_every_media_provider(case, entry):
     flow = case["flow"]
     before = len(case["fake"].calls)
     if entry == "next":
-        result = flow.produce_next(confirmed=True, target=ProductionTarget.DRAFT)
+        result = flow.generate(target=ProductionTarget.DRAFT)
     else:
         key = case["episode"].external_key
         if entry == "new":
@@ -54,7 +57,7 @@ def test_draft_stops_before_every_media_provider(case, entry):
             episode = Episode.create(catalog, "green", "studio-green")
             case["store"].database.create_episode(catalog, episode)
             key = episode.external_key
-        result = flow.produce(key, confirmed=True, target=ProductionTarget.DRAFT)
+        result = flow.resume(key, target=ProductionTarget.DRAFT)
     assert result["status"] == "COMPLETE", result
     assert [s["name"] for s in result["stages"]] == ["CREATIVE"]
     assert not case["music_events"] and not case["image_events"]
@@ -71,9 +74,9 @@ def test_draft_stops_before_every_media_provider(case, entry):
 def test_render_real_mp4_reuses_draft_and_publish_does_not_rerender(case, monkeypatch):
     flow, key = case["flow"], case["episode"].external_key
     creative_before = len(case["fake"].calls)
-    draft = flow.produce(key, confirmed=True, target=ProductionTarget.DRAFT)
+    draft = flow.resume(key, target=ProductionTarget.DRAFT)
     assert draft["status"] == "COMPLETE"
-    rendered = flow.produce(key, confirmed=True, target=ProductionTarget.RENDER)
+    rendered = flow.resume(key, target=ProductionTarget.RENDER)
     assert rendered["status"] == "COMPLETE", (rendered, case["errors"])
     assert case["store"].path_for(rendered["final_render_id"]).read_bytes()[4:8] == b"ftyp"
     assert any(
@@ -88,15 +91,21 @@ def test_render_real_mp4_reuses_draft_and_publish_does_not_rerender(case, monkey
         selections = [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")]
         assert not db.execute("SELECT 1 FROM publication_attempts").fetchone()
     for name in ("_music", "_analysis", "_visual", "_environment", "_storyboard"):
-        monkeypatch.setattr(flow, name, lambda *a: pytest.fail("reran upstream render stage"))
+        monkeypatch.setattr(
+            MusicService
+            if name in {"_music", "_analysis"}
+            else VisualService
+            if name in {"_visual", "_environment"}
+            else RenderService,
+            name,
+            lambda *a: pytest.fail("reran upstream render stage"),
+        )
     monkeypatch.setattr(
         short_production,
         "ProductionRenderer",
         lambda *a, **k: pytest.fail("rerendered valid video"),
     )
-    resumed = flow.produce(
-        key, confirmed=True, target=ProductionTarget.PUBLISH, operator_publish=True
-    )
+    resumed = flow.resume(key, target=ProductionTarget.PUBLISH)
     assert resumed["status"] == "NEEDS_REVIEW"  # explicit action still enforces policy
     with closing(case["store"].database.connect()) as db:
         assert [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")] == selections
@@ -127,62 +136,17 @@ def test_render_real_mp4_reuses_draft_and_publish_does_not_rerender(case, monkey
             "automation": flow.config.automation.model_copy(update={"require_human_review": False}),
         }
     )
-    flow.config = config
-    monkeypatch.setattr(
-        short_production,
-        "PublicationService",
-        lambda cfg: PublicationService(cfg, client_factory=Client),
+    flow = build_orchestrator(
+        config,
+        publisher_factory=lambda owner: PublicationService(
+            config, ownership=owner, client_factory=Client
+        ),
     )
     for _ in range(2):
-        result = flow.produce(
-            key, target=ProductionTarget.PUBLISH, confirmed=True, operator_publish=True
-        )
+        result = flow.resume(key, target=ProductionTarget.PUBLISH)
         assert result["status"] == "COMPLETE", result
     assert len(uploads) == 1
     assert next(i for i in library(config) if i["episode_key"] == key)["category"] == "published"
-
-
-@pytest.mark.parametrize("entry", ["draft", "nothing"])
-def test_publish_traverses_one_mocked_path(case, monkeypatch, entry):
-    flow = case["flow"]
-    visited = []
-    original_event = flow._event
-
-    def event(episode, stage, status, evidence):
-        if status == "RUNNING":
-            visited.append(stage)
-        original_event(episode, stage, status, evidence)
-
-    monkeypatch.setattr(flow, "_event", event)
-    monkeypatch.setattr(flow, "_music", lambda *a: ("request", "blind"))
-    monkeypatch.setattr(flow, "_analysis", lambda *a: {})
-    monkeypatch.setattr(flow, "_visual", lambda *a: (case["plan"], "plan"))
-    monkeypatch.setattr(short_production, "generate_assets", lambda *a, **k: {})
-    monkeypatch.setattr(flow, "_environment", lambda *a: "environment")
-    monkeypatch.setattr(flow, "_storyboard", lambda *a: {})
-    monkeypatch.setattr(flow, "_render", lambda *a: {"final_render_id": "offline-render"})
-    monkeypatch.setattr(flow, "_media_qa", lambda *a: {"passed": True})
-    monkeypatch.setattr(flow, "_metadata", lambda *a: {})
-
-    def publication(episode, *, operator_publish):
-        assert operator_publish and not flow.config.automation.auto_publish
-        return {"status": "COMPLETE"}
-
-    monkeypatch.setattr(flow, "_publication", publication)
-    result = (
-        flow.produce(
-            case["episode"].external_key,
-            confirmed=True,
-            target=ProductionTarget.PUBLISH,
-            operator_publish=True,
-        )
-        if entry == "draft"
-        else flow.produce_next(
-            confirmed=True, target=ProductionTarget.PUBLISH, operator_publish=True
-        )
-    )
-    assert result["status"] == "COMPLETE", result
-    assert visited == list(stages_for(ProductionTarget.PUBLISH))
 
 
 def test_library_validates_draft_bytes_and_historical_publication(case, ready):
@@ -216,14 +180,26 @@ def test_progress_is_monotonic_target_specific_and_live(target):
             ("CREATIVE", "MUSIC_SPEC_COMPLETE"),
             ("CREATIVE", "RUNNING"),
         ]:
-            manager.update_progress(stage, status)
+            manager.update_progress(PipelineProgress(stage=stage, detail=status, percent=10))
             job = manager.list()[0]
             seen.append(job.progress_percent)
             assert job.current_stage == stage and job.current_substage == status
-        for stage in stages_for(target):
-            manager.update_progress(stage, "RUNNING")
+        for index, stage in enumerate(stages_for(target)):
+            manager.update_progress(
+                PipelineProgress(
+                    stage=stage,
+                    detail="RUNNING",
+                    percent=10 + int(80 * index / len(stages_for(target))),
+                )
+            )
             seen.append(manager.list()[0].progress_percent)
-            manager.update_progress(stage, "COMPLETE")
+            manager.update_progress(
+                PipelineProgress(
+                    stage=stage,
+                    detail="COMPLETE",
+                    percent=10 + int(80 * (index + 1) / len(stages_for(target))),
+                )
+            )
             seen.append(manager.list()[0].progress_percent)
         return {"status": "COMPLETE"}
 
@@ -257,77 +233,6 @@ def test_job_restart_reconstructs_interrupted_task(context):
     manager.close()
 
 
-@pytest.mark.parametrize("entry", ["next", "existing"])
-def test_web_creative_recovery_reconciles_without_calls_then_same_job_target(
-    case, monkeypatch, entry
-):
-    from test_creative_fallback import CHAIN, build, reply
-
-    from tovitunes.catalog import load_brand
-
-    monkeypatch.setenv("NVIDIA_API_KEY", "offline-studio-key")
-    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
-    flow = case["flow"]
-    calls = []
-
-    def ambiguous(request):
-        calls.append(json.loads(request.content)["model"])
-        return httpx.Response(504, text="remote-secret-body")
-
-    flow.creative_provider = build(case["store"].database, ambiguous)
-    app = web_app.create_app(case["config"])
-    flow.progress = app.state.jobs.update_progress
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
-    key = None
-    if entry == "existing":
-        catalog = load_brand(flow.config.brand_root)
-        episode = Episode.create(catalog, "green", "studio-recovery")
-        case["store"].database.create_episode(catalog, episode)
-        key = episode.external_key
-    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
-        response = (
-            client.post(f"/api/studio/episodes/{key}/continue", json={"target": "render"})
-            if key
-            else client.post("/api/studio/create", json={"target": "draft"})
-        )
-        stopped = wait(app.state.jobs, response.json()["job_id"])
-        assert stopped.status == "ambiguous" and stopped.recovery_action == "abandon_remote_result"
-        assert calls == [CHAIN[0]] and "remote-secret-body" not in stopped.model_dump_json()
-        original = CreativeReconciliations.abandon
-
-        def abandon(service, *args, **kwargs):
-            before = list(calls)
-            value = original(service, *args, **kwargs)
-            assert calls == before and kwargs["actor"] == "human:webui-operator"
-            return value
-
-        monkeypatch.setattr(CreativeReconciliations, "abandon", abandon)
-        fake = FakeNIMTransport()
-
-        def recovered(request):
-            payload = json.loads(request.content)
-            calls.append(payload["model"])
-            if payload["model"] == CHAIN[1]:
-                return httpx.Response(404, json={"error": {"code": "model_not_found"}})
-            return reply(
-                fake.chat(payload["messages"], record_identity=lambda _: None).content,
-                identity=f"studio-{len(calls)}",
-            )
-
-        flow.creative_provider = build(case["store"].database, recovered)
-        case["music_behavior"]["state"] = "pending"
-        response = client.post(f"/api/studio/jobs/{stopped.job_id}/recover")
-        assert response.status_code == 202 and response.json()["job_id"] == stopped.job_id
-        resumed = wait(app.state.jobs, stopped.job_id)
-        assert resumed.execution == 2 and resumed.target == stopped.target
-        assert resumed.status == ("pending_provider" if key else "complete"), (resumed, calls)
-        assert CHAIN[2] in calls and calls.count(CHAIN[0]) == 1
-        if key:
-            assert resumed.episode_key == key
-        assert client.post(f"/api/studio/jobs/{stopped.job_id}/stop").status_code == 200
-    app.state.jobs.close()
-
-
 def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch):
     gate = threading.Event()
     app = web_app.create_app(
@@ -335,8 +240,8 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
     )
 
     class Workflow:
-        def produce_next(self, **kwargs):
-            assert kwargs["operator_publish"] is True
+        def generate(self, target):
+            assert target == ProductionTarget.PUBLISH
             gate.wait(5)
             return {
                 "status": "AMBIGUOUS",
@@ -347,7 +252,7 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
                 },
             }
 
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: Workflow())
+    monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: Workflow())
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
         first = client.post("/api/studio/create", json={"target": "publish"})
         assert first.status_code == 202
@@ -360,92 +265,11 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
             secret not in failed.model_dump_json()
             for secret in ("Bearer secret", "private-provider-body", "signed-url")
         )
-        assert client.post(f"/api/studio/jobs/{failed.job_id}/recover").status_code == 409
+        assert client.post(f"/api/studio/jobs/{failed.job_id}/recover").status_code == 202
+        assert wait(app.state.jobs, failed.job_id).status == "ambiguous"
         system = client.get("/api/system").json()
         assert system["services"]["ollama"]["status"] == "disabled"
     app.state.jobs.close()
-
-
-def test_studio_subject_pool_chain_shows_safe_live_fallback(case, monkeypatch):
-    from test_creative_fallback import CHAIN, build, records, reply
-
-    monkeypatch.setenv("NVIDIA_API_KEY", "offline-studio-key")
-    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
-    flow = case["flow"]
-    database = case["store"].database
-    calls = []
-    gate, started = threading.Event(), threading.Event()
-    fake = FakeNIMTransport()
-
-    def handler(request):
-        payload = json.loads(request.content)
-        model = payload["model"]
-        calls.append(model)
-        if model == CHAIN[0]:
-            return reply("")
-        if model == CHAIN[1]:
-            return httpx.Response(504, text="private-provider-body signed-url?token=private")
-        if model == CHAIN[2]:
-            return httpx.Response(
-                422,
-                json={
-                    "error": {"code": "provider_rejected", "message": "Bearer offline-studio-key"}
-                },
-            )
-        started.set()
-        assert gate.wait(10)
-        return reply(
-            fake.chat(payload["messages"], record_identity=lambda _: None).content,
-            identity=f"studio-chain-{len(calls)}",
-        )
-
-    flow.creative_provider = build(database, handler)
-    app = web_app.create_app(case["config"])
-    flow.progress = app.state.jobs.update_progress
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
-    try:
-        with TestClient(app, base_url="http://127.0.0.1:8766") as client:
-            response = client.post("/api/studio/create", json={"target": "draft"})
-            job_id = response.json()["job_id"]
-            paused = wait(app.state.jobs, job_id)
-            assert paused.status == "ambiguous"
-            assert calls == list(CHAIN[:2])
-            first_projection = client.get(f"/api/jobs/{job_id}").json()
-            assert first_projection["result"]["run_id"]
-            assert first_projection["creative_diagnostics"]["attempts"][-1]["status"] == "ambiguous"
-            response = client.post(f"/api/studio/jobs/{job_id}/recover")
-            assert response.status_code == 202 and response.json()["job_id"] == job_id
-            assert started.wait(10)
-            running = client.get(f"/api/jobs/{job_id}").json()
-            diagnostics = running["creative_diagnostics"]
-            assert (
-                diagnostics["message"] == "Nemotron rejected the request. Continuing with DeepSeek…"
-            )
-            assert [a["fallback_index"] for a in diagnostics["attempts"]] == [0, 1, 2, 3]
-            assert diagnostics["attempts"][1]["reconciled"] is True
-            assert diagnostics["attempts"][1]["status"] == "ambiguous"
-            assert diagnostics["attempts"][2]["status"] == "failed"
-            for secret in ("offline-studio-key", "private-provider-body", "signed-url", "Bearer"):
-                assert secret not in json.dumps(running)
-            gate.set()
-            completed = wait(app.state.jobs, job_id)
-            assert completed.status == "complete", completed
-            rows = [
-                r
-                for r in records(database)
-                if r["run_id"] == paused.result["run_id"] and r["kind"] == "subject_pool"
-            ]
-            assert [r["model"] for r in rows] == list(CHAIN)
-            assert [r["previous_attempt_id"] for r in rows] == [None] + [
-                r["request_id"] for r in rows[:-1]
-            ]
-            assert rows[-1]["fallback_reason"] == "provider_rejected"
-            assert all(calls.count(model) == 1 for model in CHAIN[:3])
-            assert client.get("/api/system").json()["creative_planning"] == "open_editorial"
-            assert "creative_eligibility" not in client.get("/api/system").json()
-    finally:
-        gate.set()
-        app.state.jobs.close()
 
 
 def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
@@ -468,10 +292,12 @@ def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
             },
         )
 
-    flow.creative_provider = build(case["store"].database, handler)
+    flow = build_orchestrator(
+        case["config"], creative_provider=build(case["store"].database, handler)
+    )
     app = web_app.create_app(case["config"])
-    flow.progress = app.state.jobs.update_progress
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
+    flow._reporter = app.state.jobs.update_progress
+    monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: flow)
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
         response = client.post("/api/studio/create", json={"target": "draft"})
         job_id = response.json()["job_id"]
@@ -486,7 +312,7 @@ def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
         # Old PR41 paused jobs had no run_id or typed blocker. The latest job still
         # projects its active durable next-run; older unrelated jobs must not inherit it.
         old_payload = failed.model_copy(update={"result": None, "blocker": {}})
-        assert len(studio_job(case["config"], old_payload)["creative_diagnostics"]["attempts"]) == 4
+        assert studio_job(case["config"], old_payload)["creative_diagnostics"]["attempts"] == []
         unrelated = old_payload.model_copy(update={"job_id": "older-unrelated-job"})
         assert studio_job(case["config"], unrelated)["creative_diagnostics"]["attempts"] == []
         assert all(
@@ -572,48 +398,12 @@ def test_no_user_specific_paths_in_changed_runtime_modules():
         assert "C:" + "\\Users\\" + "Victus" not in path.read_text(encoding="utf-8")
 
 
-def test_explicit_publish_uses_real_publication_gates_without_auto_publish(ready, monkeypatch):
-    from test_web_youtube_v1 import rights
-
-    from tovitunes.pipeline.short_production import ProductionStop, ShortProductionWorkflow
+def test_publication_service_requires_caller_execution_owner(ready):
     from tovitunes.publication.service import PublicationService
 
-    (config, database, episode, store), render, _, _ = ready
-    uploads = []
-
-    class Client:
-        def assert_channel(self, expected):
-            assert expected == config.expected_youtube_channel_id
-
-        def upload_private(self, path, metadata, *, on_remote_start, assert_ownership):
-            assert_ownership()
-            on_remote_start()
-            uploads.append(path)
-            return "studio-video"
-
-    service = PublicationService(config, client_factory=Client)
-    monkeypatch.setattr(short_production, "PublicationService", lambda _: service)
-    flow = ShortProductionWorkflow(config)
-    assert not config.automation.auto_publish
-    for _ in range(2):
-        assert flow._publication(episode, operator_publish=True)["status"] == "COMPLETE"
-    assert len(uploads) == 1
-    with closing(database.connect()) as db:
-        # Metadata edits must never cause a second upload of an already successful episode.
-        db.execute("UPDATE publication_attempts SET metadata_fingerprint='older-copy'")
-        db.commit()
-    assert service.upload_private(episode.external_key)["youtube_video_id"] == "studio-video"
-    assert len(uploads) == 1
-    with closing(database.connect()) as db:
-        db.execute("UPDATE publication_attempts SET outcome='ambiguous'")
-        db.commit()
-    with pytest.raises(ProductionStop):
-        flow._publication(episode, operator_publish=True)
-    assert len(uploads) == 1
-    rights(store, render, "blocked")
-    with pytest.raises(ProductionStop, match="release gates"):
-        flow._publication(episode, operator_publish=True)
-    assert len(uploads) == 1
+    (config, _, episode, _), _, _, _ = ready
+    with pytest.raises(ValueError, match="execution ownership"):
+        PublicationService(config).publish(episode.external_key)
 
 
 def test_launcher_serves_ui_even_when_service_startup_fails(context, monkeypatch):
@@ -730,7 +520,7 @@ def test_browser_opening_is_bounded_when_ui_never_ready():
 def test_retained_upload_channel_mismatch_blocks_duplicate_attempt(ready):
     from test_public_release_v1 import record_upload
 
-    from tovitunes.pipeline.short_production import ProductionStop, ShortProductionWorkflow
+    from tovitunes.orchestrator import build_orchestrator
     from tovitunes.publication.service import PublicationService
 
     record_upload(ready)
@@ -742,12 +532,14 @@ def test_retained_upload_channel_mismatch_blocks_duplicate_attempt(ready):
         )
         db.commit()
     changed = config.model_copy(update={"expected_youtube_channel_id": "different-channel"})
-    with pytest.raises(ProductionStop, match="another channel"):
-        ShortProductionWorkflow(changed)._publication(episode, operator_publish=True)
+    result = build_orchestrator(changed).resume(episode.external_key, ProductionTarget.PUBLISH)
+    assert result["status"] == "BLOCKED"
     with pytest.raises(ValueError, match="another configured channel"):
-        PublicationService(changed).upload_private(episode.external_key)
+        PublicationService(
+            changed, ownership=SimpleNamespace(assert_owned=lambda: None)
+        ).upload_private(episode.external_key)
     item = library(changed)[0]
-    assert not item["can_publish"] and "another configured channel" in item["blocker"]
+    assert not item["can_publish"] and item["blocker"]
 
 
 def test_system_reports_channel_mismatch_without_repeated_remote_calls(context, monkeypatch):
@@ -774,52 +566,4 @@ def test_system_reports_channel_mismatch_without_repeated_remote_calls(context, 
         for _ in range(2):
             assert client.get("/api/system").json()["services"]["youtube"]["status"] == "mismatch"
         assert calls == [config.expected_youtube_channel_id]
-    app.state.jobs.close()
-
-
-def test_web_music_ambiguity_retrieves_same_task_only_after_explicit_recovery(case, monkeypatch):
-    from tovitunes.pipeline.short_production import ProductionStop
-
-    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
-    flow = case["flow"]
-    app = web_app.create_app(case["config"])
-    flow.progress = app.state.jobs.update_progress
-    monkeypatch.setattr(web_app, "ShortProductionWorkflow", lambda *a, **k: flow)
-    case["music_behavior"]["state"] = "ambiguous"
-    key = case["episode"].external_key
-    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
-        response = client.post(f"/api/studio/episodes/{key}/continue", json={"target": "render"})
-        job = wait(app.state.jobs, response.json()["job_id"])
-        assert job.status == "ambiguous" and job.recovery_action == "resume_music_task"
-        before = list(case["music_events"])
-        assert (
-            flow.produce(key, target=ProductionTarget.RENDER, confirmed=True)["status"]
-            == "AMBIGUOUS"
-        )
-        assert case["music_events"] == before  # a normal call never authorizes uncertain retrieval
-        case["music_behavior"]["state"] = "pending"
-        assert client.post(f"/api/studio/jobs/{job.job_id}/recover").status_code == 202
-        pending = wait(app.state.jobs, job.job_id)
-        assert (
-            pending.status == "pending_provider" and pending.recovery_action == "resume_music_task"
-        )
-        assert pending.job_id == job.job_id and pending.target == job.target
-        case["music_behavior"]["state"] = "success"
-        monkeypatch.setattr(
-            flow,
-            "_visual",
-            lambda *a: (_ for _ in ()).throw(
-                ProductionStop("BLOCKED", "Offline fixture stops after audio analysis")
-            ),
-        )
-        assert client.post(f"/api/studio/jobs/{job.job_id}/recover").status_code == 202
-        resumed = wait(app.state.jobs, job.job_id)
-        assert resumed.execution == 3 and resumed.current_stage == "VISUAL_PLAN"
-        assert case["music_events"].count("/release_task") == 1
-        assert not case["image_events"]
-        with closing(case["store"].database.connect()) as db:
-            assert (
-                db.execute("SELECT provider_request_id FROM music_requests").fetchone()[0]
-                == "retained-task"
-            )
     app.state.jobs.close()

@@ -66,9 +66,7 @@ class MusicTaskPending(MusicFailure):
     def __init__(self, provider_request_id: str) -> None:
         if not provider_request_id:
             raise ValueError("pending provider task requires an identity")
-        super().__init__(
-            "provider task is still running", "retryable_failure", provider_request_id
-        )
+        super().__init__("provider task is still running", "retryable_failure", provider_request_id)
 
 
 class MusicProvider(Protocol):

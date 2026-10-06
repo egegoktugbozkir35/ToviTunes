@@ -4,7 +4,8 @@ from contextlib import closing
 from typing import Any
 
 from tovitunes.config import RuntimeConfig
-from tovitunes.creative.provider import MODEL_FAILURES, FailureCategory, stored_failure
+from tovitunes.creative.provider import stored_failure
+from tovitunes.errors import FailureCategory
 from tovitunes.persistence.db import Database
 from tovitunes.web.jobs import Job
 
@@ -18,7 +19,7 @@ OUTCOMES = {
     "configuration": "could not run. Check configuration in Settings",
     "rate_limited": "was rate limited. Wait before resuming",
     "endpoint_unreachable": "could not reach the endpoint before interaction",
-    "ambiguous": "has an uncertain remote outcome. Explicit reconciliation is required",
+    "ambiguous": "has an uncertain result. Continuing with the next configured model",
 }
 
 
@@ -58,24 +59,6 @@ def studio_job(config: RuntimeConfig, job: Job) -> dict[str, Any]:
             ).fetchone()
             if owner:
                 run_id, episode_id = owner
-        if (
-            not (run_id or episode_id)
-            and not job.stopped
-            and job.status in {"running", "interrupted", "failed", "ambiguous"}
-        ):
-            latest = db.execute(
-                "SELECT job_id FROM studio_jobs WHERE "
-                "json_extract(payload_json,'$.operation')='studio' ORDER BY "
-                "json_extract(payload_json,'$.submitted_at') DESC,rowid DESC LIMIT 1"
-            ).fetchone()
-            if latest and latest[0] == job.job_id:
-                # Also supports pre-diagnostics paused jobs without a saved run identity.
-                # Only the latest Studio job can own the single active next-run.
-                owner = db.execute(
-                    "SELECT run_id FROM production_next_runs WHERE status='active' "
-                    "ORDER BY rowid DESC LIMIT 1"
-                ).fetchone()
-                run_id = owner[0] if owner else None
         rows = db.execute(
             "SELECT g.request_id,g.provider,g.model,g.kind,g.status,g.error_kind,g.error_reason,"
             "g.fallback_index,"
@@ -137,8 +120,8 @@ def studio_job(config: RuntimeConfig, job: Job) -> dict[str, Any]:
         latest = attempts[-1]
         if latest["status"] in {"prepared", "remote_started"} and len(attempts) > 1:
             prior = attempts[-2]
-            if prior["error_kind"] in {c.value for c in MODEL_FAILURES} or prior["reconciled"]:
-                message = f"{prior['message']} Continuing with {latest['model_label']}…"
+            if prior["error_kind"]:
+                message = f"{prior['message']} Continuing with {latest['model_label']}Ã¢â‚¬Â¦"
         elif latest["error_kind"]:
             message = latest["message"]
     result["creative_diagnostics"] = {

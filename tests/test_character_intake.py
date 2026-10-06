@@ -161,7 +161,8 @@ def test_ingest_preserves_provenance_and_art_rights_separation(
     with database.connect() as connection:
         dependency = connection.execute(
             "SELECT input_artifact_id, input_sha256 FROM artifact_dependencies "
-            "WHERE consumer_artifact_id = ?", (mouth_id,)
+            "WHERE consumer_artifact_id = ?",
+            (mouth_id,),
         ).fetchone()
         assert dependency["input_artifact_id"] == source_id
         assert dependency["input_sha256"] == store.get(source_id).sha256

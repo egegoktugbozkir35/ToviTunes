@@ -106,7 +106,7 @@ PROHIBITED = (
     "new permanent character",
     "new character",
     "tovi's friend",
-    "tovi’s friend",
+    "toviÃ¢â‚¬â„¢s friend",
     "physics",
     "quantum",
     "molecule",

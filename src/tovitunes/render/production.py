@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,7 +31,6 @@ from tovitunes.domain.storyboard import (
     parse_storyboard,
 )
 from tovitunes.persistence.db import Database
-from tovitunes.persistence.leases import Lease, LeaseStore
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
 from tovitunes.render.character import (
     ACTION_ROLES,
@@ -278,9 +278,11 @@ class ProductionRenderer:
         *,
         canvas: tuple[int, int] = (1080, 1920),
         local_preview: bool = False,
+        assert_owner: Callable[[], None] | None = None,
     ) -> None:
         self.config, self.canvas = config, canvas
         self.local_preview = local_preview
+        self.assert_owner = assert_owner
 
     def render(self, episode_key: str, *, visual_story: bool = False) -> dict[str, Any]:
         initial = load_inputs(
@@ -307,23 +309,17 @@ class ProductionRenderer:
         if moviepy_version != "2.2.1":
             raise ValueError("Production V1 requires moviepy==2.2.1")
         binaries = doctor()
-        database = Database(self.config.database_path)
-        leases = LeaseStore(database)
-        lease = leases.acquire(
-            f"production-render:{episode_key}", duration_seconds=ENCODE_TIMEOUT + 600
-        )
-        try:
-            inputs = load_inputs(self.config, episode_key, local_preview=self.local_preview)
-            return self._render(inputs, binaries, leases, lease, environment_selection)
-        finally:
-            leases.release(lease)
+        if self.assert_owner is None:
+            raise ValueError("Rendering requires orchestrator execution ownership")
+        self.assert_owner()
+        inputs = load_inputs(self.config, episode_key, local_preview=self.local_preview)
+        return self._render(inputs, binaries, self.assert_owner, environment_selection)
 
     def _render(
         self,
         inputs: RenderInputs,
         binaries: dict[str, str],
-        leases: LeaseStore,
-        lease: Lease,
+        assert_owner: Callable[[], None],
         environment_selection: tuple[Any, str] | None = None,
     ) -> dict[str, Any]:
         storyboard = inputs.storyboard
@@ -403,7 +399,7 @@ class ProductionRenderer:
                 prop_style_version = LESSON_OBJECT_STYLE_VERSION
 
             def ensure(kind: str, slot: str, path: Path, deps: tuple[str, ...]) -> ArtifactRecord:
-                leases.assert_owner(lease)
+                assert_owner()
                 if environment_selection is not None:
                     slot += "_v4"
                 digest = sha256(path.read_bytes()).hexdigest()
@@ -427,7 +423,8 @@ class ProductionRenderer:
                         ),
                         dependencies=[InputDependency(d, "render_input") for d in deps],
                     )
-                self._approve_select(store, record)
+                if kind not in {"final_render", "media_qa"}:
+                    self._approve_select(store, record)
                 return record
 
             sid = inputs.storyboard_record.identity.artifact_id
@@ -871,7 +868,7 @@ class ProductionRenderer:
                 # Nothing authoritative is registered until full probe/decode QA succeeds.
                 ready = stage / "ready.mp4"
                 os.replace(partial, ready)
-                leases.assert_owner(lease)
+                assert_owner()
                 load_inputs(
                     self.config,
                     inputs.store.database.get_episode(owner).external_key,
@@ -888,7 +885,6 @@ class ProductionRenderer:
                 )
                 if not qa["passed"]:
                     raise ValueError("previous final render no longer passes media QA")
-                self._approve_select(store, final)
             qa.update(
                 {
                     "render_artifact_id": final.identity.artifact_id,
@@ -978,7 +974,8 @@ class ProductionRenderer:
                 "media_qa_id": qa_record.identity.artifact_id,
                 "mp4_sha256": final.sha256,
                 "byte_count": final.byte_count,
-                "output_path": str(export),
+                "output_path": str(store.path_for(final.identity.artifact_id)),
+                "export_path": str(export),
                 "frames_path": str(frames),
                 "scene_count": len(scene_refs),
                 "artifact_actions": actions,

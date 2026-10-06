@@ -3,17 +3,20 @@
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from test_web_youtube_v1 import artifact, rights
 
+from tovitunes.errors import ChannelMismatch, UploadAmbiguous
+from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.rights import closeout_rights, reviewed_graph_template
 from tovitunes.publication.rights_policy import evaluate_inherited_rights
 from tovitunes.publication.service import PublicationService
 from tovitunes.web.app import create_app
-from tovitunes.youtube.client import ChannelMismatch, UploadAmbiguous, YouTubeClient
+from tovitunes.youtube.client import YouTubeClient
 
 pytest_plugins = ("test_web_youtube_v1",)
 
@@ -93,16 +96,22 @@ class FakeClient:
 def test_public_requires_private_upload_and_rights(ready):
     (config, _, _, store), render, _, _ = ready
     with pytest.raises(ValueError, match="preflight"):
-        PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
+        PublicationService(
+            config, client_factory=FakeClient, ownership=SimpleNamespace(assert_owned=lambda: None)
+        ).publish_public("colors-red")
     clear_graph(ready)
     with pytest.raises(ValueError, match="No successful private"):
-        PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
+        PublicationService(
+            config, client_factory=FakeClient, ownership=SimpleNamespace(assert_owned=lambda: None)
+        ).publish_public("colors-red")
     record_upload(ready)
     audio = store.selected("episode", render.identity.owner_id, "audio_master", "main")
     assert audio is not None
     rights(store, audio, "review_required")
     with pytest.raises(ValueError, match="preflight"):
-        PublicationService(config, client_factory=FakeClient).publish_public("colors-red")
+        PublicationService(
+            config, client_factory=FakeClient, ownership=SimpleNamespace(assert_owned=lambda: None)
+        ).publish_public("colors-red")
 
 
 def test_operator_metadata_uses_new_fingerprint_without_external_rights_root(ready):
@@ -149,7 +158,9 @@ def test_operator_metadata_uses_new_fingerprint_without_external_rights_root(rea
         )
     record_upload(ready)
     client = FakeClient()
-    result = PublicationService(config, client_factory=lambda: client).publish_public("colors-red")
+    result = PublicationService(
+        config, client_factory=lambda: client, ownership=SimpleNamespace(assert_owned=lambda: None)
+    ).publish_public("colors-red")
     assert result["youtube_video_id"] == "video-123" and client.calls == 1
     assert (
         store.selected("episode", episode.episode_id, "publication_metadata", "main") == replacement
@@ -268,7 +279,9 @@ def test_public_promotion_same_video_and_idempotent(ready):
     clear_graph(ready)
     record_upload(ready)
     client = FakeClient()
-    service = PublicationService(config, client_factory=lambda: client)
+    service = PublicationService(
+        config, client_factory=lambda: client, ownership=SimpleNamespace(assert_owned=lambda: None)
+    )
     first = service.publish_public("colors-red")
     second = service.publish_public("colors-red")
     assert first["event_id"] == second["event_id"]
@@ -309,7 +322,11 @@ def test_public_promotion_fails_closed(ready, drift):
     else:
         client.remote["self_declared_made_for_kids"] = False
     with pytest.raises((ValueError, ChannelMismatch)):
-        PublicationService(config, client_factory=lambda: client).publish_public("colors-red")
+        PublicationService(
+            config,
+            client_factory=lambda: client,
+            ownership=SimpleNamespace(assert_owned=lambda: None),
+        ).publish_public("colors-red")
     assert client.calls == 0
 
 
@@ -319,7 +336,9 @@ def test_uncertain_public_update_is_durable_and_never_retried(ready):
     record_upload(ready)
     client = FakeClient()
     client.raise_update = True
-    service = PublicationService(config, client_factory=lambda: client)
+    service = PublicationService(
+        config, client_factory=lambda: client, ownership=SimpleNamespace(assert_owned=lambda: None)
+    )
     with pytest.raises(UploadAmbiguous):
         service.publish_public("colors-red")
     with pytest.raises(ValueError, match="uncertain"):
@@ -518,7 +537,7 @@ def test_web_public_endpoint_and_studio_authorization(ready):
             client.post(
                 "/api/episodes/colors-red/youtube/publish", json={"video_id": "arbitrary"}
             ).status_code
-            == 409
+            == 422
         )
     root = Path(__file__).resolve().parents[1] / "src/tovitunes/web/static"
     script = (root / "app.js").read_text(encoding="utf-8")
@@ -531,16 +550,16 @@ def test_web_public_endpoint_and_studio_authorization(ready):
     assert "/youtube/publish" not in script
 
 
-
-def test_web_metadata_action_uses_existing_writer(ready, monkeypatch):
+def test_web_metadata_action_uses_orchestrator(ready, monkeypatch):
     (config, _, _, _), _, _, _ = ready
     calls = []
 
-    def generate(writer, episode_key):
-        calls.append((type(writer).__name__, episode_key))
-        return {"publication_metadata_artifact_id": "existing"}
+    def build(*args, **kwargs):
+        return SimpleNamespace(
+            resume=lambda key, target: calls.append((key, target)) or {"status": "COMPLETE"}
+        )
 
-    monkeypatch.setattr("tovitunes.creative.metadata.MetadataWriter.generate", generate)
+    monkeypatch.setattr("tovitunes.web.app.build_orchestrator", build)
     with TestClient(create_app(config), base_url="http://127.0.0.1:8765") as client:
         response = client.post("/api/episodes/colors-red/publication-metadata")
         assert response.status_code == 202
@@ -550,4 +569,4 @@ def test_web_metadata_action_uses_existing_writer(ready, monkeypatch):
                 break
             time.sleep(0.01)
         assert job["status"] == "succeeded"
-    assert calls == [("MetadataWriter", "colors-red")]
+    assert calls == [("colors-red", ProductionTarget.RENDER)]

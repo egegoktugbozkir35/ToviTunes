@@ -11,14 +11,14 @@ from pydantic import BaseModel, ConfigDict
 
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.config import RuntimeConfig
+from tovitunes.continuation import plan_continuation
 from tovitunes.creative.learning import LearningBrief
-from tovitunes.creative.provider import FailureCategory
-from tovitunes.creative.workflow import episode_by_key
+from tovitunes.creative.service import episode_by_key
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
-from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
+from tovitunes.errors import FailureCategory
+from tovitunes.orchestrator import Orchestrator
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.music_adapter import creative_music_spec
-from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
@@ -47,9 +47,9 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         key = row["external_key"]
-        plan = ShortProductionWorkflow(config).plan(key)
+        plan = plan_continuation(config, key)
         stages = {s["name"]: s for s in plan["stages"]}
-        draft_ready = stages["CREATIVE"]["status"] == "COMPLETE"
+        draft_ready = plan["draft_ready"]
         title = str(row["concept_id"]).replace("_", " ").title()
         draft: dict[str, Any] | None = None
         if draft_ready:
@@ -75,45 +75,20 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                     if saved_brief:
                         title = LearningBrief.model_validate_json(saved_brief[0]).working_title
             except (KeyError, ValueError, OSError):
-                draft_ready = False
+                draft = None
         release = evaluate_release(config, key)
-        render_ready = stages["RENDER"]["status"] == stages["MEDIA_QA"]["status"] == "COMPLETE"
-        if render_ready:
-            try:
-                qa_ids = stages["MEDIA_QA"]["evidence"]["artifact_ids"]
-                qa = store.read_json(qa_ids[0])
-                render_ready = (
-                    isinstance(qa, dict)
-                    and qa.get("passed") is True
-                    and qa.get("render_artifact_id") == release.render_artifact_id
-                    and qa.get("render_sha256") == release.render_sha256
-                )
-            except (KeyError, ValueError, OSError):
-                render_ready = False
+        render_ready = plan["render_ready"]
         history = PublicationService(config).history(row["episode_id"])
-        successful = next((p for p in history if p["outcome"] == "succeeded"), None)
-        uncertain = any(
-            p["outcome"] in {"ambiguous", "remote_started"}
-            or (p.get("public_promotion") or {}).get("outcome") in {"ambiguous", "remote_started"}
-            for p in history
-        )
-        channel_mismatch = bool(
-            successful
-            and successful.get("expected_channel_id")
-            and successful["expected_channel_id"] != config.expected_youtube_channel_id
-        )
-        at_target = not channel_mismatch and bool(
-            successful
-            and (
-                config.automation.publish_visibility == "private"
-                or successful.get("privacy_status") == "public"
-            )
-        )
-        # Historical successful uploads remain protected even with incomplete old artifacts.
+        successful = next((p for p in history if p.get("youtube_video_id")), None)
+        at_target = plan["target_complete"]
         category = (
             "published"
-            if at_target or (successful and plan.get("historical"))
-            else ("renders" if render_ready else "drafts" if draft_ready else "attention")
+            if at_target
+            else "renders"
+            if render_ready
+            else "drafts"
+            if draft_ready
+            else "attention"
         )
         publication = (
             {
@@ -127,7 +102,7 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 )
             }
             if successful
-            else {"outcome": "ambiguous" if uncertain else "not_published"}
+            else {"outcome": "ambiguous" if plan["status"] == "AMBIGUOUS" else "not_published"}
         )
         preview_url = None
         with closing(database.connect()) as db:
@@ -158,19 +133,20 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 "video_url": f"/api/media/{release.render_artifact_id}" if render_ready else None,
                 "preview_url": preview_url,
                 "draft": draft,
-                "blocker": "The retained upload belongs to another configured channel."
-                if channel_mismatch
-                else "YouTube outcome is uncertain. Reconciliation is required."
-                if uncertain
-                else "Creative draft is incomplete. Resume its task."
-                if not draft_ready and not render_ready and not successful
+                "blocker": plan.get("blocker")
+                if isinstance(plan.get("blocker"), str)
+                else "Review or release checks require attention."
+                if plan.get("blocker")
                 else None,
-                "can_render": draft_ready and not render_ready and not successful,
-                "can_publish": render_ready
+                "can_render": plan_continuation(config, key, target=ProductionTarget.RENDER)[
+                    "allowed"
+                ]
+                and not render_ready
+                and not plan.get("historical"),
+                "can_publish": plan["allowed"]
+                and render_ready
                 and not at_target
-                and not uncertain
-                and not channel_mismatch
-                and not plan.get("historical", False),
+                and not plan.get("historical"),
             }
         )
     return result
@@ -216,8 +192,6 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
                 "without creating a new song."
             )
             if safe["blocker"].get("recovery_action") == "resume_music_task"
-            else "The Creative Director's result could not be recovered."
-            if safe["blocker"].get("recovery_action") == "abandon_remote_result"
             else "YouTube outcome is uncertain. Reconciliation is required before continuing."
             if result.get("status") == "AMBIGUOUS" and result.get("current_stage") == "YOUTUBE"
             else "This provider result is uncertain. Automatic retry is disabled."
@@ -246,44 +220,19 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
 def studio_router(
     config: RuntimeConfig,
     jobs: JobManager,
-    workflow: Callable[[], ShortProductionWorkflow],
+    workflow: Callable[[], Orchestrator],
     checked_key: Callable[[str], str],
 ) -> APIRouter:
     router = APIRouter(prefix="/api/studio")
 
     def submit(
-        target: ProductionTarget,
-        key: str | None,
-        reconcile: str | None = None,
-        resume_job_id: str | None = None,
-        resume_music_task: bool = False,
+        target: ProductionTarget, key: str | None, resume_job_id: str | None = None
     ) -> dict[str, Any]:
         def runner() -> dict[str, Any]:
-            if reconcile:
-                CreativeReconciliations(Database(config.database_path)).abandon(
-                    reconcile,
-                    actor="human:webui-operator",
-                    rationale="Remote result is inaccessible; continue through the configured "
-                    "fallback chain for the same Studio task and target.",
-                )
             flow = workflow()
-            result = (
-                flow.produce(
-                    key,
-                    target=target,
-                    confirmed=True,
-                    operator_publish=target == ProductionTarget.PUBLISH,
-                    resume_music_task=resume_music_task,
-                )
-                if key
-                else flow.produce_next(
-                    target=target,
-                    confirmed=True,
-                    operator_publish=target == ProductionTarget.PUBLISH,
-                    resume_music_task=resume_music_task,
-                )
+            return safe_production_result(
+                flow.resume(key, target) if key else flow.generate(target)
             )
-            return safe_production_result(result)
 
         try:
             return jobs.submit(
@@ -315,24 +264,15 @@ def studio_router(
             job = jobs.get(job_id)
         except KeyError as exc:
             raise HTTPException(404, "Task unavailable") from exc
-        if job.operation != "studio" or not job.target or not job.recovery_action or job.stopped:
-            raise HTTPException(409, "No safe recovery is available for this task")
-        if job.status in {"queued", "running", "complete", "succeeded"}:
-            raise HTTPException(409, "Task cannot be recovered in its current state")
-        request_id = (
-            (job.blocker or {}).get("request_id")
-            if (job.recovery_action == "abandon_remote_result")
-            else None
-        )
-        if job.recovery_action == "abandon_remote_result" and not request_id:
-            raise HTTPException(409, "Recovery evidence is unavailable")
-        return submit(
-            job.target,
-            job.episode_key,
-            request_id,
-            job.job_id,
-            resume_music_task=job.recovery_action == "resume_music_task",
-        )
+        if (
+            job.operation != "studio"
+            or not job.target
+            or job.stopped
+            or job.status in {"queued", "running"}
+        ):
+            raise HTTPException(409, "Task cannot be resumed")
+        # The worker recomputes durable continuation inside resume/generate under the lease.
+        return submit(job.target, job.episode_key, job.job_id)
 
     @router.post("/jobs/{job_id}/stop")
     def stop(job_id: str) -> dict[str, Any]:

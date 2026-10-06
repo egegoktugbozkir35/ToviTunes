@@ -133,7 +133,7 @@ class VertexLyriaProvider:
         timeline.validate(spec)
         return "\n".join(
             [
-                "Create one original English preschool pop song for ages 3–6.",
+                "Create one original English preschool pop song for ages 3Ã¢â‚¬â€œ6.",
                 f"Target total duration: approximately {timeline.track_end} seconds.",
                 "Educational objective: Red is a color; a red apple and a red ball are examples.",
                 "Bright, warm, catchy, simple and bouncy. Light percussion, gentle bass, "
@@ -383,9 +383,7 @@ class VertexLyriaProvider:
             reason = f"Vertex rejected request (HTTP {code})"
             if detail is not None:
                 reason += f": {detail}"
-            raise MusicFailure(
-                reason, "terminal_failure", interaction_id
-            )
+            raise MusicFailure(reason, "terminal_failure", interaction_id)
         if not 200 <= code < 300:
             raise MusicFailure(
                 "unexpected Vertex interaction HTTP status", "ambiguous", interaction_id

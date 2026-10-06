@@ -5,13 +5,8 @@ from collections.abc import Callable, Sequence
 import httpx
 
 from tovitunes.config import OllamaCreativeConfig
-from tovitunes.creative.provider import (
-    ChatResponse,
-    FailureCategory,
-    Message,
-    ProviderError,
-    http_failure,
-)
+from tovitunes.creative.provider import ChatResponse, Message, http_failure
+from tovitunes.errors import FailureCategory, ProviderError
 
 
 class OllamaClient:

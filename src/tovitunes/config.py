@@ -9,11 +9,15 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class OllamaCreativeConfig(BaseModel):
+class StrictConfigModel(BaseModel):
+    """Donor strict configuration contract, resolved once at application composition."""
+
     model_config = ConfigDict(
         extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
     )
 
+
+class OllamaCreativeConfig(StrictConfigModel):
     base_url: str = "http://127.0.0.1:11434"
     model: str = Field(default="qwen3.8:27b-q4_K_M", pattern=r"^\S+$")
     timeout_seconds: float = Field(default=240, gt=0)
@@ -37,8 +41,7 @@ class OllamaCreativeConfig(BaseModel):
         return value
 
 
-class TopicEmbeddingConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+class TopicEmbeddingConfig(StrictConfigModel):
     enabled: bool = False
     provider: Literal["ollama"] = "ollama"
     model: str | None = Field(default=None, pattern=r"^\S+$")
@@ -57,10 +60,7 @@ class TopicEmbeddingConfig(BaseModel):
         return self
 
 
-class CreativeTopicsConfig(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
-    )
+class CreativeTopicsConfig(StrictConfigModel):
     candidate_batch_size: int = Field(default=15, ge=1, le=30)
     recent_history_count: int = Field(default=100, ge=1, le=500)
     max_generation_rounds: int = Field(default=3, ge=1, le=10)
@@ -71,12 +71,8 @@ class CreativeTopicsConfig(BaseModel):
     embedding: TopicEmbeddingConfig = Field(default_factory=TopicEmbeddingConfig)
 
 
-class CreativeLLMConfig(BaseModel):
+class CreativeLLMConfig(StrictConfigModel):
     """Explicit NIM configuration; credentials are read only from the named environment."""
-
-    model_config = ConfigDict(
-        extra="forbid", frozen=True, allow_inf_nan=False, hide_input_in_errors=True
-    )
 
     provider: Literal["nvidia"] = "nvidia"
     model: str = Field(default="moonshotai/kimi-k3", pattern=r"^[\w.-]+/[\w.-]+$")
@@ -131,10 +127,8 @@ class CreativeLLMConfig(BaseModel):
         return value
 
 
-class EnvironmentGenerationConfig(BaseModel):
+class EnvironmentGenerationConfig(StrictConfigModel):
     """Approved production image-model choices for reviewed environment sets."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     provider: Literal["google", "qwen_comfyui"] = "qwen_comfyui"
     model: str = "qwen-image-2.1-q8"
@@ -194,10 +188,8 @@ def _local_http_url(value: str) -> bool:
     )
 
 
-class LessonObjectGenerationConfig(BaseModel):
+class LessonObjectGenerationConfig(StrictConfigModel):
     """Provider settings for reviewed lesson objects only."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     provider: Literal["google", "qwen_comfyui"] = "qwen_comfyui"
     model: str = "qwen-image-2.1-q8"
@@ -245,10 +237,8 @@ class LessonObjectGenerationConfig(BaseModel):
         return self
 
 
-class MusicGenerationConfig(BaseModel):
+class MusicGenerationConfig(StrictConfigModel):
     """External local ACE-Step service; Vertex remains available to older requests."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     provider: Literal["ace_step_local", "google"] = "ace_step_local"
     base_url: str = "http://127.0.0.1:8001"
@@ -282,10 +272,8 @@ class MusicGenerationConfig(BaseModel):
         return self
 
 
-class YouTubeConfig(BaseModel):
+class YouTubeConfig(StrictConfigModel):
     """Local OAuth files and immutable upload policy."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
 
     enabled: bool = False
     credentials_file: Path = Path("secrets/client_secret.json")
@@ -303,14 +291,11 @@ class YouTubeConfig(BaseModel):
         return value
 
 
-class PublicationConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
+class PublicationConfig(StrictConfigModel):
     youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
 
 
-class ProductionAutomationConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class ProductionAutomationConfig(StrictConfigModel):
     auto_publish: bool = False
     publish_visibility: Literal["private", "public"] = "private"
     require_human_review: bool = True
@@ -320,10 +305,9 @@ class ProductionAutomationConfig(BaseModel):
     analysis_version: int = Field(default=1, gt=0)
 
 
-class LocalServiceLaunchConfig(BaseModel):
+class LocalServiceLaunchConfig(StrictConfigModel):
     """Executable argument arrays only; never shell command strings or credentials."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
     command: tuple[str, ...] = Field(default=(), max_length=40)
     cwd: Path | None = None
     startup_timeout_seconds: float = Field(default=120, gt=0, le=600)
@@ -352,17 +336,14 @@ class LocalServiceLaunchConfig(BaseModel):
         return values
 
 
-class LocalServicesConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class LocalServicesConfig(StrictConfigModel):
     ace_step: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
     comfyui: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
     ollama: LocalServiceLaunchConfig = Field(default_factory=LocalServiceLaunchConfig)
     auto_discover: bool = True
 
 
-class RuntimeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
+class RuntimeConfig(StrictConfigModel):
     schema_version: int = Field(default=1, ge=1, le=1)
     database_path: Path
     data_root: Path

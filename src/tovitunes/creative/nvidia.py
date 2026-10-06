@@ -8,13 +8,8 @@ from typing import Any
 import httpx
 
 from tovitunes.config import CreativeLLMConfig
-from tovitunes.creative.provider import (
-    ChatResponse,
-    FailureCategory,
-    Message,
-    ProviderError,
-    http_failure,
-)
+from tovitunes.creative.provider import ChatResponse, Message, http_failure
+from tovitunes.errors import FailureCategory, ProviderError
 
 
 class NvidiaNIMClient:

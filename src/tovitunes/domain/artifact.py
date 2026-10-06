@@ -66,8 +66,8 @@ class Provenance(BaseModel):
 
     @model_validator(mode="after")
     def source_identity(self) -> "Provenance":
-        provider_complete = self.provider and self.model and (
-            self.request_id or self.local_request_id
+        provider_complete = (
+            self.provider and self.model and (self.request_id or self.local_request_id)
         )
         if self.source_kind == "provider" and not provider_complete:
             raise ValueError("provider provenance requires provider, model, and request ID")

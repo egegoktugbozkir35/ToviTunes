@@ -13,28 +13,13 @@ from typing import Any
 
 from tovitunes.config import YouTubeConfig
 from tovitunes.creative.models import EpisodePublicationMetadata
+from tovitunes.errors import ChannelMismatch, UploadAmbiguous, UploadRejected, YouTubeError
 
 SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 READ_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
 UPDATE_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 SCOPES = (SCOPE, READ_SCOPE, UPDATE_SCOPE)
 RETRYABLE = {429, 500, 502, 503, 504}
-
-
-class YouTubeError(RuntimeError):
-    """Safe operator-facing YouTube failure."""
-
-
-class UploadAmbiguous(YouTubeError):
-    """The remote attempt began and its final outcome is unknown."""
-
-
-class UploadRejected(YouTubeError):
-    """Google explicitly rejected the request without creating a video."""
-
-
-class ChannelMismatch(YouTubeError):
-    """OAuth selected a channel other than the pinned channel."""
 
 
 class YouTubeClient:

@@ -268,17 +268,17 @@ def test_environment_plan_and_fingerprint_pin_model_size_and_references(runtime)
     assert pro_2k["role_count"] == 4
     assert pro_2k["provider_calls"] == 0 and pro_2k["live_calls"] == 0
     assert pro_2k["requests"][0]["reference_assets"] == []
-    assert all(
-        request["reference_assets"] == ["meadow_wide"]
-        for request in pro_2k["requests"][1:]
+    assert all(request["reference_assets"] == ["meadow_wide"] for request in pro_2k["requests"][1:])
+    assert (
+        len(
+            {
+                flash["generation_fingerprint"],
+                pro_1k["generation_fingerprint"],
+                pro_2k["generation_fingerprint"],
+            }
+        )
+        == 3
     )
-    assert len(
-        {
-            flash["generation_fingerprint"],
-            pro_1k["generation_fingerprint"],
-            pro_2k["generation_fingerprint"],
-        }
-    ) == 3
 
 
 def test_pro_2k_set_is_immutable_and_comparable_with_flash(runtime, tmp_path):
@@ -606,10 +606,13 @@ def test_performance_and_outro_form_a_staged_sequence():
     assert activity_diagnostics(performed_motion)["max_simultaneous_major_motion"] <= 3
     assert [
         track.events[0].origin[0] for track in performed_motion.prop_tracks[1:]
-    ] == pytest.approx([
-        0.115,
-        0.885,
-    ], abs=1 / 1080)
+    ] == pytest.approx(
+        [
+            0.115,
+            0.885,
+        ],
+        abs=1 / 1080,
+    )
     for motion_plan in (compared_motion, performed_motion):
         for frame in range(31):
             t = frame / 10

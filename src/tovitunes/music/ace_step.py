@@ -99,7 +99,8 @@ class AceStepLocalProvider:
                 "Avoid: " + "; ".join(brief.avoid),
                 "Sing only the supplied lyrics in the supplied line order, each line once. "
                 "Add no extra sung words, lyrical ad-libs, or repeated chorus unless explicitly "
-                "written. Clear English preschool diction for ages 3–6. Keep the music simple "
+                "written. Clear English preschool diction for ages 3Ã¢â‚¬â€œ6. "
+                "Keep the music simple "
                 "and suitable for children. No named artist or song imitation.",
             )
         )

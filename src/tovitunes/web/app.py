@@ -3,38 +3,43 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from importlib import resources
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.config import RuntimeConfig
+from tovitunes.continuation import plan_continuation
+from tovitunes.errors import ChannelMismatch, YouTubeError
+from tovitunes.orchestrator import Orchestrator, build_orchestrator
 from tovitunes.persistence.db import Database
-from tovitunes.pipeline.short_production import ShortProductionWorkflow
+from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
-from tovitunes.publication.service import PublicationService
-from tovitunes.render.production import ProductionRenderer
 from tovitunes.web.diagnostics import studio_job
 from tovitunes.web.jobs import JobBusy, JobManager, safe_error
 from tovitunes.web.services import (
     episode_detail,
     episodes,
-    generate_publication_metadata,
     system_status,
 )
 from tovitunes.web.studio import studio_router
 from tovitunes.web.supervisor import LocalServiceSupervisor
-from tovitunes.youtube.client import ChannelMismatch, YouTubeClient, YouTubeError
+from tovitunes.youtube.client import YouTubeClient
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
 _ARTIFACT = re.compile(r"^[0-9a-fA-F-]{36}$")
 _MEDIA_MIME = {"video/mp4", "image/png", "image/jpeg", "image/webp", "audio/mpeg"}
+
+
+class PublicationAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 def create_app(
@@ -50,7 +55,18 @@ def create_app(
     app.state.jobs = jobs
     app.state.config = config
     static = resources.files("tovitunes.web").joinpath("static")
-    app.mount("/static", StaticFiles(directory=str(static)), name="static")
+    assets = {name: static.joinpath(name).read_bytes() for name in ("styles.css", "app.js")}
+    version = sha256(b"".join(assets.values())).hexdigest()[:16]
+
+    @app.get("/static/{asset_version}/{name}")
+    def static_asset(asset_version: str, name: str) -> Response:
+        if asset_version != version or name not in assets:
+            raise HTTPException(404, "Asset version unavailable; reload the page")
+        return Response(
+            assets[name],
+            media_type="text/css" if name.endswith(".css") else "application/javascript",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.middleware("http")
     async def local_write_guard(request: Request, call_next: Any) -> Response:
@@ -94,8 +110,11 @@ def create_app(
             raise HTTPException(409, str(exc)) from exc
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return static.joinpath("index.html").read_text(encoding="utf-8")
+    def index() -> HTMLResponse:
+        html = static.joinpath("index.html").read_text(encoding="utf-8")
+        for name in assets:
+            html = html.replace("/static/" + name, f"/static/{version}/{name}")
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -180,21 +199,23 @@ def create_app(
     def job_list() -> list[dict[str, Any]]:
         return [studio_job(config, job) for job in jobs.list()]
 
-    def production_workflow() -> ShortProductionWorkflow:
-        return ShortProductionWorkflow(config, progress=jobs.update_progress)
+    def production_workflow() -> Orchestrator:
+        return build_orchestrator(config, progress_reporter=jobs.update_progress)
 
     app.include_router(studio_router(config, jobs, production_workflow, checked_key))
 
     @app.get("/api/production/plan")
     def production_plan(episode_key: str | None = None) -> dict[str, Any]:
-        return production_workflow().plan(checked_key(episode_key) if episode_key else None)
+        return plan_continuation(config, checked_key(episode_key) if episode_key else None)
 
     @app.post("/api/production/generate-next-short")
     def generate_next_short(confirm_provider_generation: bool = False) -> dict[str, Any]:
         if not confirm_provider_generation:
-            return production_workflow().plan()
+            return plan_continuation(config)
         return submit(
-            "short_production", None, lambda: production_workflow().produce_next(confirmed=True)
+            "short_production",
+            None,
+            lambda: production_workflow().generate(ProductionTarget.PUBLISH),
         )
 
     @app.post("/api/episodes/{episode_key}/produce")
@@ -203,9 +224,11 @@ def create_app(
     ) -> dict[str, Any]:
         key = checked_key(episode_key)
         if not confirm_provider_generation:
-            return production_workflow().plan(key)
+            return plan_continuation(config, key)
         return submit(
-            "short_production", key, lambda: production_workflow().produce(key, confirmed=True)
+            "short_production",
+            key,
+            lambda: production_workflow().resume(key, ProductionTarget.PUBLISH),
         )
 
     @app.get("/api/jobs/{job_id}")
@@ -223,7 +246,7 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(404, "Episode unavailable") from exc
         return submit(
-            "render", key, lambda: ProductionRenderer(config).render(key, visual_story=True)
+            "render", key, lambda: production_workflow().resume(key, ProductionTarget.RENDER)
         )
 
     @app.get("/api/episodes/{episode_key}/release-preflight")
@@ -243,7 +266,7 @@ def create_app(
         return submit(
             "publication_metadata",
             key,
-            lambda: generate_publication_metadata(config, key),
+            lambda: production_workflow().resume(key, ProductionTarget.RENDER),
         )
 
     @app.get("/api/youtube/status")
@@ -288,14 +311,10 @@ def create_app(
     @app.post("/api/episodes/{episode_key}/youtube/upload-private", status_code=202)
     def upload_private(episode_key: str) -> dict[str, Any]:
         key = checked_key(episode_key)
-        try:
-            ready = evaluate_release(config, key)
-        except KeyError as exc:
-            raise HTTPException(404, "Episode unavailable") from exc
-        if not ready.private_test_upload_allowed:
-            raise HTTPException(409, "Private test upload blocked; inspect preflight")
         return submit(
-            "youtube_private_test", key, lambda: PublicationService(config).upload_private(key)
+            "youtube_private_test",
+            key,
+            lambda: production_workflow().resume(key, ProductionTarget.PUBLISH),
         )
 
     @app.get("/api/episodes/{episode_key}/youtube/video-status")
@@ -303,7 +322,7 @@ def create_app(
         key = checked_key(episode_key)
         detail = episode_detail(config, key)
         publication = detail["publication"]
-        if not publication or publication["outcome"] != "succeeded":
+        if not publication or not str(publication.get("youtube_video_id") or "").strip():
             raise HTTPException(404, "No successful YouTube upload")
         if not config.expected_youtube_channel_id:
             raise HTTPException(409, "Expected YouTube channel ID missing")
@@ -311,15 +330,16 @@ def create_app(
         client.assert_channel(config.expected_youtube_channel_id)
         return client.video_status(str(publication["youtube_video_id"]))
 
-    @app.post("/api/episodes/{episode_key}/youtube/publish")
-    def publish_public(episode_key: str) -> dict[str, Any]:
+    @app.post("/api/episodes/{episode_key}/youtube/publish", status_code=202)
+    def publish_public(
+        episode_key: str, action: PublicationAction | None = Body(default=None)
+    ) -> dict[str, Any]:
         key = checked_key(episode_key)
-        try:
-            return PublicationService(config).publish_public(key)
-        except KeyError as exc:
-            raise HTTPException(404, "Episode unavailable") from exc
-        except (ValueError, YouTubeError) as exc:
-            raise HTTPException(409, str(exc)) from exc
+        return submit(
+            "youtube_publish",
+            key,
+            lambda: production_workflow().resume(key, ProductionTarget.PUBLISH),
+        )
 
     @app.get("/api/media/{artifact_id}")
     def media(artifact_id: str) -> FileResponse:

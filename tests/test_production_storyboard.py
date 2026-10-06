@@ -33,7 +33,6 @@ from tovitunes.music.audio import inspect_audio
 from tovitunes.music.models import CanonicalMusicSpec, load_brief, load_lyrics
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline import production
-from tovitunes.pipeline.planner import load_snapshot, plan
 from tovitunes.pipeline.production import (
     ProductionHandoff,
     canonical_bytes,
@@ -352,13 +351,6 @@ def test_handoff_reuses_all_artifacts_and_preserves_history(factory) -> None:
     assert snapshot(config.database_path) == snapshot_after
     assert snapshot(config.database_path, "music_") == before
     assert (config.data_root / "music-benchmark" / f"{REQUEST}.mp3").read_bytes() == original
-    snapshot_state = load_snapshot(store, result["episode_id"])
-    assert snapshot_state.scene_ids == board.scene_ids
-    assert snapshot_state.production_audio_handoff
-    assert not snapshot_state.storyboard_problem
-    assert plan(snapshot_state, "storyboard").action == "complete"
-    assert plan(snapshot_state, "render").requirement == "scene_image:intro"
-    assert snapshot_state.uncleared_rights
     with closing(store.database.connect()) as db:
         assert {
             r[0]

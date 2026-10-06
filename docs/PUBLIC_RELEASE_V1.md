@@ -1,6 +1,6 @@
 # Public release V1
 
-The local WebUI uses `MetadataWriter.generate()` through `CreativeWorkflow` for
+The local WebUI calls `Orchestrator.resume(..., RENDER)`, whose RenderService uses the metadata domain writer for
 `POST /api/episodes/{episode_key}/publication-metadata`. The writer reuses valid
 selected metadata with the same pinned inputs, preserves provider request
 provenance for new output, runs structural validation, records the existing

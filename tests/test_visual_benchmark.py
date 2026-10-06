@@ -272,7 +272,6 @@ def test_provider_translation_and_response_extraction(
     assert openai_transport.calls[0][2].count(b'name="image[]"') == 3
 
 
-
 def test_malformed_and_api_responses_map_to_failures(tmp_path: Path, catalog: BrandCatalog) -> None:
     data = png_bytes()
     paths = tuple(tmp_path / f"r-{index}.png" for index in range(3))
@@ -1027,12 +1026,19 @@ def vertex_response(
     *, image_count: int = 1, model: str = "gemini-3.1-flash-image"
 ) -> httpx.Response:
     part = {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(png_bytes()).decode()}}
-    return httpx.Response(200, json={
-        "responseId": "vertex-123",
-        "modelVersion": model,
-        "candidates": [{"content": {"role": "model", "parts": [part] * image_count}}],
-        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "totalTokenCount": 10},
-    })
+    return httpx.Response(
+        200,
+        json={
+            "responseId": "vertex-123",
+            "modelVersion": model,
+            "candidates": [{"content": {"role": "model", "parts": [part] * image_count}}],
+            "usageMetadata": {
+                "promptTokenCount": 7,
+                "candidatesTokenCount": 3,
+                "totalTokenCount": 10,
+            },
+        },
+    )
 
 
 def vertex_error_response(status: int, *, message: str = "provider failure") -> httpx.Response:
@@ -1088,8 +1094,14 @@ def test_vertex_dry_run_needs_no_credentials_or_network(
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     provider = GeminiImageProvider(credentials_loader=lambda: pytest.fail("ADC used in dry run"))
-    plan = plan_requests(load_benchmark(CASES), [provider], pack_path=PACK, lock_path=LOCK,
-                         case_ids={"red_apple"}, attempts=1)[0]
+    plan = plan_requests(
+        load_benchmark(CASES),
+        [provider],
+        pack_path=PACK,
+        lock_path=LOCK,
+        case_ids={"red_apple"},
+        attempts=1,
+    )[0]
     translated = plan.translated_request
     assert translated["body"]["backend"] == "Vertex AI"
     assert translated["body"]["location"] == "global"
@@ -1107,9 +1119,7 @@ def test_nano_banana_pro_2k_request_translation_and_contract(
     tmp_path: Path, catalog: BrandCatalog
 ) -> None:
     runner, state, spec = runner_fixture(tmp_path, catalog)
-    transport = VertexTestTransport(
-        vertex_response(model="gemini-3-pro-image"), state
-    )
+    transport = VertexTestTransport(vertex_response(model="gemini-3-pro-image"), state)
     provider = vertex_provider(
         transport, model="gemini-3-pro-image", location="global", image_size="2K"
     )
@@ -1243,8 +1253,9 @@ def test_vertex_invalid_location_fails_before_auth_or_generation(
 ) -> None:
     runner, state, spec = runner_fixture(tmp_path, catalog)
     transport = VertexTestTransport(vertex_response(), state)
-    provider = vertex_provider(transport, location="bad/location",
-                               credentials_loader=lambda: pytest.fail("ADC used"))
+    provider = vertex_provider(
+        transport, location="bad/location", credentials_loader=lambda: pytest.fail("ADC used")
+    )
     result = runner.run(make_plan(spec, provider), provider)
     assert result["status"] == "retryable_failure"
     assert state.receipt(result["request_id"]) is None
@@ -1303,7 +1314,9 @@ def test_vertex_adc_failure_then_same_attempt_repairs(
 
 @pytest.mark.parametrize("location", [None, "us"])
 def test_vertex_sdk_request_contract_and_metadata(
-    tmp_path: Path, catalog: BrandCatalog, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    catalog: BrandCatalog,
+    monkeypatch: pytest.MonkeyPatch,
     location: str | None,
 ) -> None:
     monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
@@ -1332,9 +1345,7 @@ def test_vertex_sdk_request_contract_and_metadata(
     parts = body["contents"][0]["parts"]
     assert parts[0]["text"] == spec.prompt()
     assert len(parts) == 4
-    assert [
-        base64.urlsafe_b64decode(part["inlineData"]["data"] + "==") for part in parts[1:]
-    ] == [
+    assert [base64.urlsafe_b64decode(part["inlineData"]["data"] + "==") for part in parts[1:]] == [
         runner.assets.path_for(ref.artifact_id).read_bytes() for ref in spec.references
     ]
     receipt = state.receipt(result["request_id"])
@@ -1391,8 +1402,10 @@ def test_vertex_reference_preflight_and_repair(
     ],
 )
 def test_vertex_remote_failures_preserve_boundary(
-    tmp_path: Path, catalog: BrandCatalog,
-    response: httpx.Response | Exception, expected: str,
+    tmp_path: Path,
+    catalog: BrandCatalog,
+    response: httpx.Response | Exception,
+    expected: str,
 ) -> None:
     runner, state, spec = runner_fixture(tmp_path, catalog)
     transport = VertexTestTransport(response, state)
@@ -1414,9 +1427,7 @@ def test_vertex_remote_failures_preserve_boundary(
         assert len(transport.calls) == 1
 
 
-def test_vertex_multiple_images_are_ambiguous(
-    tmp_path: Path, catalog: BrandCatalog
-) -> None:
+def test_vertex_multiple_images_are_ambiguous(tmp_path: Path, catalog: BrandCatalog) -> None:
     runner, state, spec = runner_fixture(tmp_path, catalog)
     transport = VertexTestTransport(vertex_response(image_count=2), state)
     provider = vertex_provider(transport)
@@ -1454,8 +1465,9 @@ def test_vertex_uses_header_request_id_when_response_id_is_absent(
     runner, state, spec = runner_fixture(tmp_path, catalog)
     payload = vertex_response().json()
     payload.pop("responseId")
-    transport = VertexTestTransport(httpx.Response(200, json=payload,
-                                                    headers={"x-request-id": "header-123"}), state)
+    transport = VertexTestTransport(
+        httpx.Response(200, json=payload, headers={"x-request-id": "header-123"}), state
+    )
     provider = vertex_provider(transport)
     result = runner.run(make_plan(spec, provider), provider)
     assert result["status"] == "succeeded"

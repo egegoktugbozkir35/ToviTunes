@@ -13,7 +13,7 @@ at `http://127.0.0.1:8188`. The graph pins `qwen_image_2.1_Q8_0.gguf`,
 `qwen3vl_8b_int8_convrot.safetensors`, and
 `qwen_image_2.1_vae_bf16.safetensors`. Install and run ComfyUI separately.
 Install ComfyUI and its model files once. The Studio launcher now reuses a healthy
-service or starts a discoverable/configured installation; see [Studio V1](STUDIO_V1.md).
+service or starts a discoverable/configured installation; see [the application architecture](MPT_ARCHITECTURE_MIGRATION.md).
 
 `environment_generation` defaults to 768 × 1376 source PNGs, which the existing
 environment pipeline validates and normalizes to 1080 × 1920. Qwen T2I has no

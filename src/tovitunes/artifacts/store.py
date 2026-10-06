@@ -693,6 +693,56 @@ class AssetStore:
             db.commit()
         self.select(artifact_id)
 
+    def admit_render_result(self, final_id: str, qa_id: str) -> None:
+        """Atomically select application-validated media and its QA receipt."""
+        if not self.local_preview:
+            raise ValueError("render admission requires a local-preview repository")
+        records = [self.get(final_id), self.get(qa_id)]
+        for record in records:
+            if not self.inspect(record.identity.artifact_id).valid:
+                raise ValueError("render result bytes changed before admission")
+        with closing(self.database.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                for record in records:
+                    aid = record.identity.artifact_id
+                    db.execute(
+                        "INSERT OR IGNORE INTO preview_admissions VALUES (?,?,?,?)",
+                        (aid, record.sha256, "technical_preview_v1", _now()),
+                    )
+                    self._eligible(db, aid, set())
+                    db.execute(
+                        "INSERT INTO artifact_selections VALUES (?,?,?,?,?,?) "
+                        "ON CONFLICT(owner_scope,owner_id,kind,slot_key) DO UPDATE SET "
+                        "artifact_id=excluded.artifact_id,selected_at=excluded.selected_at",
+                        (
+                            record.identity.owner_scope,
+                            record.identity.owner_id,
+                            record.identity.kind,
+                            record.identity.slot_key,
+                            aid,
+                            _now(),
+                        ),
+                    )
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+
+    def eligibility_batch(self, artifact_ids: list[str]) -> dict[str, tuple[bool, str | None]]:
+        """Validate a selected graph once per snapshot; no persistent eligibility cache."""
+        result: dict[str, tuple[bool, str | None]] = {}
+        validated: set[str] = set()
+        with closing(self.database.connect()) as connection:
+            connection.execute("BEGIN")
+            for artifact_id in artifact_ids:
+                try:
+                    self._eligible(connection, artifact_id, set(), validated)
+                    result[artifact_id] = (True, None)
+                except (KeyError, ValueError) as exc:
+                    result[artifact_id] = (False, str(exc))
+        return result
+
     def eligibility(self, artifact_id: str) -> tuple[bool, str | None]:
         """Read-only gate check for the planner; selection rechecks it under a write lock."""
         with closing(self.database.connect()) as connection:

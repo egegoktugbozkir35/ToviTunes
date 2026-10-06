@@ -1,4 +1,4 @@
-"""Provider-free handoff from immutable benchmark evidence to production assets."""
+"""Historical V1 evidence import and shared domain-evidence extraction."""
 
 import json
 import sqlite3

@@ -453,13 +453,49 @@ def rows_snapshot(path):
 
 def test_tiny_real_render_idempotency_and_manifest(render_fixture, monkeypatch):
     config, store, storyboard = render_fixture
-    renderer = ProductionRenderer(config, canvas=(270, 480))
+    renderer = ProductionRenderer(config, canvas=(270, 480), assert_owner=lambda: None)
     first = renderer.render("colors-red-001")
     assert first["media_qa"]["passed"]
     assert first["media_qa"]["dimensions"] == [270, 480]
     export = Path(first["output_path"])
     assert export.read_bytes() == store.path_for(first["final_render_id"]).read_bytes()
     assert export.read_bytes().find(b"moov") < export.read_bytes().find(b"mdat")
+    # The renderer registers bytes; the application accepts the trusted result.
+    assert (
+        store.selected(
+            "episode",
+            production.load_inputs(config, "colors-red-001").storyboard.episode_id,
+            "final_render",
+            "main",
+        )
+        is None
+    )
+    from tovitunes.execution import ProductionExecutionOwnership
+    from tovitunes.orchestrator import build_orchestrator
+    from tovitunes.services.context import StageContext
+
+    with ProductionExecutionOwnership(store.database, operation="resume") as owner:
+        context = StageContext(config, owner)
+        from tovitunes.errors import StateError
+
+        with pytest.raises(StateError, match="untrusted media path"):
+            build_orchestrator(config)._accept_render(
+                context,
+                "colors-red-001",
+                {**first, "output_path": str(config.database_path)},
+                owner,
+            )
+        assert (
+            context.store.selected(
+                "episode",
+                context.database.get_episode(storyboard.episode_id).episode_id,
+                "final_render",
+                "main",
+            )
+            is None
+        )
+        build_orchestrator(config)._accept_render(context, "colors-red-001", first, owner)
+    renderer.local_preview = True
     before = rows_snapshot(config.database_path)
     original_run = production.run_process
 
@@ -609,7 +645,7 @@ def test_selected_lesson_manifest_switches_renderer_to_reviewed_props(
         with Image.open(store.path_for(lesson.scene_image_artifact_id)) as scene_image:
             return json.loads(scene_image.info["tovitunes_composition"]), render_manifest
 
-    renderer = ProductionRenderer(config, canvas=(270, 480))
+    renderer = ProductionRenderer(config, canvas=(270, 480), assert_owner=lambda: None)
     assert (
         store.selected("brand", brand_id, "lesson_object_manifest", "lesson_object_assets_v2")
         is None
@@ -669,16 +705,34 @@ def test_tiny_v4_render_uses_reviewed_fixture_environment(render_fixture, monkey
         status="approved",
     )
     select_set(config, generated["manifest_artifact_id"])
-    renderer = ProductionRenderer(config, canvas=(270, 480))
+    renderer = ProductionRenderer(config, canvas=(270, 480), assert_owner=lambda: None)
     first = renderer.render("colors-red-001", visual_story=True)
     assert first["classification"] == "PILOT_V4_READY_FOR_VISUAL_STORY_REVIEW"
     assert first["media_qa"]["passed"] and provider.calls == 4
     assert first["environment_set_artifact_id"] == generated["manifest_artifact_id"]
-    assert "PILOT_V4" in first["output_path"]
+    assert "PILOT_V4" in first["export_path"]
     assert all(
         scene["dead_space_warning"] is None
         for scene in first["media_qa"]["visual_story_diagnostics"]
     )
+    # The renderer registers bytes; the application accepts the trusted result.
+    assert (
+        store.selected(
+            "episode",
+            production.load_inputs(config, "colors-red-001").storyboard.episode_id,
+            "final_render",
+            "main",
+        )
+        is None
+    )
+    from tovitunes.execution import ProductionExecutionOwnership
+    from tovitunes.orchestrator import build_orchestrator
+    from tovitunes.services.context import StageContext
+
+    with ProductionExecutionOwnership(store.database, operation="resume") as owner:
+        context = StageContext(config, owner)
+        build_orchestrator(config)._accept_render(context, "colors-red-001", first, owner)
+    renderer.local_preview = True
     before = rows_snapshot(config.database_path)
     original_run = production.run_process
 
@@ -700,7 +754,9 @@ def test_tiny_v4_render_uses_reviewed_fixture_environment(render_fixture, monkey
 def test_v4_render_requires_selected_environment(render_fixture):
     config, _, _ = render_fixture
     with pytest.raises(ValueError, match="no selected approved environment set"):
-        ProductionRenderer(config, canvas=(270, 480)).render("colors-red-001", visual_story=True)
+        ProductionRenderer(config, canvas=(270, 480), assert_owner=lambda: None).render(
+            "colors-red-001", visual_story=True
+        )
 
 
 @pytest.mark.parametrize("failure_stage", ["encode", "mux", "qa"])
@@ -720,7 +776,9 @@ def test_encode_failure_no_authoritative_render(render_fixture, monkeypatch, fai
             production, "media_qa", lambda *args: {"passed": False, "errors": ["failure"]}
         )
     with pytest.raises((RuntimeError, ValueError), match="fail"):
-        ProductionRenderer(config, canvas=(270, 480)).render("colors-red-001")
+        ProductionRenderer(config, canvas=(270, 480), assert_owner=lambda: None).render(
+            "colors-red-001"
+        )
     with closing(store.database.connect()) as db:
         assert (
             db.execute(
@@ -729,7 +787,15 @@ def test_encode_failure_no_authoritative_render(render_fixture, monkeypatch, fai
             == 0
         )
     assert not list((config.data_root / ".render-working").iterdir())
-    assert store.selected("episode", storyboard.episode_id, "final_render", "main") is None
+    assert (
+        store.selected(
+            "episode",
+            production.load_inputs(config, "colors-red-001").storyboard.episode_id,
+            "final_render",
+            "main",
+        )
+        is None
+    )
 
 
 def test_optional_dependency_diagnostic(render_fixture, monkeypatch):
@@ -741,7 +807,7 @@ def test_optional_dependency_diagnostic(render_fixture, monkeypatch):
     monkeypatch.setattr(production, "version", missing)
     before = rows_snapshot(config.database_path)
     with pytest.raises(ValueError, match="video-render extra"):
-        ProductionRenderer(config).render("colors-red-001")
+        ProductionRenderer(config, assert_owner=lambda: None).render("colors-red-001")
     assert rows_snapshot(config.database_path) == before
 
 
