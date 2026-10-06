@@ -1042,3 +1042,79 @@ def test_uncertain_or_failed_publication_never_uploads_again(ready, monkeypatch,
         ShortProductionWorkflow(enabled)._publication(episode)
     assert stopped.value.status == ("FAILED" if outcome == "terminal_failure" else "AMBIGUOUS")
     assert rows_snapshot(database.path) == before
+
+
+@pytest.mark.parametrize("entrypoint", ["existing_episode", "next_episode"])
+def test_creative_ambiguity_reports_safe_recovery_and_normal_production_resumes(case, entrypoint):
+    from test_creative_fallback import CHAIN, build, records, reply
+
+    from tovitunes.catalog import load_brand
+    from tovitunes.persistence.creative_reconciliation import CreativeReconciliations
+
+    flow, config, store = (case[k] for k in ("flow", "config", "store"))
+    database = store.database
+    historical = database.get_episode(case["red"].episode_id).model_dump_json()
+    calls = []
+
+    def interrupted(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(504, text="remote-body-with-secret-and-signed-URL")
+
+    flow.creative_provider = build(database, interrupted)
+    if entrypoint == "existing_episode":
+        episode = Episode.create(load_brand(config.brand_root), "green", "recovery-green")
+        database.create_episode(load_brand(config.brand_root), episode)
+
+        def invoke():
+            return flow.produce(episode.external_key, confirmed=True)
+    else:
+
+        def invoke():
+            return flow.produce_next(confirmed=True)
+
+    stopped = invoke()
+    assert stopped["status"] == "AMBIGUOUS" and stopped["current_stage"] == "CREATIVE"
+    evidence = stopped["blocker"]
+    target = records(database)[-1]
+    assert evidence["request_id"] == target["request_id"]
+    assert evidence["provider"] == "nvidia" and evidence["model"] == CHAIN[0]
+    assert evidence["kind"] == target["kind"]
+    assert evidence["recovery_action"] == "abandon_remote_result"
+    assert "creative reconcile --request-id" in evidence["recovery_command"]
+    assert "failed" not in evidence.get("reason", "").lower()
+    assert "remote-body-with-secret-and-signed-URL" not in json.dumps(stopped)
+    assert invoke()["status"] == "AMBIGUOUS" and calls == [CHAIN[0]]
+    CreativeReconciliations(database).abandon(
+        target["request_id"], actor="human:operator", rationale="No usable remote result."
+    )
+    fake = FakeNIMTransport()
+
+    def recovered(request):
+        payload = json.loads(request.content)
+        calls.append(payload["model"])
+        output = fake.chat(payload["messages"], record_identity=lambda _: None)
+        return reply(output.content, identity=f"recovered-{len(calls)}")
+
+    # Fresh workflow instances simulate a new command/process with the same durable state.
+    resumed = ShortProductionWorkflow(
+        config, creative_provider=build(database, recovered), music_provider=case["music"]
+    )
+    case["music_behavior"]["state"] = "pending"
+    if entrypoint == "existing_episode":
+        continued = resumed.produce(episode.external_key, confirmed=True)
+    else:
+        continued = resumed.produce_next(confirmed=True)
+    assert continued["current_stage"] == "MUSIC" and continued["status"] == "PENDING_PROVIDER"
+    assert calls == [CHAIN[0]] + [CHAIN[1]] * (3 if entrypoint == "existing_episode" else 4)
+    assert records(database)[-len(calls)]["request_id"] == target["request_id"]
+    assert CreativeReconciliations(database).get(target["request_id"]) is not None
+    with database.connect() as db:
+        assert (
+            dict(
+                db.execute(
+                    "SELECT * FROM generation_requests WHERE request_id=?", (target["request_id"],)
+                ).fetchone()
+            )
+            == target
+        )
+    assert database.get_episode(case["red"].episode_id).model_dump_json() == historical

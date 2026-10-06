@@ -89,16 +89,91 @@ uv run --locked python -m tovitunes.cli --config config.yaml creative generate-n
 ```
 
 The normal workflow discovers the oldest incomplete brand run, retains its episode reservation,
-reuses selected stages and resumes the missing stage. The reported real Kimi empty-answer failure
-should therefore advance safely to GLM **if the local ledger has the exact conclusive failure**.
-No run ID is hard-coded and no historical selected asset is regenerated. If configuration explicitly
-disables fallbacks, add the desired list from `config.example.yaml`.
+reuses selected stages and resumes the missing stage. Conclusive failures advance through the
+configured chain. No run ID is hard-coded and no historical selected asset is regenerated. If
+configuration explicitly disables fallbacks, add the desired list from `config.example.yaml`.
 
-For ambiguity, the CLI reports the blocked local request ID and asks the operator to inspect the
-ledger and reconcile provider evidence. Retain the provider request ID, status, error and receipt
-evidence and obtain the provider outcome before any explicit recovery action. This change does not
-add an ambiguity-clearing or force-resend command. Do not delete state or start another episode to
-bypass the hold.
+## Explicit abandonment of an inaccessible ambiguous result
+
+An ambiguous request still stops automatically. HTTP 504 remains ambiguous, never a definitive
+model failure. An operator can acknowledge that the remote interaction **may have executed**, but
+that no usable result can be recovered:
+
+```powershell
+uv run --locked python -m tovitunes.cli --config config.yaml creative request-status `
+  --request-id <REQUEST_ID>
+
+uv run --locked python -m tovitunes.cli --config config.yaml creative reconcile `
+  --request-id <REQUEST_ID> `
+  --action abandon-remote-result `
+  --actor human:operator `
+  --reason "Remote result is inaccessible; continue through configured fallback chain"
+```
+
+An optional `--evidence-uri` records a stable incident reference. Credential-bearing URIs, query
+parameters and fragments are rejected; do not provide signed download URLs or provider bodies.
+Actor and rationale are bounded, nonempty operator audit text. Neither command constructs a provider
+or HTTP client, checks provider credentials, calls a provider, nor starts production. Run the normal
+creative or production command afterward to resume. Status projects request/owner identity, kind,
+provider/model, status, provider request ID, typed error, reconciliation and the next configured model;
+it omits messages, response content, error bodies, rationale, evidence URI and secrets.
+
+Migration `0021_creative_reconciliation.sql` adds only
+`creative_request_reconciliations(reconciliation_id, request_id, action, actor, rationale,
+evidence_uri, created_at)` and invariant triggers. IDs are UUIDs and timestamps are UTC ISO 8601.
+`request_id` is a unique foreign key. The initial action is `abandon_remote_result`. Updates,
+deletes and replacement inserts are rejected; the reconciled generation row is also protected
+from updates, deletes and replacements. The migration does not rewrite existing tables or data.
+Replaying the exact same operator decision is idempotent, including concurrent commands; different
+audit values are rejected instead of overwriting the first decision.
+
+Only a persisted ambiguous structured Creative Director request is eligible: a known episode or
+planning-run owner, nonempty prompt version, saved JSON messages, and **no durable response content
+or response hash**. Initial requests and repair requests both qualify. A linked successful
+replacement makes a new decision ineligible. Prepared, started, failed, successful, invalid-response,
+music-generation, image-generation and external publication requests are rejected. Creative music
+specifications, visual plans and publication *metadata* remain structured Director outputs, distinct
+from those external generation/upload systems. This version conservatively refuses abandonment
+when any response receipt exists; an evidence URI does not override that guard.
+
+The original request remains `status=ambiguous`, with all its timestamps and evidence unchanged.
+The same ordered engine locates its provider/model in the current configured chain and advances
+one model position. It prepares a new request with `previous_attempt_id` pointing to the abandoned
+request (including a repair), `fallback_index` set to the configured position, and
+`fallback_reason=operator_abandoned_ambiguous`. Requested provider/model continue to identify the
+configured primary. The decision is an authorization to move on, never a fabricated model failure.
+
+| Durable outcome | Engine action |
+| --- | --- |
+| Successful validated response | Reuse artifact/receipt; successful model becomes sticky. |
+| Typed conclusive model failure | Next configured model automatically. |
+| Invalid structured response | One repair on this model; a conclusively invalid repair advances automatically. |
+| Ambiguous, no decision | Stop; no retry, fallback or resend. |
+| Ambiguous, explicit abandonment | Next configured model; preserve the ambiguous original. |
+| Authentication, configuration or local preflight validation failure | Stop without fallback. |
+| Final configured model consumed | Report chain exhaustion; never repeat the primary or use emergency Ollama. |
+
+For example, Kimi ambiguity plus abandonment advances to GLM. A completed GLM empty answer then
+advances automatically to Nemotron. A conclusively invalid Nemotron answer and its one invalid
+repair then advance automatically to DeepSeek. A new ambiguity at any position needs its own
+decision. There are no model-name branches: arbitrary names, additions and reordering are driven by
+the configured chain. Optional Ollama retains its endpoint-only emergency semantics.
+
+A fresh process reconstructs stage position from configured identity, generation history and
+decisions. A previously prepared fallback starts once; a completed fallback reuses its receipt; a
+started fallback without a receipt stops as a new ambiguity. Missing configured historical models,
+changed inference settings and corrupt request contracts fail closed. Changing the input cannot
+bypass an abandoned request: the ledger requires linkage through its authorized attempt ancestry.
+Only successful models become sticky. GLM success after abandonment makes subsequent stages start
+on GLM; later Nemotron success makes subsequent stages start on Nemotron. Existing stage history
+continues to take precedence over sticky selection, across planning-run and episode owners.
+
+Short production reports unresolved creative ambiguity as `status=AMBIGUOUS` at its current creative
+stage (`CREATIVE` for topic/spec/lyrics/music-spec), with safe local request identity, provider,
+model, kind, recovery action and example reconciliation command. Episode stage events retain that
+safe evidence. If a durable receipt exists, guidance points to request inspection instead of the
+ineligible abandonment action. Remote response bodies, exception bodies, credentials and signed
+URLs are omitted.
 
 `creative doctor` reports primary/fallback configuration, key presence and the emergency flag with
 zero generation calls. Successful creative/metadata output adds `generation_attempts`, including
@@ -127,5 +202,10 @@ sticky decision is reconstructed from SQLite instead of an in-memory active-inde
 Offline mocked tests cover the full order, repairs/exhaustion, no-resend ambiguity, pre-interaction
 Ollama, sticky planning-to-episode ownership, restart at a prepared fallback, pre-migration failure
 recovery, actual artifact provenance, unchanged selected artifacts/historical episode state, secret
-redaction, doctor and call counts. This work does not invoke generation providers or YouTube, or
-change image/music/render contracts or the full-short orchestrator.
+redaction, doctor and call counts. Operator-recovery tests additionally cover every configured
+position, repair abandonment, subsequent conclusive failures, repeated ambiguity, prepared/started
+fallback restart boundaries, arbitrary model configuration, immutable decisions/requests (including
+SQLite replacement inserts), concurrent/idempotent decisions, invalid targets, additive upgrade,
+open topic-to-episode sticky reconstruction, historical Red preservation, and zero-call CLI/status.
+Full-short integration verifies both topic-planning and episode ambiguity/reconciliation. Tests do
+not invoke live generation providers or YouTube, or change image/music/render contracts.

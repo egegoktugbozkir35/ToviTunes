@@ -221,8 +221,19 @@ class CreativeRequestLedger:
                 blocked = db.execute(
                     "SELECT request_id FROM generation_requests WHERE episode_id IS ? "
                     "AND run_id IS ? AND kind IN (?,?) AND slot_key='main' "
-                    "AND status IN ('prepared','remote_started','ambiguous') LIMIT 1",
-                    (episode_id, run_id, family, family + "_repair"),
+                    "AND status IN ('prepared','remote_started','ambiguous') "
+                    "AND NOT (status='ambiguous' AND EXISTS (SELECT 1 FROM "
+                    "creative_request_reconciliations c WHERE "
+                    "c.request_id=generation_requests.request_id "
+                    "AND c.action='abandon_remote_result') AND request_id IN ("
+                    "WITH RECURSIVE ancestors(request_id,previous_attempt_id,parent_request_id) "
+                    "AS (SELECT request_id,previous_attempt_id,parent_request_id "
+                    "FROM generation_requests "
+                    "WHERE request_id=? UNION SELECT r.request_id,r.previous_attempt_id,"
+                    "r.parent_request_id FROM generation_requests r JOIN ancestors a ON "
+                    "r.request_id=a.previous_attempt_id OR r.request_id=a.parent_request_id) "
+                    "SELECT request_id FROM ancestors)) LIMIT 1",
+                    (episode_id, run_id, family, family + "_repair", previous_attempt_id),
                 ).fetchone()
                 if blocked:
                     raise InvalidRequestTransition(
