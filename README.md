@@ -12,15 +12,15 @@ Copy-Item config.example.yaml config.yaml
 .\start-ui.bat
 ```
 
-Open **http://127.0.0.1:8765**. The batch script uses `config.yaml` when present, and `config.example.yaml` otherwise. The Python equivalent is:
+Open **http://127.0.0.1:8766**. The batch script uses `config.yaml` when present, and `config.example.yaml` otherwise. The Python equivalent is:
 
 ```powershell
 uv run --locked --extra web --extra youtube --extra video-render python -m tovitunes.web --config config.yaml
 ```
 
-The sample config keeps YouTube disabled. Set `expected_youtube_channel_id`, enable `publication.youtube.enabled`, and supply a local installed-app OAuth client secret only when you are ready to connect. The UI has a private-test upload action; it has no public publication action. See [WebUI and YouTube V1](docs/WEBUI_YOUTUBE_V1.md) for setup, routes, preflight policy, and recovery behavior.
+The sample config keeps YouTube disabled. Set `expected_youtube_channel_id`, enable `publication.youtube.enabled`, and supply a local installed-app OAuth client secret only when you are ready to connect. The UI retains the existing private-test and gated public-promotion actions. See [WebUI and YouTube V1](docs/WEBUI_YOUTUBE_V1.md) for setup, routes, preflight policy, and recovery behavior.
 
-The current WebUI operates existing selected production assets. Creative eligibility is read-only. Generating a complete new Short from concept through music, storyboard, render, and publication is the next orchestration milestone.
+The WebUI now includes **Generate Next Short** and episode-level **Resume Production**, backed by the same durable application service as `production auto-next` / `production produce`. Provider generation requires explicit confirmation. Automatic publication defaults to disabled; optional private/public publication uses the existing release gates and ledger. See [Autonomous Short pipeline V1](docs/AUTONOMOUS_SHORT_PIPELINE_V1.md) for commands, configuration, artifact contracts and crash recovery.
 
 ## Development and production reference
 
@@ -31,7 +31,7 @@ MoviePy extra, system FFmpeg requirements, CLI, deterministic QA, and review exp
 Production handoff and renderer-facing storyboard contracts:
 [Production storyboard V1](docs/PRODUCTION_STORYBOARD.md).
 
-The selected pilot can be rendered and reviewed locally. Private YouTube test uploads require an explicit operator action and a passing release preflight. Public publication remains a future step.
+The selected pilot can be rendered and reviewed locally. Private YouTube test uploads require an explicit operator action and a passing release preflight. Public publication uses the existing gated same-video promotion service.
 
 ## Create a Colors episode
 

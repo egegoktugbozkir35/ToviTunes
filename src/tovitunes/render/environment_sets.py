@@ -394,6 +394,8 @@ def generate_set(
     theme: str = THEME,
     attempt: int = 1,
     provider: ImageProvider | None = None,
+    episode_id: str | None = None,
+    role_briefs: dict[str, str] | None = None,
 ) -> dict[str, object]:
     if not confirmed:
         raise ValueError("live image generation requires --confirm-provider-generation")
@@ -406,6 +408,17 @@ def generate_set(
     generation_fingerprint = _generation_fingerprint(
         theme, provider_name, model, location, image_size, _qwen_profile(provider)
     )
+    if episode_id is not None:
+        generation_fingerprint = sha256(
+            json.dumps(
+                {
+                    "generation": generation_fingerprint,
+                    "episode_id": episode_id,
+                    "role_briefs": role_briefs,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
     set_id = _set_id(theme, generation_fingerprint)
     expected_source_dimensions = (
         (provider.width, provider.height)
@@ -413,6 +426,8 @@ def generate_set(
         else SOURCE_DIMENSIONS.get((model, image_size))
     )
     db, store, brand_id = _store(config)
+    owner_scope: Literal["episode", "brand"] = "episode" if episode_id else "brand"
+    owner_id = episode_id or brand_id
     working = config.data_root / ".environment-working"
     working.mkdir(exist_ok=True)
     counts = {key: 0 for key in ("prepared", "remote_started", "succeeded", "failed", "ambiguous")}
@@ -433,6 +448,18 @@ def generate_set(
                     mime_type=store.get(master_reference_id).mime_type,
                 )
             spec = _spec(role, brand_id, attempt, reference)
+            if role_briefs is not None:
+                if set(role_briefs) != set(ROLES):
+                    raise ValueError("plan must supply all environment roles")
+                spec = spec.model_copy(
+                    update={
+                        "scene_brief": role_briefs[role],
+                        "forbidden_changes": ("No characters, prominent lesson objects or text.",),
+                        "negative_constraints": (
+                            "No photorealism, franchise imitation or unsafe imagery.",
+                        ),
+                    }
+                )
             fingerprint = _request_fingerprint(spec, generation_fingerprint)
             with closing(db.connect()) as conn:
                 row = conn.execute(
@@ -444,8 +471,8 @@ def generate_set(
                     conn.execute(
                         "INSERT INTO environment_requests"
                         "(request_id,set_id,role,attempt,fingerprint,provider,model,status,"
-                        "spec_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,"
-                        "'prepared',?,?,?)",
+                        "spec_json,created_at,updated_at,episode_id) VALUES(?,?,?,?,?,?,?,"
+                        "'prepared',?,?,?,?)",
                         (
                             request_id,
                             set_id,
@@ -457,6 +484,7 @@ def generate_set(
                             spec.canonical_json(),
                             _now(),
                             _now(),
+                            episode_id,
                         ),
                     )
                     conn.commit()
@@ -550,8 +578,8 @@ def generate_set(
                     source_path.write_bytes(result.image_bytes)
                     source_record = store.ingest(
                         source_path,
-                        owner_scope="brand",
-                        owner_id=brand_id,
+                        owner_scope=owner_scope,
+                        owner_id=owner_id,
                         kind="environment_source_plate",
                         slot_key=role,
                         provenance=provider_provenance,
@@ -574,8 +602,8 @@ def generate_set(
                     )
                 record = store.ingest(
                     path,
-                    owner_scope="brand",
-                    owner_id=brand_id,
+                    owner_scope=owner_scope,
+                    owner_id=owner_id,
                     kind="environment_plate",
                     slot_key=role,
                     provenance=provider_provenance,
@@ -660,12 +688,12 @@ def generate_set(
         manifest_path = stage / "environment_set.json"
         manifest_path.write_text(environment.model_dump_json(), encoding="utf-8")
         digest = sha256(manifest_path.read_bytes()).hexdigest()
-        manifest = store.find_version("brand", brand_id, "environment_set", "main", digest)
+        manifest = store.find_version(owner_scope, owner_id, "environment_set", "main", digest)
         if manifest is None:
             manifest = store.ingest(
                 manifest_path,
-                owner_scope="brand",
-                owner_id=brand_id,
+                owner_scope=owner_scope,
+                owner_id=owner_id,
                 kind="environment_set",
                 slot_key="main",
                 provenance=Provenance(

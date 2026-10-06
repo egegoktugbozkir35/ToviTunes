@@ -15,6 +15,7 @@ from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.nvidia import NvidiaNIMClient
 from tovitunes.creative.workflow import CreativeWorkflow, eligibility
 from tovitunes.persistence.db import Database
+from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 
@@ -63,6 +64,9 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
             "publication_metadata",
             "visual_story_plan",
             "production_handoff",
+            "episode_visual_plan",
+            "episode_environment",
+            "visual_asset",
             "scene_image",
         )
         selected = {kind: _selected(db, "episode", eid, kind) for kind in kinds}
@@ -188,6 +192,7 @@ def episode_detail(config: RuntimeConfig, episode_key: str) -> dict[str, Any]:
             pass
     return {
         "episode": episode,
+        "production": ShortProductionWorkflow(config).plan(episode_key),
         "stages": stages,
         "selected": selected,
         "brand_assets": brand,

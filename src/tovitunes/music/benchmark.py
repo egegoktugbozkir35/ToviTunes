@@ -454,6 +454,18 @@ class MusicBenchmark:
                 result = generate_with_identity(
                     item.canonical_spec, item.translated_request, remote_start, record_identity
                 )
+        except MusicTaskPending as exc:
+            if not started or not identity_recorded:
+                raise ValueError("pending music task lacks durable remote identity") from exc
+            with closing(self.database.connect()) as db:
+                db.execute(
+                    "UPDATE music_requests SET failure_category='pending_provider', "
+                    "failure_reason='Known provider task is pending', updated_at=? "
+                    "WHERE request_id=? AND status='remote_started'",
+                    (now(), request_id),
+                )
+                db.commit()
+            return {"request_id": request_id, "status": "pending_provider", "action": "pending"}
         except MusicFailure as exc:
             status = exc.outcome if started else "retryable_failure"
             self._transition(
@@ -1155,6 +1167,11 @@ class MusicBenchmark:
                 spec.lyrics.text(),
                 transcript.recognized_text,
                 complete=bool(transcript.recognized_text),
+                required_phrases=(
+                    spec.brief.examples
+                    if spec.brief.id.startswith("episode_")
+                    else ("red", "color", "red apple", "red ball", "red is a color")
+                ),
             )
             thresholds = report.thresholds
             rhythm = report.rhythm
@@ -1165,6 +1182,11 @@ class MusicBenchmark:
                 and transcript.mean_word_score >= thresholds.minimum_alignment_score
             )
             phrase = comparison.required_phrase_presence
+            required_phrases = (
+                spec.brief.examples
+                if spec.brief.id.startswith("episode_")
+                else ("red is a color", "red apple", "red ball")
+            )
             recognized = normalized_words(transcript.recognized_text)
             forbidden = FORBIDDEN_SAFETY_WORDS
             found_forbidden = sorted(set(recognized).intersection(forbidden))
@@ -1174,6 +1196,10 @@ class MusicBenchmark:
                 for color in colors
                 for i in range(max(0, len(recognized) - 2))
             )
+            if spec.brief.id.startswith("episode_"):
+                # Exact selected lyrics and curriculum vocabulary drive the generic check.
+                # The historical Red contradiction detector is confined to its frozen brief.
+                narrow_contradiction = False
             insertion_ratio = (
                 comparison.insertions / comparison.recognized_word_count
                 if comparison.recognized_word_count and comparison.insertions is not None
@@ -1232,7 +1258,7 @@ class MusicBenchmark:
                     },
                 ),
                 "educational_correctness": check(
-                    all(phrase.get(p) is True for p in ("red is a color", "red apple", "red ball"))
+                    all(phrase.get(p) is True for p in required_phrases)
                     and not narrow_contradiction
                     and comparison.wer <= thresholds.maximum_educational_wer
                     if adequate_recognition and comparison.wer is not None
@@ -1249,9 +1275,7 @@ class MusicBenchmark:
                     transcript.mean_word_score >= thresholds.minimum_alignment_score
                     and comparison.coverage_ratio >= thresholds.minimum_lyric_coverage
                     and comparison.wer <= thresholds.maximum_intelligibility_wer
-                    and all(
-                        phrase.get(p) is True for p in ("red is a color", "red apple", "red ball")
-                    )
+                    and all(phrase.get(p) is True for p in required_phrases)
                     if adequate_recognition
                     and transcript.mean_word_score is not None
                     and comparison.coverage_ratio is not None

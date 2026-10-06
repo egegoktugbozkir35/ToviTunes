@@ -21,7 +21,14 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.character import CharacterAssetPack
 from tovitunes.domain.review import ApprovalDecision
-from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, TimedStoryboard, beat_range
+from tovitunes.domain.storyboard import (
+    AudioAlignment,
+    BeatAnalysis,
+    TimedStoryboard,
+    TimedStoryboardV2,
+    beat_range,
+    parse_storyboard,
+)
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.leases import Lease, LeaseStore
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
@@ -34,10 +41,12 @@ from tovitunes.render.character import (
     validate_layout,
 )
 from tovitunes.render.composition import (
+    EPISODE_ASSET_STYLE_VERSION,
     LEGACY_PROP_STYLE_VERSION,
     LESSON_OBJECT_STYLE_VERSION,
     PROP_DEFINITIONS,
     CompositionRequest,
+    PropDefinition,
     SceneComposition,
     resolve_composition,
     validate_composition,
@@ -80,10 +89,17 @@ class RenderInputs:
     target_vocabulary: tuple[str, ...]
 
 
-def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
+def load_inputs(
+    config: RuntimeConfig, episode_key: str, *, local_preview: bool = False
+) -> RenderInputs:
     if not config.database_path.is_file() or not config.data_root.is_dir():
         raise ValueError("production AssetStore/database unavailable")
-    store = AssetStore(config.data_root, Database(config.database_path), initialize=False)
+    store = AssetStore(
+        config.data_root,
+        Database(config.database_path),
+        initialize=False,
+        local_preview=local_preview,
+    )
     with closing(store.database.connect()) as db:
         row = db.execute(
             "SELECT episode_id FROM episodes WHERE external_key=?", (episode_key,)
@@ -94,7 +110,7 @@ def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
     record = store.selected("episode", episode.episode_id, "timed_storyboard", "main")
     if record is None:
         raise ValueError("production TimedStoryboard is not selected")
-    storyboard = TimedStoryboard.model_validate(store.read_json(record.identity.artifact_id))
+    storyboard = parse_storyboard(store.read_json(record.identity.artifact_id))
     if (
         storyboard.episode_id != episode.episode_id
         or episode.character_packs != (storyboard.character_pack,)
@@ -111,6 +127,57 @@ def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
         selected = store.selected("episode", episode.episode_id, kind, "main")
         if selected is None or selected.identity.artifact_id != artifact_id:
             raise ValueError(f"stale storyboard {kind} reference")
+    if isinstance(storyboard, TimedStoryboardV2):
+        from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
+        from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
+
+        visual_record = store.selected("episode", episode.episode_id, "episode_visual_plan", "main")
+        lyrics_record = store.selected("episode", episode.episode_id, "lyrics", "main")
+        if (
+            visual_record is None
+            or lyrics_record is None
+            or visual_record.identity.artifact_id != storyboard.visual_plan_artifact_id
+            or lyrics_record.identity.artifact_id != storyboard.lyrics_artifact_id
+        ):
+            raise ValueError("V2 storyboard creative/visual plan selections changed")
+        visual = EpisodeVisualPlan.model_validate(
+            store.read_json(visual_record.identity.artifact_id)
+        )
+        lyrics = LyricsSpec.model_validate(store.read_json(lyrics_record.identity.artifact_id))
+        spec_record = store.selected("episode", episode.episode_id, "episode_spec", "main")
+        music_record = store.selected("episode", episode.episode_id, "music_spec", "main")
+        if spec_record is None or music_record is None:
+            raise ValueError("V2 renderer requires current selected creative evidence")
+        validate_visual_plan(
+            visual,
+            episode,
+            EpisodeSpec.model_validate(store.read_json(spec_record.identity.artifact_id)),
+            lyrics,
+            (
+                spec_record.identity.artifact_id,
+                lyrics_record.identity.artifact_id,
+                music_record.identity.artifact_id,
+            ),
+        )
+        lyric_scenes_v2 = tuple(scene for scene in storyboard.scenes if scene.kind == "lyric")
+        if (
+            tuple(scene.lyric_text for scene in lyric_scenes_v2)
+            != tuple(line.text for line in lyrics.lines)
+            or set(storyboard.asset_artifact_ids) != {a.asset_key for a in visual.required_assets}
+            or len(lyric_scenes_v2) != len(visual.scenes)
+        ):
+            raise ValueError("V2 storyboard differs from exact lyrics or admitted assets")
+        for scene, intent in zip(lyric_scenes_v2, visual.scenes, strict=True):
+            if (
+                scene.required_props != intent.required_assets
+                or scene.tovi_action != intent.tovi_action
+                or scene.visual_focus != intent.visual_focus
+            ):
+                raise ValueError("V2 scene intention differs from admitted plan")
+        for key, aid in storyboard.asset_artifact_ids.items():
+            current = store.selected("episode", episode.episode_id, "visual_asset", key)
+            if current is None or current.identity.artifact_id != aid:
+                raise ValueError("V2 scene asset is not the episode's admitted asset")
     audio = store.get(storyboard.audio_master_artifact_id)
     alignment = AudioAlignment.model_validate(
         store.read_json(storyboard.audio_alignment_artifact_id)
@@ -155,7 +222,12 @@ def load_inputs(config: RuntimeConfig, episode_key: str) -> RenderInputs:
         ),
         None,
     )
-    if pack is None or pack.readiness != "approved" or pack.pack_id != "tovi-pack-v1":
+    if (
+        pack is None
+        or pack.readiness != "approved"
+        or pack.character_id != "tovi"
+        or (storyboard.schema_version == 1 and pack.pack_id != "tovi-pack-v1")
+    ):
         raise ValueError("selected approved tovi-pack-v1 is unavailable")
     for role in set(ACTION_ROLES.values()):
         if role not in pack.asset_artifact_ids:
@@ -200,16 +272,34 @@ def validate_manifest(
 
 
 class ProductionRenderer:
-    def __init__(self, config: RuntimeConfig, *, canvas: tuple[int, int] = (1080, 1920)) -> None:
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        canvas: tuple[int, int] = (1080, 1920),
+        local_preview: bool = False,
+    ) -> None:
         self.config, self.canvas = config, canvas
+        self.local_preview = local_preview
 
     def render(self, episode_key: str, *, visual_story: bool = False) -> dict[str, Any]:
-        load_inputs(self.config, episode_key)  # Complete preflight before artifact writes.
+        initial = load_inputs(
+            self.config, episode_key, local_preview=self.local_preview
+        )  # Complete preflight before artifact writes.
         environment_selection = None
         if visual_story:
             from tovitunes.render.environment_sets import selected_set
 
-            environment_selection = selected_set(self.config)
+            if isinstance(initial.storyboard, TimedStoryboardV2):
+                from tovitunes.render.environment_sets import EnvironmentSet
+
+                aid = initial.storyboard.environment_set_artifact_id
+                environment_selection = (
+                    EnvironmentSet.model_validate(initial.store.read_json(aid)),
+                    aid,
+                )
+            else:
+                environment_selection = selected_set(self.config)
         try:
             moviepy_version = version("moviepy")
         except PackageNotFoundError:
@@ -223,7 +313,7 @@ class ProductionRenderer:
             f"production-render:{episode_key}", duration_seconds=ENCODE_TIMEOUT + 600
         )
         try:
-            inputs = load_inputs(self.config, episode_key)
+            inputs = load_inputs(self.config, episode_key, local_preview=self.local_preview)
             return self._render(inputs, binaries, leases, lease, environment_selection)
         finally:
             leases.release(lease)
@@ -244,17 +334,57 @@ class ProductionRenderer:
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             stage = Path(temporary)
             store = AssetStore(
-                self.config.data_root, inputs.store.database, generated_source_roots=[stage]
+                self.config.data_root,
+                inputs.store.database,
+                generated_source_roots=[stage],
+                local_preview=inputs.store.local_preview,
             )
             lesson_asset_paths: dict[str, Path] = {}
             lesson_asset_metadata: dict[str, dict[str, str]] = {}
             lesson_asset_ids: tuple[str, ...] = ()
             prop_style_version = LEGACY_PROP_STYLE_VERSION
             brand_id = inputs.store.database.get_episode(owner).brand_revision_id
-            lesson_manifest = store.selected(
-                "brand", brand_id, "lesson_object_manifest", LESSON_OBJECT_STYLE_VERSION
+            prop_definitions = PROP_DEFINITIONS
+            episode_visual = None
+            lesson_manifest = (
+                None
+                if isinstance(storyboard, TimedStoryboardV2)
+                else store.selected(
+                    "brand", brand_id, "lesson_object_manifest", LESSON_OBJECT_STYLE_VERSION
+                )
             )
-            if lesson_manifest is not None:
+            if isinstance(storyboard, TimedStoryboardV2):
+                from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan
+
+                episode_visual = EpisodeVisualPlan.model_validate(
+                    store.read_json(storyboard.visual_plan_artifact_id)
+                )
+                prop_definitions = {
+                    a.asset_key: PropDefinition(
+                        visual_class="abstract" if a.kind == "color_swatch" else "object",
+                        grounded=a.grounded,
+                        motion_class=a.motion,
+                        color=COLORS_V1.get(a.target_color or "", "#FFFFFF"),
+                        supports_roll=a.motion == "roll",
+                        supports_float=a.motion == "float",
+                        render_strategy="reviewed_asset",
+                    )
+                    for a in episode_visual.required_assets
+                }
+                for key, aid in storyboard.asset_artifact_ids.items():
+                    asset = store.get(aid)
+                    lesson_asset_paths[key] = store.path_for(aid)
+                    lesson_asset_metadata[key] = {
+                        "asset_artifact_id": aid,
+                        "asset_sha256": asset.sha256,
+                        "anchor": "bottom_center",
+                    }
+                lesson_asset_ids = (
+                    storyboard.visual_plan_artifact_id,
+                    *storyboard.asset_artifact_ids.values(),
+                )
+                prop_style_version = EPISODE_ASSET_STYLE_VERSION
+            elif lesson_manifest is not None:
                 from tovitunes.render.lesson_objects import resolve_reviewed_assets
 
                 lesson_asset_paths = resolve_reviewed_assets(store, brand_id)
@@ -328,6 +458,7 @@ class ProductionRenderer:
                     raw = resolve_composition(
                         composition_request_pre,
                         prior,
+                        prop_definitions=prop_definitions,
                         post_lyric_tail_seconds=tail_seconds if item.kind == "outro" else 0,
                         measured_downbeats=inputs.beats.downbeat_seconds,
                     )
@@ -345,11 +476,24 @@ class ProductionRenderer:
                     planned_story = plan_story(
                         raw,
                         item.end - item.start,
-                        PROP_DEFINITIONS,
+                        prop_definitions,
                         introduced,
                         word_cue=word_cue,
                         scene_kind=item.kind,
                     )
+                    if episode_visual is not None:
+                        role = (
+                            episode_visual.intro_environment_role
+                            if item.kind == "intro"
+                            else episode_visual.outro_environment_role
+                            if item.kind == "outro"
+                            else episode_visual.scenes[
+                                int(item.scene_id.removeprefix("lyric_")) - 1
+                            ].environment_role
+                        )
+                        planned_story = planned_story.model_copy(
+                            update={"environment_plate_role": role}
+                        )
                     staged = stage_composition(raw, planned_story)
                     prepared[item.scene_id] = (staged, planned_story)
                     prior = staged
@@ -387,6 +531,7 @@ class ProductionRenderer:
                     composition = resolve_composition(
                         composition_request,
                         previous,
+                        prop_definitions=prop_definitions,
                         post_lyric_tail_seconds=tail_seconds if scene.kind == "outro" else 0,
                         measured_downbeats=inputs.beats.downbeat_seconds,
                     )
@@ -423,6 +568,7 @@ class ProductionRenderer:
                     lesson_asset_paths=lesson_asset_paths,
                     lesson_asset_metadata=lesson_asset_metadata,
                     prop_style_version=prop_style_version,
+                    prop_definitions=prop_definitions,
                 )
                 background_deps: tuple[str, ...] = (sid, *lesson_asset_ids)
                 if environment_selection is not None and story is not None:
@@ -521,7 +667,7 @@ class ProductionRenderer:
                     stored_metadata = json.loads(stored.info["tovitunes_composition"])
                     if stored.size != self.canvas or stored_metadata != metadata:
                         raise ValueError("scene image metadata mismatch")
-                validate_props(scene, metadata, animation, self.canvas)
+                validate_props(scene, metadata, animation, self.canvas, prop_definitions)
                 if animation.long_scene_activity:
                     samples = {
                         position(animation, (scene.end - scene.start) * i / 60) for i in range(61)
@@ -726,7 +872,11 @@ class ProductionRenderer:
                 ready = stage / "ready.mp4"
                 os.replace(partial, ready)
                 leases.assert_owner(lease)
-                load_inputs(self.config, inputs.store.database.get_episode(owner).external_key)
+                load_inputs(
+                    self.config,
+                    inputs.store.database.get_episode(owner).external_key,
+                    local_preview=self.local_preview,
+                )
                 validate_manifest(store, manifest, storyboard)
                 final = ensure("final_render", "main", ready, final_deps)
             else:
@@ -876,6 +1026,9 @@ class ProductionRenderer:
     @staticmethod
     def _approve_select(store: AssetStore, record: ArtifactRecord) -> None:
         artifact_id = record.identity.artifact_id
+        if store.local_preview:
+            store.admit_preview(artifact_id)
+            return
         with closing(store.database.connect()) as db:
             decision = db.execute(
                 "SELECT status FROM approval_decisions WHERE artifact_id=? "

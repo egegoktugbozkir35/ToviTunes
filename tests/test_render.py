@@ -217,7 +217,7 @@ def test_invalid_sprite_and_scale(beat_data):
     with pytest.raises(ValidationError):
         scene("unsupported")
     with pytest.raises(ValidationError):
-        scene(props=("blue_apple",))
+        scene(props=("../unsafe_asset",))
     with pytest.raises(ValueError, match="safe"):
         validate_layout(plan.model_copy(update={"end_position": (270, 0)}), (270, 480))
 

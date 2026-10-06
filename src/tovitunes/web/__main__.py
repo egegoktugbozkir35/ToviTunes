@@ -14,7 +14,7 @@ from tovitunes.web.app import create_app
 def main() -> None:
     parser = argparse.ArgumentParser(description="ToviTunes local operator dashboard")
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=8766)
     args = parser.parse_args()
     config = load_config(args.config)
     print(f"ToviTunes: http://127.0.0.1:{args.port}")

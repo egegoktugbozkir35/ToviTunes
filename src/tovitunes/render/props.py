@@ -10,10 +10,12 @@ from PIL.PngImagePlugin import PngInfo
 from tovitunes.domain.storyboard import TimedScene
 from tovitunes.render import VERSION
 from tovitunes.render.composition import (
+    EPISODE_ASSET_STYLE_VERSION,
     LEGACY_PROP_STYLE_VERSION,
     LESSON_OBJECT_STYLE_VERSION,
     PROP_DEFINITIONS,
     CompositionRequest,
+    PropDefinition,
     SceneComposition,
     resolve_composition,
 )
@@ -180,6 +182,10 @@ def prop_image(
     reviewed_asset_path: Path | None = None,
     style_version: str = LEGACY_PROP_STYLE_VERSION,
 ) -> Image.Image:
+    if style_version == EPISODE_ASSET_STYLE_VERSION:
+        if reviewed_asset_path is None or size <= 0:
+            raise ValueError("admitted episode asset unavailable")
+        return _reviewed_asset(reviewed_asset_path, size)
     if kind not in PROP_TYPES or size <= 0:
         raise ValueError("unsupported prop or invalid size")
     if style_version == LESSON_OBJECT_STYLE_VERSION:
@@ -241,7 +247,9 @@ def scene_art(
     lesson_asset_paths: dict[str, Path] | None = None,
     lesson_asset_metadata: dict[str, dict[str, str]] | None = None,
     prop_style_version: str = LEGACY_PROP_STYLE_VERSION,
+    prop_definitions: dict[str, PropDefinition] | None = None,
 ) -> tuple[Image.Image, dict[str, Any]]:
+    definitions = prop_definitions or PROP_DEFINITIONS
     composition = composition or resolve_composition(
         CompositionRequest(
             scene.scene_id,
@@ -279,7 +287,7 @@ def scene_art(
         )
     props: list[dict[str, Any]] = []
     for placement in composition.props:
-        if placement.type not in PROP_TYPES:
+        if placement.type not in definitions:
             raise ValueError(f"unsupported prop: {placement.type}")
         bbox = placement.bbox(canvas, ground)
         prop_metadata = {
@@ -288,8 +296,8 @@ def scene_art(
             "count": 1,
             "ground_plane_y": round(h * ground),
             "prop_style_version": prop_style_version,
-            "render_strategy": RENDER_STRATEGIES[placement.type]
-            if prop_style_version == LESSON_OBJECT_STYLE_VERSION
+            "render_strategy": definitions[placement.type].render_strategy
+            if prop_style_version in {LESSON_OBJECT_STYLE_VERSION, EPISODE_ASSET_STYLE_VERSION}
             else "legacy_procedural",
         }
         if placement.type in (lesson_asset_metadata or {}):
@@ -344,18 +352,18 @@ def validate_props(
     metadata: dict[str, Any],
     plan: CharacterAnimation,
     canvas: tuple[int, int],
+    prop_definitions: dict[str, PropDefinition] | None = None,
 ) -> None:
+    definitions = prop_definitions or PROP_DEFINITIONS
     composition = SceneComposition.model_validate(metadata["composition"])
     props = metadata["props"]
     expected = tuple(p.type for p in composition.props)
     if (
         tuple(p["type"] for p in props) != expected
         or not set(scene.required_props) <= set(expected)
-        or any(
-            p["count"] != 1 or p["lesson_color"] != PROP_DEFINITIONS[p["type"]].color for p in props
-        )
+        or any(p["count"] != 1 or p["lesson_color"] != definitions[p["type"]].color for p in props)
         or metadata["prop_style_version"]
-        not in {LESSON_OBJECT_STYLE_VERSION, LEGACY_PROP_STYLE_VERSION}
+        not in {LESSON_OBJECT_STYLE_VERSION, LEGACY_PROP_STYLE_VERSION, EPISODE_ASSET_STYLE_VERSION}
     ):
         raise ValueError("educational prop QA failed")
     w, h = canvas

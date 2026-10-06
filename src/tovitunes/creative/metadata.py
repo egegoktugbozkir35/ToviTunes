@@ -16,7 +16,8 @@ from tovitunes.creative.workflow import CreativeWorkflow, call_report, call_snap
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
 from tovitunes.domain.review import ApprovalDecision
-from tovitunes.domain.storyboard import TimedStoryboard
+from tovitunes.domain.storyboard import parse_storyboard
+from tovitunes.pipeline.execution import production_execution
 from tovitunes.render.models import RenderManifest
 
 
@@ -45,9 +46,7 @@ class MetadataWriter:
         manifest_record = self._selected(episode_id, "render_manifest")
         if (spec_record is None) != (lyrics_record is None):
             raise ValueError("metadata requires a complete selected creative pair")
-        storyboard = TimedStoryboard.model_validate(
-            self.store.read_json(storyboard_record.identity.artifact_id)
-        )
+        storyboard = parse_storyboard(self.store.read_json(storyboard_record.identity.artifact_id))
         manifest = RenderManifest.model_validate(
             self.store.read_json(manifest_record.identity.artifact_id)
         )
@@ -138,10 +137,12 @@ class MetadataWriter:
         workflow = self.workflow
         before = call_snapshot(workflow.database)
         episode = episode_by_key(workflow.database, episode_key)
-        lease = workflow.leases.acquire(
+        execution = production_execution(
+            workflow.database,
             f"creative-planning:{workflow.catalog.definition.brand_id}",
             duration_seconds=workflow.config.creative_llm.generation_budget_seconds(1),
         )
+        workflow.leases, lease = execution.__enter__()
         try:
             workflow.leases.assert_owner(lease)
             facts, deps = self._facts(episode.episode_id)
@@ -189,7 +190,7 @@ class MetadataWriter:
                         "ORDER BY rowid DESC LIMIT 1",
                         (existing.identity.artifact_id,),
                     ).fetchone()
-                if approval is None or approval[0] != "approved":
+                if not self.store.local_preview and (approval is None or approval[0] != "approved"):
                     raise PermissionError("selected publication metadata needs approval")
                 workflow.leases.assert_owner(lease)
                 return {
@@ -265,18 +266,21 @@ class MetadataWriter:
             if prior and prior[0] in {"rejected", "needs_review"}:
                 raise PermissionError("existing metadata review requires human escalation")
             workflow.leases.assert_owner(lease)
-            self.store.record_approval(
-                ApprovalDecision(
-                    target_id=record.identity.artifact_id,
-                    target_kind="artifact",
-                    status="approved",
-                    actor="machine:metadata_policy",
-                    reason="Accurate pinned render facts and bounded schema.",
-                    policy_version="metadata_structural_v1",
-                    decided_at=datetime.now(UTC),
+            if self.store.local_preview:
+                self.store.admit_preview(record.identity.artifact_id)
+            else:
+                self.store.record_approval(
+                    ApprovalDecision(
+                        target_id=record.identity.artifact_id,
+                        target_kind="artifact",
+                        status="approved",
+                        actor="machine:metadata_policy",
+                        reason="Accurate pinned render facts and bounded schema.",
+                        policy_version="metadata_structural_v1",
+                        decided_at=datetime.now(UTC),
+                    )
                 )
-            )
-            self.store.select(record.identity.artifact_id)
+                self.store.select(record.identity.artifact_id)
             return {
                 "episode_id": episode.episode_id,
                 "episode_key": episode.external_key,
@@ -288,7 +292,7 @@ class MetadataWriter:
                 "generation_attempts": generation_audit(workflow.database, episode.episode_id),
             }
         finally:
-            workflow.leases.release(lease)
+            execution.__exit__(None, None, None)
 
     def record_operator_approved(
         self,
@@ -304,10 +308,12 @@ class MetadataWriter:
         workflow = self.workflow
         before = call_snapshot(workflow.database)
         episode = episode_by_key(workflow.database, episode_key)
-        lease = workflow.leases.acquire(
+        execution = production_execution(
+            workflow.database,
             f"creative-planning:{workflow.catalog.definition.brand_id}",
             duration_seconds=600,
         )
+        workflow.leases, lease = execution.__enter__()
         try:
             facts, deps = self._facts(episode.episode_id)
             final = facts["final_render"]
@@ -370,4 +376,4 @@ class MetadataWriter:
                 "generation_attempts": generation_audit(workflow.database, episode.episode_id),
             }
         finally:
-            workflow.leases.release(lease)
+            execution.__exit__(None, None, None)

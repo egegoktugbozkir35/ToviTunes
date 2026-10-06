@@ -10,6 +10,7 @@ class CurriculumConcept(BaseModel):
     objective_id: str
     objective: str
     target_vocabulary: tuple[str, ...] = Field(min_length=1)
+    example_entities: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
 
 class Curriculum(BaseModel):

@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.config import RuntimeConfig
 from tovitunes.persistence.db import Database
+from tovitunes.pipeline.short_production import ShortProductionWorkflow
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.production import ProductionRenderer
@@ -119,6 +120,32 @@ def create_app(config: RuntimeConfig) -> FastAPI:
     @app.get("/api/jobs")
     def job_list() -> list[dict[str, Any]]:
         return [job.model_dump() for job in jobs.list()]
+
+    def production_workflow() -> ShortProductionWorkflow:
+        return ShortProductionWorkflow(config, progress=jobs.update_progress)
+
+    @app.get("/api/production/plan")
+    def production_plan(episode_key: str | None = None) -> dict[str, Any]:
+        return production_workflow().plan(checked_key(episode_key) if episode_key else None)
+
+    @app.post("/api/production/generate-next-short")
+    def generate_next_short(confirm_provider_generation: bool = False) -> dict[str, Any]:
+        if not confirm_provider_generation:
+            return production_workflow().plan()
+        return submit(
+            "short_production", None, lambda: production_workflow().produce_next(confirmed=True)
+        )
+
+    @app.post("/api/episodes/{episode_key}/produce")
+    def produce_short(
+        episode_key: str, confirm_provider_generation: bool = False
+    ) -> dict[str, Any]:
+        key = checked_key(episode_key)
+        if not confirm_provider_generation:
+            return production_workflow().plan(key)
+        return submit(
+            "short_production", key, lambda: production_workflow().produce(key, confirmed=True)
+        )
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str) -> dict[str, Any]:

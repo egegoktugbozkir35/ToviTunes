@@ -1,13 +1,13 @@
 """Small renderer-facing contracts built from admitted production evidence."""
 
 from bisect import bisect_left, bisect_right
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tovitunes.domain.episode import Episode, PinnedCharacterPack
 
-Prop = Literal["red_swatch", "red_apple", "red_ball"]
+Prop = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 Action = Literal["enter", "idle", "point", "present", "question", "sing", "celebrate"]
 
 
@@ -31,7 +31,7 @@ class TimedText(Interval):
 
 
 class AudioAlignment(ProductionModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     audio_master_artifact_id: str
     audio_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_blind_id: str
@@ -61,11 +61,23 @@ class AudioAlignment(ProductionModel):
             raise ValueError("alignment edges differ from measured lyric edges")
         cursor = 0
         for line in self.lyric_lines:
-            count = len(line.text.split())
+            from tovitunes.music.analysis import normalized_words
+
+            count = (
+                len(normalized_words(line.text))
+                if self.schema_version == 2
+                else len(line.text.split())
+            )
             words = self.words[cursor : cursor + count]
+            words_match = (
+                tuple(token for word in words for token in normalized_words(word.text))
+                == normalized_words(line.text)
+                if self.schema_version == 2
+                else " ".join(w.text for w in words) == line.text
+            )
             if (
                 len(words) != count
-                or " ".join(w.text for w in words) != line.text
+                or not words_match
                 or words[0].start != line.start
                 or words[-1].end != line.end
             ):
@@ -111,7 +123,7 @@ class SceneIntent(ProductionModel):
     visual_focus: str = Field(min_length=1)
     required_props: tuple[Prop, ...] = ()
     tovi_action: Action
-    lesson_target: Literal["red"] | None = None
+    lesson_target: str | None = None
     character_id: Literal["tovi"] = "tovi"
 
     @model_validator(mode="after")
@@ -127,23 +139,36 @@ class LyricIntent(SceneIntent):
 
 
 class StoryboardTemplate(ProductionModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     template_id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    concept_id: Literal["red"]
-    objective_id: Literal["colors.red.identify"]
+    concept_id: str
+    objective_id: str
     intro: SceneIntent
     lyrics: tuple[LyricIntent, ...] = Field(min_length=1)
     outro: SceneIntent
 
     @model_validator(mode="after")
     def education(self) -> "StoryboardTemplate":
+        if self.schema_version == 1 and (
+            self.concept_id != "red" or self.objective_id != "colors.red.identify"
+        ):
+            raise ValueError("frozen V1 template must retain the Red objective")
         if self.intro.lesson_target or self.outro.lesson_target:
             raise ValueError("intro/outro cannot add teaching claims")
+        if self.schema_version == 1 and any(
+            not set(intent.required_props) <= {"red_swatch", "red_apple", "red_ball"}
+            for intent in (self.intro, *self.lyrics, self.outro)
+        ):
+            raise ValueError("unsupported frozen V1 prop")
         for line in self.lyrics:
             if line.lesson_target != self.concept_id:
                 raise ValueError("lyric scene target differs from concept")
             for phrase, prop in (("red apple", "red_apple"), ("red ball", "red_ball")):
-                if phrase in line.lyric_text.casefold() and prop not in line.required_props:
+                if (
+                    self.schema_version == 1
+                    and phrase in line.lyric_text.casefold()
+                    and prop not in line.required_props
+                ):
                     raise ValueError(f"{phrase} scene requires {prop}")
         return self
 
@@ -168,11 +193,8 @@ class TimedScene(SceneIntent, Interval):
                 raise ValueError("lyric scenes require measured vocal timing")
             if not self.start == self.lyric_start < self.lyric_end <= self.end:
                 raise ValueError("vocal interval must lie within scene")
-            if self.lesson_target != "red":
-                raise ValueError("lyric target must remain red")
-            for phrase, prop in (("red apple", "red_apple"), ("red ball", "red_ball")):
-                if phrase in self.lyric_text.casefold() and prop not in self.required_props:
-                    raise ValueError(f"{phrase} scene requires {prop}")
+            if not self.lesson_target:
+                raise ValueError("lyric scene requires an episode lesson target")
         elif any(
             x is not None
             for x in (self.lyric_text, self.lyric_start, self.lyric_end, self.lesson_target)
@@ -182,7 +204,7 @@ class TimedScene(SceneIntent, Interval):
 
 
 class TimedStoryboard(ProductionModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     episode_id: str
     audio_master_artifact_id: str
     audio_alignment_artifact_id: str
@@ -191,8 +213,8 @@ class TimedStoryboard(ProductionModel):
     duration_seconds: float = Field(gt=0)
     template_id: str
     template_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    concept_id: Literal["red"]
-    objective_id: Literal["colors.red.identify"]
+    concept_id: str
+    objective_id: str
     character_pack: PinnedCharacterPack
     scenes: tuple[TimedScene, ...] = Field(min_length=1)
 
@@ -202,6 +224,23 @@ class TimedStoryboard(ProductionModel):
 
     @model_validator(mode="after")
     def coverage(self) -> "TimedStoryboard":
+        if self.schema_version == 1 and (
+            self.concept_id != "red" or self.objective_id != "colors.red.identify"
+        ):
+            raise ValueError("frozen V1 storyboard must retain the Red objective")
+        for scene in self.scenes:
+            if scene.kind == "lyric" and scene.lesson_target != self.concept_id:
+                raise ValueError("scene teaching target differs from episode")
+            if self.schema_version == 1 and scene.lyric_text:
+                for phrase, prop in (("red apple", "red_apple"), ("red ball", "red_ball")):
+                    if phrase in scene.lyric_text.casefold() and prop not in scene.required_props:
+                        raise ValueError(f"{phrase} scene requires {prop}")
+            if self.schema_version == 1 and not set(scene.required_props) <= {
+                "red_swatch",
+                "red_apple",
+                "red_ball",
+            }:
+                raise ValueError("unsupported frozen V1 prop")
         if self.character_pack.character_id != "tovi":
             raise ValueError("storyboard must use pinned Tovi only")
         if len(set(self.scene_ids)) != len(self.scenes):
@@ -304,6 +343,7 @@ def build_storyboard(
             template.outro,
         )
     return TimedStoryboard(
+        schema_version=template.schema_version,
         episode_id=episode.episode_id,
         audio_master_artifact_id=alignment.audio_master_artifact_id,
         audio_alignment_artifact_id=alignment_id,
@@ -317,3 +357,25 @@ def build_storyboard(
         character_pack=episode.character_packs[0],
         scenes=tuple(scenes),
     )
+
+
+class TimedStoryboardV2(TimedStoryboard):
+    schema_version: Literal[1, 2] = 2
+    lyrics_artifact_id: str
+    visual_plan_artifact_id: str
+    asset_artifact_ids: dict[str, str]
+    environment_set_artifact_id: str
+
+    @model_validator(mode="after")
+    def admitted_assets(self) -> "TimedStoryboardV2":
+        if self.schema_version != 2 or not all(
+            set(scene.required_props) <= set(self.asset_artifact_ids) for scene in self.scenes
+        ):
+            raise ValueError("V2 storyboard references assets outside its admitted plan")
+        return self
+
+
+def parse_storyboard(value: object) -> TimedStoryboard:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        return TimedStoryboardV2.model_validate(value)
+    return TimedStoryboard.model_validate(value)

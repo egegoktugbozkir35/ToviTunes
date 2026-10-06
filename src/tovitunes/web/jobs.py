@@ -87,6 +87,10 @@ class JobManager:
         else:
             with self._lock:
                 job.status, job.progress, job.result = "succeeded", "Complete", result
+                if job.operation == "short_production":
+                    job.status = str(result.get("status", "COMPLETE")).lower()
+                    job.progress = str(result.get("current_stage", "Complete"))
+                    job.episode_key = result.get("episode_key")
         finally:
             with self._lock:
                 job.finished_at = _now()
@@ -95,6 +99,11 @@ class JobManager:
     def get(self, job_id: str) -> Job:
         with self._lock:
             return self._jobs[job_id].model_copy(deep=True)
+
+    def update_progress(self, stage: str, status: str) -> None:
+        with self._lock:
+            if self._active is not None:
+                self._jobs[self._active].progress = f"{stage}: {status}"
 
     def list(self) -> list[Job]:
         with self._lock:

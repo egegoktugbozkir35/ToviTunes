@@ -70,6 +70,7 @@ class AssetStore:
         *,
         generated_source_roots: Sequence[Path] = (),
         initialize: bool = True,
+        local_preview: bool = False,
     ) -> None:
         if initialize:
             root.mkdir(parents=True, exist_ok=True)
@@ -77,6 +78,7 @@ class AssetStore:
             raise ValueError("asset root cannot be a symlink")
         self.root = root.resolve(strict=True)
         self.database = database
+        self.local_preview = local_preview
         self.generated_source_roots = tuple(
             path.resolve(strict=True) for path in generated_source_roots
         )
@@ -568,9 +570,19 @@ class AssetStore:
             )
             connection.commit()
 
-    def _eligible(self, connection: sqlite3.Connection, artifact_id: str, seen: set[str]) -> None:
+    def _eligible(
+        self,
+        connection: sqlite3.Connection,
+        artifact_id: str,
+        seen: set[str],
+        validated: set[str] | None = None,
+    ) -> None:
         if artifact_id in seen:
             raise ValueError("artifact dependency cycle")
+        if validated is None:
+            validated = set()
+        if artifact_id in validated:
+            return
         seen.add(artifact_id)
         validation = self.inspect(artifact_id)
         if not validation.valid:
@@ -581,7 +593,20 @@ class AssetStore:
             (artifact_id,),
         ).fetchone()
         if approval is None or approval["status"] != "approved":
-            raise ValueError("artifact lacks current approval")
+            admission = (
+                connection.execute(
+                    "SELECT sha256 FROM preview_admissions WHERE artifact_id=?", (artifact_id,)
+                ).fetchone()
+                if self.local_preview
+                else None
+            )
+            if (
+                not self.local_preview
+                or (approval is not None and approval["status"] in {"rejected", "needs_review"})
+                or admission is None
+                or admission[0] != validation.observed_sha256
+            ):
+                raise ValueError("artifact lacks current approval or technical preview admission")
         rights = connection.execute(
             "SELECT status FROM rights_decisions WHERE artifact_id = ? ORDER BY rowid DESC LIMIT 1",
             (artifact_id,),
@@ -607,8 +632,9 @@ class AssetStore:
             ).fetchone()
             if selected is None or selected["artifact_id"] != dependency["input_artifact_id"]:
                 raise ValueError("dependency is no longer selected")
-            self._eligible(connection, dependency["input_artifact_id"], seen)
+            self._eligible(connection, dependency["input_artifact_id"], seen, validated)
         seen.remove(artifact_id)
+        validated.add(artifact_id)
 
     def select(self, artifact_id: str) -> ArtifactRecord:
         with closing(self.database.connect()) as connection:
@@ -637,6 +663,35 @@ class AssetStore:
                 connection.rollback()
                 raise
         return self.get(artifact_id)
+
+    def admit_preview(self, artifact_id: str, policy: str = "technical_preview_v1") -> None:
+        """Admit validated bytes for local use; never writes approval or rights decisions."""
+        if not self.local_preview:
+            raise ValueError("preview admission requires an explicit local-preview store")
+        valid = self.inspect(artifact_id)
+        if not valid.valid:
+            raise ValueError("preview bytes failed immutable validation")
+        with closing(self.database.connect()) as db:
+            record = self.get(artifact_id)
+            current = db.execute(
+                "SELECT artifact_id FROM artifact_selections WHERE owner_scope=? "
+                "AND owner_id=? AND kind=? AND slot_key=?",
+                (
+                    record.identity.owner_scope,
+                    record.identity.owner_id,
+                    record.identity.kind,
+                    record.identity.slot_key,
+                ),
+            ).fetchone()
+            if current and current[0] == artifact_id:
+                self._eligible(db, artifact_id, set())
+                return
+            db.execute(
+                "INSERT OR IGNORE INTO preview_admissions VALUES (?,?,?,?)",
+                (artifact_id, valid.observed_sha256, policy, _now()),
+            )
+            db.commit()
+        self.select(artifact_id)
 
     def eligibility(self, artifact_id: str) -> tuple[bool, str | None]:
         """Read-only gate check for the planner; selection rechecks it under a write lock."""

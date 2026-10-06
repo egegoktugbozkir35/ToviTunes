@@ -51,6 +51,14 @@ music_generation:
   batch_size: 1
   timeout_seconds: 1800
   poll_interval_seconds: 2
+automation:
+  auto_publish: false
+  publish_visibility: private
+  require_human_review: true
+  asr_model: small.en
+  analysis_device: auto
+  allow_model_download: false
+  analysis_version: 1
 creative_llm:
   provider: nvidia
   model: moonshotai/kimi-k3

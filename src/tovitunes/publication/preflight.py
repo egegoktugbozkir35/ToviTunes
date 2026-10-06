@@ -13,6 +13,7 @@ from tovitunes.artifacts.store import ArtifactRecord, AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.models import EpisodePublicationMetadata
+from tovitunes.domain.storyboard import TimedStoryboardV2, parse_storyboard
 from tovitunes.persistence.db import Database
 from tovitunes.publication.rights_policy import (
     evaluate_inherited_rights,
@@ -93,6 +94,15 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
         if row is None:
             raise KeyError(episode_key)
         eid = str(row["episode_id"])
+        storyboard_v2 = None
+        storyboard_id = _selected(db, eid, "timed_storyboard")
+        if storyboard_id:
+            try:
+                storyboard = parse_storyboard(store.read_json(storyboard_id))
+                if isinstance(storyboard, TimedStoryboardV2):
+                    storyboard_v2 = storyboard
+            except (KeyError, ValueError, OSError):
+                pass
         render_id = _selected(db, eid, "final_render")
         manifest_id = _selected(db, eid, "render_manifest")
         qa_id = _selected(db, eid, "media_qa")
@@ -179,11 +189,33 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                     aid,
                 )
                 approval = _latest(db, "approval_decisions", aid)
+                preview_admitted = False
+                content_review_root = aid in {render_id, metadata_id} or rec.identity.kind in {
+                    "audio_master",
+                    "visual_asset_source",
+                    "environment_source_plate",
+                }
+                if storyboard_v2 is not None and (
+                    not config.automation.require_human_review or not content_review_root
+                ):
+                    admission = db.execute(
+                        "SELECT sha256 FROM preview_admissions WHERE artifact_id=?", (aid,)
+                    ).fetchone()
+                    preview_admitted = (
+                        approval not in {"rejected", "needs_review"}
+                        and admission is not None
+                        and admission[0] == rec.sha256
+                        and valid.valid
+                    )
                 add(
                     "approval",
-                    approval == "approved",
+                    approval == "approved" or preview_admitted,
                     "approval" if technical_scope == "technical" else "private",
-                    f"Current approval: {approval or 'missing'}",
+                    (
+                        "Technical/structural admission; content review is a separate gate"
+                        if preview_admitted
+                        else f"Current approval: {approval or 'missing'}"
+                    ),
                     aid,
                 )
                 for dep in db.execute(
@@ -325,7 +357,23 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                         "Selected environment set in render graph",
                         manifest.environment_set_artifact_id,
                     )
-                if manifest.renderer_version == "tovitunes_visual_story_render_v1":
+                if storyboard_v2 is not None:
+                    expected_assets = set(storyboard_v2.asset_artifact_ids.values())
+                    add(
+                        "episode_visual_assets",
+                        expected_assets <= graph,
+                        "technical",
+                        "Episode-scoped visual asset bindings are in the render graph",
+                        storyboard_v2.visual_plan_artifact_id,
+                    )
+                    add(
+                        "episode_environment_binding",
+                        manifest.environment_set_artifact_id
+                        == storyboard_v2.environment_set_artifact_id,
+                        "technical",
+                        "Renderer environment matches the V2 storyboard binding",
+                    )
+                elif manifest.renderer_version == "tovitunes_visual_story_render_v1":
                     lesson = db.execute(
                         "SELECT artifact_id FROM artifact_selections WHERE owner_scope='brand' "
                         "AND owner_id=? AND kind='lesson_object_manifest' LIMIT 1",
@@ -453,6 +501,35 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                 reason,
                 aid,
             )
+
+        if storyboard_v2 is not None and config.automation.require_human_review:
+            required_reviews = {
+                aid
+                for aid, rec in records.items()
+                if aid in {render_id, metadata_id}
+                or rec.identity.kind
+                in {"audio_master", "visual_asset_source", "environment_source_plate"}
+            }
+            for aid in required_reviews:
+                decision = db.execute(
+                    "SELECT status,actor FROM approval_decisions WHERE artifact_id=? "
+                    "ORDER BY rowid DESC LIMIT 1",
+                    (aid,),
+                ).fetchone()
+                human = bool(
+                    decision
+                    and decision[0] == "approved"
+                    and not decision[1].startswith(("machine:", "system:"))
+                )
+                add(
+                    "production_human_review",
+                    human,
+                    "approval",
+                    "Configured human review is current"
+                    if human
+                    else "Human visual/copy review required",
+                    aid,
+                )
 
     technical = all(c.passed for c in checks if c.scope == "technical")
     approval = all(c.passed for c in checks if c.scope == "approval")

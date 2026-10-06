@@ -628,6 +628,18 @@ def test_template_requires_exact_line_mapping_and_red_objects(factory) -> None:
         )
 
 
+def test_generic_handoff_accepts_retained_mp3_without_pilot_provider_pins(factory):
+    config = factory()
+    prepared = plan_handoff(config, *ARGS)
+    from tovitunes.pipeline.production import accept_episode_source
+
+    accepted = accept_episode_source(config, prepared.episode, REQUEST, prepared.source.spec, 3)
+    assert accepted.manifest["schema_version"] == 2
+    assert accepted.manifest["container"] == "mp3"
+    assert accepted.analysis == prepared.source.analysis
+    assert accepted.audio_path.read_bytes() == prepared.source.audio_path.read_bytes()
+
+
 def test_cli_dry_run_and_real_idempotent_command(factory, tmp_path: Path, capsys) -> None:
     config = factory()
     config_path = tmp_path / "config.yaml"

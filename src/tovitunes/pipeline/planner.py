@@ -335,7 +335,9 @@ def load_snapshot(store: AssetStore, episode_id: str) -> PlanSnapshot:
             payload = store.read_json(storyboard_id)
             index: TimedStoryboard | TimedStoryboardIndex
             if isinstance(payload, dict) and "scenes" in payload:
-                index = TimedStoryboard.model_validate(payload)
+                from tovitunes.domain.storyboard import parse_storyboard
+
+                index = parse_storyboard(payload)
                 episode = store.database.get_episode(episode_id)
                 alignment = AudioAlignment.model_validate(
                     store.read_json(index.audio_alignment_artifact_id)

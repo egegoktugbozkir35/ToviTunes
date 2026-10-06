@@ -167,6 +167,139 @@ def _source(
     return AcceptedSource(path, report, spec, manifest, *evaluations)
 
 
+def accept_episode_source(
+    config: RuntimeConfig,
+    episode: Episode,
+    request_id: str,
+    expected: CanonicalMusicSpec,
+    analysis_version: int,
+) -> AcceptedSource:
+    """V2 handoff verifies a generic retained receipt, exact lyrics and machine evidence.
+
+    The frozen Red/Lyria `_source` path above remains independently fail-closed.
+    Rights and subjective approval do not become commercial clearance here.
+    """
+    with closing(Database(config.database_path).connect()) as db:
+        request = db.execute(
+            "SELECT * FROM music_requests WHERE request_id=?", (request_id,)
+        ).fetchone()
+        receipt = db.execute(
+            "SELECT * FROM music_receipts WHERE request_id=?", (request_id,)
+        ).fetchone()
+        output = db.execute(
+            "SELECT * FROM music_outputs WHERE request_id=?", (request_id,)
+        ).fetchone()
+        if request is None or receipt is None or output is None or request["status"] != "succeeded":
+            raise ValueError("generic handoff requires a successful durable request/receipt/output")
+        spec = CanonicalMusicSpec.model_validate_json(request["canonical_spec_json"])
+        if spec != expected or spec.brief.episode_key != episode.external_key:
+            raise ValueError("music request differs from exact selected episode/creative evidence")
+        root = (config.data_root / "music-benchmark").resolve(strict=True)
+        path = (root / output["relative_path"]).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("retained music path escapes its authoritative root")
+        digest = sha256(path.read_bytes()).hexdigest()
+        from tovitunes.music.audio import inspect_audio
+
+        info = inspect_audio(path.read_bytes(), receipt["mime_type"])
+        row = db.execute(
+            "SELECT * FROM music_audio_analysis WHERE blind_id=? AND version=?",
+            (output["blind_id"], analysis_version),
+        ).fetchone()
+        timing_row = db.execute(
+            "SELECT * FROM music_timing WHERE blind_id=? AND version=?",
+            (output["blind_id"], analysis_version),
+        ).fetchone()
+        if row is None or timing_row is None:
+            raise ValueError("generic handoff lacks measured analysis/timing")
+        report = AudioAnalysis.model_validate_json(row["analysis_json"])
+        timing = TimingAnalysis.model_validate_json(timing_row["analysis_json"])
+        if (
+            not request["provider_request_id"]
+            or request["provider_request_id"] != receipt["provider_request_id"]
+            or any(
+                value != digest
+                for value in (
+                    receipt["sha256"],
+                    output["sha256"],
+                    row["audio_sha256"],
+                    report.audio_sha256,
+                    timing.audio_sha256,
+                )
+            )
+            or report.request_id != request_id
+            or row["request_id"] != request_id
+            or report.blind_id != output["blind_id"]
+            or report.version != analysis_version
+            or report.analyzer_config_sha256 != row["analyzer_config_sha256"]
+            or path.stat().st_size != receipt["byte_count"]
+            or info.container != receipt["container"]
+            or info.codec != receipt["codec"]
+            or path.suffix.lower() != "." + receipt["container"]
+            or abs(info.duration_seconds - receipt["duration_seconds"]) > 0.001
+            or report.duration_seconds != receipt["duration_seconds"]
+            or timing != report.timing
+            or report.lyric_comparison.expected_transcript != spec.lyrics.text()
+            or tuple(line.text for line in timing.lyric_lines)
+            != tuple(line.text for line in spec.lyrics.lines)
+        ):
+            raise ValueError("generic audio/receipt/lyrics/analysis/timing identity differs")
+        evaluations = []
+        for subject_type, subject, policy, policy_version, evidence_hash in (
+            (
+                "audio",
+                output["blind_id"],
+                "music_qa",
+                2,
+                sha256(row["analysis_json"].encode()).hexdigest(),
+            ),
+            (
+                "timing",
+                f"{output['blind_id']}:{analysis_version}",
+                "music_timing",
+                1,
+                sha256(canonical_bytes(timing.model_dump(mode="json"))).hexdigest(),
+            ),
+        ):
+            ev = db.execute(
+                "SELECT * FROM music_policy_evaluations WHERE subject_type=? AND subject_id=? "
+                "AND subject_sha256=? AND policy_id=? AND policy_version=? ORDER BY rowid DESC "
+                "LIMIT 1",
+                (subject_type, subject, digest, policy, policy_version),
+            ).fetchone()
+            if ev is None or ev["status"] != "pass" or ev["evaluator_type"] != "machine":
+                raise ValueError(f"generic handoff requires machine {policy} pass")
+            evidence = json.loads(ev["evidence_json"])
+            if evidence.get("analysis_sha256") != evidence_hash:
+                raise ValueError("QA evaluation differs from exact measured analysis")
+            if subject_type == "audio" and (
+                evidence.get("analysis_version") != analysis_version
+                or evidence.get("request_id") != request_id
+                or evidence.get("timing_admission", {}).get("admitted") is not True
+            ):
+                raise ValueError("QA does not admit exact request/timing version")
+            evaluations.append(ev["evaluation_id"])
+        manifest = {
+            "schema_version": 2,
+            "episode_id": episode.episode_id,
+            "provider": request["provider"],
+            "model": request["model"],
+            "local_request_id": request_id,
+            "provider_request_id": request["provider_request_id"],
+            "source_audio_sha256": digest,
+            "source_blind_id": output["blind_id"],
+            "mime_type": receipt["mime_type"],
+            "container": receipt["container"],
+            "analysis_version": analysis_version,
+            "byte_count": receipt["byte_count"],
+            "duration_seconds": report.duration_seconds,
+            "rights": output["rights_status"],
+            "music_approval": output["approval_status"],
+            "qa_evaluation_ids": evaluations,
+        }
+        return AcceptedSource(path, report, spec, manifest, *evaluations)
+
+
 def _episode(
     db: sqlite3.Connection, catalog: BrandCatalog, concept: str, external_key: str
 ) -> tuple[Episode, bool]:
@@ -222,9 +355,12 @@ def _episode(
     return episode, True
 
 
-def extract_alignment(source: AcceptedSource, master_id: str) -> AudioAlignment:
+def extract_alignment(
+    source: AcceptedSource, master_id: str, *, generic: bool = False
+) -> AudioAlignment:
     timing = source.analysis.timing
     return AudioAlignment(
+        schema_version=2 if generic else 1,
         audio_master_artifact_id=master_id,
         audio_sha256=source.analysis.audio_sha256,
         source_blind_id=source.analysis.blind_id,

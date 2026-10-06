@@ -29,7 +29,9 @@ class LeaseStore:
         self.database = database
         self.clock = clock
 
-    def acquire(self, resource_key: str, *, duration_seconds: float) -> Lease:
+    def acquire(
+        self, resource_key: str, *, duration_seconds: float, process_lock: bool = False
+    ) -> Lease:
         if duration_seconds <= 0 or not resource_key:
             raise ValueError("lease requires a resource key and positive duration")
         now = self.clock()
@@ -51,6 +53,12 @@ class LeaseStore:
                     "expires_at = excluded.expires_at",
                     (resource_key, token, now, expiry),
                 )
+                if process_lock:
+                    connection.execute(
+                        "INSERT INTO workflow_process_leases VALUES (?,?) "
+                        "ON CONFLICT(resource_key) DO UPDATE SET owner_token=excluded.owner_token",
+                        (resource_key, token),
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -105,4 +113,3 @@ class LeaseStore:
             except Exception:
                 connection.rollback()
                 raise
-
