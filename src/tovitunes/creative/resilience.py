@@ -1,5 +1,6 @@
-"""Donor ordered/sticky fallback adapted to authoritative durable receipts, without retries."""
+"""Donor retries and ordered/sticky fallback around authoritative durable receipts."""
 
+import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
 from sqlite3 import Row
@@ -33,12 +34,14 @@ class ResilientStructuredGenerator:
         transports: Sequence[ChatTransport],
         *,
         emergency: ChatTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not transports:
             raise ValueError("creative model chain cannot be empty")
         self.database = database
         self.transports = tuple(transports)
         self.emergency = emergency
+        self.sleep = sleep
 
     def _history(self, context: GenerationContext) -> list[Row]:
         # Subject requests have a planning owner; later stages have its reserved episode owner.
@@ -125,6 +128,7 @@ class ResilientStructuredGenerator:
                 fallback_reason=reason,
                 fallback_index=index,
                 previous_attempt_id=previous,
+                retry_sleep=self.sleep,
             )
             try:
                 return generator.generate(model_type, messages, context=context, validate=validate)
@@ -151,7 +155,8 @@ class ResilientStructuredGenerator:
                 category == FailureCategory.STRUCTURED_OUTPUT
                 and terminal["status"] == "succeeded_response_invalid"
                 and terminal["attempt"] == 2
-                and terminal["parent_request_id"] == attempts[0]["request_id"]
+                and terminal["parent_request_id"]
+                in {row["request_id"] for row in attempts if row["attempt"] == 1}
             )
             safe_failed = terminal["status"] == "failed" and stored_failure(terminal) == category
             ambiguous = terminal["status"] == "ambiguous"
@@ -159,7 +164,7 @@ class ResilientStructuredGenerator:
                 raise ProviderError("fallback requires an immutable terminal receipt")
             previous = str(attempts[-1]["request_id"])
             reason = "ambiguous" if ambiguous else category.value
-            if category == FailureCategory.ENDPOINT_UNREACHABLE:
+            if decision.scope is FailureScope.ENDPOINT:
                 if self.emergency is None or transport is self.emergency:
                     raise ProviderError(
                         "endpoint unreachable; local Ollama fallback is disabled", category=category
@@ -187,7 +192,7 @@ def generation_audit(database: Database, episode_id: str) -> list[dict[str, obje
     with closing(database.connect()) as db:
         rows = db.execute(
             "SELECT request_id,provider,model,requested_provider,requested_model,fallback_reason,"
-            "fallback_index,previous_attempt_id,status FROM generation_requests "
+            "fallback_index,previous_attempt_id,retry_index,status FROM generation_requests "
             "WHERE prompt_version IS NOT NULL AND (episode_id=? OR run_id IN "
             "(SELECT run_id FROM creative_runs WHERE episode_id=?)) ORDER BY rowid",
             (episode_id, episode_id),

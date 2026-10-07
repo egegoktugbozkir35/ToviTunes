@@ -72,7 +72,9 @@ def build(database, handler, *, emergency=False, config=None):
         for model in (config.model, *config.fallback_models)
     ]
     ollama = OllamaClient(config.ollama, client=client) if emergency else None
-    return ResilientStructuredGenerator(database, transports, emergency=ollama)
+    return ResilientStructuredGenerator(
+        database, transports, emergency=ollama, sleep=lambda _: None
+    )
 
 
 def run(generator, context):
@@ -175,7 +177,7 @@ def test_explicit_machine_readable_model_unavailable(owner, status):
     assert "offline-secret" not in json.dumps(records(database))
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 429])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
 def test_auth_bad_configuration_and_unclassified_http_fail_closed(owner, status):
     database, context = owner
     calls = []
@@ -230,7 +232,7 @@ def test_empty_ambiguous_abandoned_rejected_then_success(owner, monkeypatch, res
         monkeypatch.setattr(generator, "_history", crash_after_rejection)
         with pytest.raises(SystemExit):
             run(generator, context)
-        assert calls == list(CHAIN[:3])
+        assert calls == [CHAIN[0], *([CHAIN[1]] * 3), CHAIN[2]]
         retained = records(database)
         assert retained[-1]["status"] == "failed"
         assert retained[-1]["error_kind"] == "provider_rejected"
@@ -240,24 +242,27 @@ def test_empty_ambiguous_abandoned_rejected_then_success(owner, monkeypatch, res
     draft = run(generator, context)
     saved = records(database)
     assert draft.model == CHAIN[3] and draft.output.value == 7
-    assert calls == list(CHAIN)
-    assert [r["fallback_index"] for r in saved] == [0, 1, 2, 3]
+    assert calls == [CHAIN[0], *([CHAIN[1]] * 3), CHAIN[2], CHAIN[3]]
+    assert [r["fallback_index"] for r in saved] == [0, 1, 1, 1, 2, 3]
     assert [r["previous_attempt_id"] for r in saved] == [None] + [
         r["request_id"] for r in saved[:-1]
     ]
     assert [r["fallback_reason"] for r in saved] == [
         None,
         "empty_answer",
+        "empty_answer",
+        "empty_answer",
         "ambiguous",
         "provider_rejected",
     ]
     assert saved[: len(retained)] == retained
-    assert saved[1]["status"] == "ambiguous" and saved[2]["status"] == "failed"
+    assert all(r["status"] == "ambiguous" for r in saved[1:4])
+    assert saved[4]["status"] == "failed"
     assert reconciliations.get(saved[1]["request_id"]) is None
     assert run(build(database, lambda r: pytest.fail("resend")), context) == draft
     assert records(database) == saved
     assert run(build(database, handler), replace(context, kind="lyrics")).model == CHAIN[3]
-    assert calls == list(CHAIN) + [CHAIN[3]]
+    assert calls == [CHAIN[0], *([CHAIN[1]] * 3), CHAIN[2], CHAIN[3], CHAIN[3]]
     assert all(
         secret not in json.dumps(saved)
         for secret in ("offline-secret", "raw-provider-body", "signed-url", "Bearer")
@@ -293,7 +298,7 @@ def test_conclusive_provider_rejection_advances_once_and_exhausts(owner, status)
     ],
 )
 @pytest.mark.parametrize("status", [200, 400, 422])
-def test_typed_endpoint_errors_never_advance(owner, code, category, status):
+def test_typed_endpoint_errors_follow_donor_policy(owner, code, category, status):
     database, context = owner
     calls = []
 
@@ -305,7 +310,8 @@ def test_typed_endpoint_errors_never_advance(owner, code, category, status):
         with pytest.raises(ProviderError) as exc:
             run(build(database, handler, emergency=True), context)
         assert exc.value.category.value == category
-    assert len(calls) == 1 and len(records(database)) == 1
+    expected = 12 if category == "rate_limited" else 1
+    assert len(calls) == expected and len(records(database)) == expected
 
 
 @pytest.mark.parametrize("status,category", [(400, "configuration"), (429, "rate_limited")])
@@ -342,7 +348,7 @@ def test_endpoint_error_type_and_numeric_codes_take_priority(owner, body, catego
     with pytest.raises(ProviderError) as exc:
         run(build(database, handler), context)
     assert exc.value.category.value == category
-    assert len(calls) == 1
+    assert len(calls) == (12 if category == "rate_limited" else 1)
 
 
 def test_explicit_model_unavailable_with_generic_request_error_type_advances(owner):
@@ -384,11 +390,11 @@ def test_only_proven_preinteraction_endpoint_error_can_use_ollama(owner, enabled
     if enabled:
         draft = run(generator, context)
         assert draft.provider == "ollama" and draft.model == "qwen3.8:27b-q4_K_M"
-        assert calls == [CHAIN[0], "qwen3.8:27b-q4_K_M"]
+        assert calls == [*([CHAIN[0]] * 4), "qwen3.8:27b-q4_K_M"]
         saved = records(database)
         assert saved[0]["status"] == "failed" and saved[0]["error_kind"] == "endpoint_unreachable"
-        assert saved[1]["fallback_reason"] == "endpoint_unreachable"
-        assert saved[1]["previous_attempt_id"] == saved[0]["request_id"]
+        assert saved[4]["fallback_reason"] == "endpoint_unreachable"
+        assert saved[4]["previous_attempt_id"] == saved[3]["request_id"]
         assert (
             run(build(database, lambda r: pytest.fail("resend"), emergency=True), context) == draft
         )
@@ -399,7 +405,7 @@ def test_only_proven_preinteraction_endpoint_error_can_use_ollama(owner, enabled
         saved = records(database)
         with pytest.raises(ProviderError, match="disabled"):
             run(build(database, handler), context)
-        assert calls == [CHAIN[0]] and records(database) == saved
+        assert calls == [CHAIN[0]] * 4 and records(database) == saved
 
 
 def test_sticky_fallback_survives_new_process_but_stage_receipt_has_priority(owner):
@@ -859,8 +865,11 @@ def test_emergency_invalid_structured_output_has_one_repair_and_no_further_fallb
     for _ in range(2):
         with pytest.raises(ProviderError, match="exhausted"):
             run(build(database, handler, emergency=True), context)
-    assert calls == [CHAIN[0], "qwen3.8:27b-q4_K_M", "qwen3.8:27b-q4_K_M"]
+    assert calls == [*([CHAIN[0]] * 4), "qwen3.8:27b-q4_K_M", "qwen3.8:27b-q4_K_M"]
     assert [r["status"] for r in records(database)] == [
+        "failed",
+        "failed",
+        "failed",
         "failed",
         "succeeded_response_invalid",
         "succeeded_response_invalid",
@@ -908,3 +917,244 @@ def test_tampered_stored_prompt_fails_closed_without_any_new_request(owner, repa
     with pytest.raises(ProviderError, match="contract differs"):
         run(build(database, lambda r: pytest.fail("resend")), context)
     assert records(database) == before
+
+
+@pytest.mark.parametrize("timeout", [1800.0, 7.0])
+def test_factory_honors_generation_timeout_for_entire_nvidia_chain(owner, monkeypatch, timeout):
+    database, context = owner
+    config = CreativeLLMConfig(timeout_seconds=timeout)
+    calls = []
+    original = NvidiaNIMClient
+
+    def handler(request):
+        limits = request.extensions["timeout"]
+        assert limits["connect"] == min(timeout, 15.0)
+        assert limits["read"] == limits["write"] == limits["pool"] == timeout
+        calls.append(json.loads(request.content)["model"])
+        return reply("" if calls[-1] != CHAIN[-1] else '{"value":7}', identity=str(len(calls)))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        "tovitunes.creative.factory.NvidiaNIMClient",
+        lambda config: original(config, client=client),
+    )
+    with creative_generator(database, config) as generator:
+        assert all(t.settings["timeout_seconds"] == timeout for t in generator.transports)
+        assert run(generator, context).model == CHAIN[-1]
+    assert calls == list(CHAIN)
+
+
+@pytest.mark.parametrize(
+    "failure", ["http_server", "read_timeout", "stream_interrupted", "connect", "rate"]
+)
+def test_live_transient_retry_accepts_success_without_fallback(owner, failure):
+    database, context = owner
+    calls, delays = [], []
+
+    class Interrupted(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'data: {"id":"first-remote","choices":[{"delta":{"content":"partial"}}]}\n\n'
+            raise httpx.RemoteProtocolError("offline-secret Bearer signed-url?token=private")
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        if len(calls) == 1:
+            if failure in {"http_server", "rate"}:
+                return httpx.Response(503 if failure == "http_server" else 429)
+            if failure == "stream_interrupted":
+                return httpx.Response(
+                    200, headers={"content-type": "text/event-stream"}, stream=Interrupted()
+                )
+            error = httpx.ConnectTimeout if failure == "connect" else httpx.ReadTimeout
+            raise error("offline-secret Bearer signed-url?token=private", request=request)
+        return reply(identity="retry-success")
+
+    generator = build(database, handler)
+    generator.sleep = delays.append
+    draft = run(generator, context)
+    saved = records(database)
+    assert draft.model == CHAIN[0] and calls == [CHAIN[0], CHAIN[0]]
+    assert delays == [2.0]
+    assert [r["status"] for r in saved] == (
+        ["failed", "succeeded"] if failure in {"connect", "rate"} else ["ambiguous", "succeeded"]
+    )
+    assert saved[1]["request_id"] != saved[0]["request_id"]
+    assert saved[1]["previous_attempt_id"] == saved[0]["request_id"]
+    assert [r["retry_index"] for r in saved] == [0, 1]
+    assert all(r["fallback_index"] == 0 and r["requested_model"] == CHAIN[0] for r in saved)
+    assert draft.local_request_id == saved[1]["request_id"]
+    if failure == "stream_interrupted":
+        assert saved[0]["provider_request_id"] == "first-remote"
+    assert all(
+        secret not in json.dumps(saved) for secret in ("offline-secret", "Bearer", "signed-url")
+    )
+    assert run(build(Database(database.path), lambda r: pytest.fail("resend")), context) == draft
+    assert records(database) == saved
+
+
+@pytest.mark.parametrize(
+    "retry_after,expected", [("4", [4.0, 4.0]), ("31", [2.0, 5.0]), ("invalid", [2.0, 5.0])]
+)
+def test_http_retry_budget_and_donor_retry_after_bound(owner, retry_after, expected):
+    database, context = owner
+    calls, delays = [], []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return (
+            httpx.Response(503, headers={"Retry-After": retry_after}) if len(calls) < 3 else reply()
+        )
+
+    generator = build(database, handler)
+    generator.sleep = delays.append
+    assert run(generator, context).model == CHAIN[0]
+    assert calls == [CHAIN[0]] * 3 and delays == expected
+
+
+def test_transient_retry_exhaustion_advances_without_wrap_or_restart_replay(owner):
+    database, context = owner
+    calls, delays = [], []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        raise httpx.ReadTimeout("offline-secret", request=request)
+
+    generator = build(database, handler)
+    generator.sleep = delays.append
+    with pytest.raises(ProviderError, match="exhausted"):
+        run(generator, context)
+    before = records(database)
+    assert calls == [model for model in CHAIN for _ in range(2)]
+    assert delays == [2.0] * len(CHAIN)
+    with pytest.raises(ProviderError, match="exhausted"):
+        run(build(Database(database.path), lambda r: pytest.fail("historical replay")), context)
+    assert records(database) == before
+
+
+@pytest.mark.parametrize("boundary", ["delay", "started_retry"])
+def test_restart_does_not_retry_historical_ambiguity_at_retry_boundary(
+    owner, monkeypatch, boundary
+):
+    from tovitunes.persistence.requests import CreativeRequestLedger
+
+    database, context = owner
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        raise httpx.ReadTimeout("offline-secret", request=request)
+
+    generator = build(database, handler)
+    if boundary == "delay":
+        generator.sleep = lambda _: (_ for _ in ()).throw(SystemExit("crash during retry delay"))
+    else:
+        start = CreativeRequestLedger.start
+
+        def crash(ledger, request_id):
+            start(ledger, request_id)
+            if ledger.get(request_id)["previous_attempt_id"] is not None:
+                raise SystemExit("crash after retry remote-start marker")
+
+        monkeypatch.setattr(CreativeRequestLedger, "start", crash)
+    with pytest.raises(SystemExit):
+        run(generator, context)
+    before = records(database)
+    if boundary == "started_retry":
+        monkeypatch.setattr(CreativeRequestLedger, "start", start)
+    # Reopen SQLite and reconstruct the runtime, with no in-memory retry permission.
+    new_calls = []
+    draft = run(
+        build(
+            Database(database.path),
+            lambda r: new_calls.append(json.loads(r.content)["model"]) or reply(),
+        ),
+        context,
+    )
+    assert draft.model == CHAIN[1] and new_calls == [CHAIN[1]] and calls == [CHAIN[0]]
+    after = records(database)
+    assert after[0] == before[0]  # Original ambiguous evidence is immutable.
+    if boundary == "started_retry":
+        assert (
+            after[1]["status"] == "ambiguous" and after[1]["request_id"] == before[1]["request_id"]
+        )
+
+
+def test_retry_during_structured_repair_keeps_one_repair_contract(owner):
+    database, context = owner
+    calls, delays = [], []
+
+    def handler(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            return reply("broken", identity="invalid-initial")
+        if len(calls) == 2:
+            raise httpx.ReadTimeout("offline-secret", request=request)
+        return reply(identity="repaired")
+
+    generator = build(database, handler)
+    generator.sleep = delays.append
+    assert run(generator, context).model == CHAIN[0]
+    saved = records(database)
+    assert delays == [2.0] and [r["attempt"] for r in saved] == [1, 2, 2]
+    assert saved[1]["parent_request_id"] == saved[2]["parent_request_id"] == saved[0]["request_id"]
+    assert calls[1]["messages"] == calls[2]["messages"]
+    assert (
+        run(build(Database(database.path), lambda r: pytest.fail("second repair")), context).model
+        == CHAIN[0]
+    )
+    assert records(database) == saved
+
+
+def test_prepared_retry_restart_retains_request_identity_and_spent_budget(owner, monkeypatch):
+    from tovitunes.persistence.requests import CreativeRequestLedger
+
+    database, context = owner
+    calls = []
+    original = CreativeRequestLedger.start
+
+    def crash_before_start(ledger, request_id):
+        if ledger.get(request_id)["retry_index"] == 1:
+            raise SystemExit("prepared retry, no request issued")
+        return original(ledger, request_id)
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        if calls[-1] == CHAIN[0]:
+            raise httpx.ReadTimeout("offline-secret", request=request)
+        return reply(identity="fallback-success")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(CreativeRequestLedger, "start", crash_before_start)
+        with pytest.raises(SystemExit):
+            run(build(database, handler), context)
+    before = records(database)
+    assert before[0]["status"] == "ambiguous" and before[1]["status"] == "prepared"
+    assert before[1]["retry_index"] == 1
+    generator = build(Database(database.path), handler)
+    generator.sleep = lambda _: pytest.fail("spent retry budget reset on restart")
+    assert run(generator, context).model == CHAIN[1]
+    after = records(database)
+    assert calls == [CHAIN[0], CHAIN[0], CHAIN[1]]
+    assert len(after) == 3 and after[0] == before[0]
+    assert after[1]["request_id"] == before[1]["request_id"] and after[1]["status"] == "ambiguous"
+
+
+def test_successful_primary_retry_does_not_spend_next_stage_retry_budget(owner):
+    database, context = owner
+    calls, delays = [], []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        if len(calls) in {1, 3}:
+            raise httpx.ReadTimeout("offline-secret", request=request)
+        return reply(identity=str(len(calls)))
+
+    generator = build(database, handler)
+    generator.sleep = delays.append
+    assert run(generator, context).model == CHAIN[0]
+    generator = build(Database(database.path), handler)
+    generator.sleep = delays.append
+    assert run(generator, replace(context, kind="lyrics")).model == CHAIN[0]
+    assert calls == [CHAIN[0]] * 4 and delays == [2.0, 2.0]
+    assert [r["retry_index"] for r in records(database)] == [0, 1, 0, 1]

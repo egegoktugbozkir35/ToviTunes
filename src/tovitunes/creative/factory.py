@@ -17,13 +17,12 @@ def creative_generator(
     primary: NvidiaNIMClient | None = None,
 ) -> Iterator[ResilientStructuredGenerator]:
     close_primary = primary is None
-    bounded = config.model_copy(update={"timeout_seconds": min(config.timeout_seconds, 120.0)})
-    primary = primary or NvidiaNIMClient(bounded)
+    primary = primary or NvidiaNIMClient(config)
     fallbacks: list[NvidiaNIMClient] = []
     emergency: OllamaClient | None = None
     try:
         for model in config.fallback_models:
-            fallbacks.append(NvidiaNIMClient(bounded.model_copy(update={"model": model})))
+            fallbacks.append(NvidiaNIMClient(config.model_copy(update={"model": model})))
         if config.fallback_to_ollama_on_endpoint_failure:
             emergency = OllamaClient(config.ollama)
         yield ResilientStructuredGenerator(database, [primary, *fallbacks], emergency=emergency)

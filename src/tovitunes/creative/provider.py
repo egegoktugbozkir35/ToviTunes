@@ -10,6 +10,7 @@ from typing import Any, Protocol, TypedDict, TypeVar
 
 from pydantic import BaseModel
 
+from tovitunes.creative.failures import classify_creative_failure
 from tovitunes.errors import (
     CreativeAmbiguity,
     FailureCategory,
@@ -62,17 +63,21 @@ class ChatResponse:
     request_id: str | None = None
 
 
-def http_failure(status: int) -> FailureCategory:
-    """Only a typed model rejection authorizes next-model fallback.
+def http_failure(status: int, *, nvidia_transient: bool = False) -> FailureCategory:
+    """Sanitized HTTP categories; NVIDIA transient failures retain their donor type.
 
     Bare 4xx responses cannot distinguish bad configuration from model rejection.
-    Endpoint throttling and credentials cannot be repaired by changing the model.
+    Credentials fail closed; NVIDIA throttling follows the bounded donor retry policy.
     """
     if status in {401, 403}:
         return FailureCategory.AUTHENTICATION
     if status == 429:
         return FailureCategory.RATE_LIMITED
-    if status >= 500 or status in {408, 409, 425}:
+    if status >= 500:
+        return FailureCategory.HTTP_SERVER if nvidia_transient else FailureCategory.AMBIGUOUS
+    if status == 408:
+        return FailureCategory.READ_TIMEOUT if nvidia_transient else FailureCategory.AMBIGUOUS
+    if status in {409, 425}:
         return FailureCategory.AMBIGUOUS
     return FailureCategory.CONFIGURATION
 
@@ -139,7 +144,7 @@ class StructuredGenerator(Protocol):
 
 
 class DurableStructuredGenerator:
-    """One initial POST and at most one auditable schema/domain repair, never transport retry."""
+    """Durable structured repair, with opt-in donor retries of live NVIDIA failures only."""
 
     def __init__(
         self,
@@ -151,8 +156,10 @@ class DurableStructuredGenerator:
         fallback_reason: str | None = None,
         fallback_index: int = 0,
         previous_attempt_id: str | None = None,
+        retry_sleep: Callable[[float], None] | None = None,
     ) -> None:
         self.ledger = CreativeRequestLedger(database)
+        self.retry_sleep = retry_sleep
         self.transport = transport
         self.audit: RequestAudit = dict(
             requested_provider=requested_provider,
@@ -196,6 +203,7 @@ class DurableStructuredGenerator:
                 messages_json=canonical(enriched),
                 **self.audit,
             )
+        retries = self.ledger.retry_count(context.episode_id, context.run_id, context.kind, digest)
         parent: str | None = None
         current_messages = enriched
         for attempt in (1, 2):
@@ -248,47 +256,8 @@ class DurableStructuredGenerator:
                     category=category,
                 )
             if content is None:
-                if row["status"] != "prepared":
-                    self.ledger.finish(request_id, "ambiguous", error_kind="interrupted")
-                    raise CreativeAmbiguity(self.ledger.get(request_id))
-                self.transport.check_ready()
-                context.assert_owner()
-                self.ledger.start(request_id)
-                try:
-                    response = self.transport.chat(
-                        json.loads(row["messages_json"]),
-                        record_identity=lambda value: self.ledger.identity(request_id, value),
-                    )
-                    # Receipt is persisted before local validation or artifact ingestion.
-                    self.ledger.receipt(request_id, response.content, response.request_id)
-                    content = response.content
-                    context.assert_owner()
-                except Exception as exc:
-                    ambiguous = not isinstance(exc, ProviderError) or exc.ambiguous
-                    self.ledger.finish(
-                        request_id,
-                        "ambiguous" if ambiguous else "failed",
-                        error_kind=(
-                            exc.category.value
-                            if isinstance(exc, ProviderError)
-                            else FailureCategory.AMBIGUOUS.value
-                        ),
-                        error_reason=(
-                            str(exc)
-                            if isinstance(exc, ProviderError)
-                            else "local failure after remote start; reconcile receipt"
-                        ),
-                    )
-                    if not isinstance(exc, ProviderError):
-                        # Retain uncertainty, but a programming/ownership failure cannot
-                        # authorize another external request in this invocation.
-                        raise
-                    if ambiguous:
-                        raise CreativeAmbiguity(
-                            self.ledger.get(request_id),
-                            str(exc) if isinstance(exc, ProviderError) else None,
-                        ) from exc
-                    raise
+                row, content, retries = self._response(row, context, retries)
+                request_id = str(row["request_id"])
             try:
                 result = model_type.model_validate(json.loads(content))
                 if validate is not None:
@@ -333,3 +302,90 @@ class DurableStructuredGenerator:
                 request_id,
             )
         raise AssertionError("bounded structured generation exhausted")
+
+    def _response(
+        self,
+        row: Row,
+        context: GenerationContext,
+        retries: int,
+    ) -> tuple[Row, str, int]:
+        if row["status"] != "prepared":
+            self.ledger.finish(str(row["request_id"]), "ambiguous", error_kind="interrupted")
+            raise CreativeAmbiguity(self.ledger.get(str(row["request_id"])))
+        while True:
+            request_id = str(row["request_id"])
+            self.transport.check_ready()
+            context.assert_owner()
+            self.ledger.start(request_id)
+            try:
+                response = self.transport.chat(
+                    json.loads(row["messages_json"]),
+                    record_identity=lambda value: self.ledger.identity(request_id, value),
+                )
+                # Receipt is persisted before local validation or artifact ingestion.
+                self.ledger.receipt(request_id, response.content, response.request_id)
+                content = response.content
+                context.assert_owner()
+            except Exception as exc:
+                ambiguous = not isinstance(exc, ProviderError) or exc.ambiguous
+                self.ledger.finish(
+                    request_id,
+                    "ambiguous" if ambiguous else "failed",
+                    error_kind=(
+                        exc.category.value
+                        if isinstance(exc, ProviderError)
+                        else FailureCategory.AMBIGUOUS.value
+                    ),
+                    error_reason=(
+                        str(exc)
+                        if isinstance(exc, ProviderError)
+                        else "local failure after remote start; reconcile receipt"
+                    ),
+                )
+                if not isinstance(exc, ProviderError):
+                    # Retain uncertainty, but a programming/ownership failure cannot
+                    # authorize another external request in this invocation.
+                    raise
+                decision = classify_creative_failure(exc)
+                # Only this live exception authorizes a fresh request. Stored failures
+                # are handled above and never enter this retry loop after a restart.
+                if (
+                    self.retry_sleep is not None
+                    and self.transport.provider_name == "nvidia"
+                    and retries < len(decision.retry_delays)
+                ):
+                    delay = decision.retry_delays[retries]
+                    if decision.retry_after is not None and 0 <= decision.retry_after <= 30.0:
+                        delay = decision.retry_after
+                    self.retry_sleep(delay)
+                    retries += 1
+                    context.assert_owner()
+                    self.transport.check_ready()
+                    row = self.ledger.prepare_creative(
+                        episode_id=context.episode_id,
+                        run_id=context.run_id,
+                        kind=row["kind"],
+                        provider=row["provider"],
+                        model=row["model"],
+                        prompt_version=row["prompt_version"],
+                        input_fingerprint=row["input_fingerprint"],
+                        messages_json=row["messages_json"],
+                        attempt=row["attempt"],
+                        parent_request_id=row["parent_request_id"],
+                        retry_index=retries,
+                        **(
+                            self.audit
+                            | {
+                                "previous_attempt_id": request_id,
+                            }
+                        ),
+                    )
+                    continue
+                if ambiguous:
+                    raise CreativeAmbiguity(
+                        self.ledger.get(request_id),
+                        str(exc),
+                        category=exc.category,
+                    ) from exc
+                raise
+            return self.ledger.get(request_id), content, retries

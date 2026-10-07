@@ -240,8 +240,8 @@ def test_creative_ambiguity_advances_without_reconciliation(owner, monkeypatch):
         run(generator, context)
     retained = records(database)
     draft = run(build(Database(database.path), handler), context)
-    assert draft.model == CHAIN[3] and calls == list(CHAIN)
-    assert records(database)[:3] == retained
+    assert draft.model == CHAIN[3] and calls == [CHAIN[0], *([CHAIN[1]] * 3), CHAIN[2], CHAIN[3]]
+    assert records(database)[: len(retained)] == retained
     with closing(database.connect()) as db:
         assert (
             db.execute("SELECT count(*) FROM creative_request_reconciliations").fetchone()[0] == 0

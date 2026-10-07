@@ -189,9 +189,24 @@ class CreativeRequestLedger:
                 Row | None,
                 db.execute(
                     "SELECT * FROM generation_requests WHERE episode_id IS ? AND run_id IS ? "
-                    "AND kind=? AND input_fingerprint=? AND prompt_version IS NOT NULL",
+                    "AND kind=? AND input_fingerprint=? AND prompt_version IS NOT NULL "
+                    "ORDER BY rowid DESC LIMIT 1",
                     (episode_id, run_id, kind, fingerprint),
                 ).fetchone(),
+            )
+
+    def retry_count(
+        self, episode_id: str | None, run_id: str | None, kind: str, fingerprint: str
+    ) -> int:
+        # A prepared runtime retry may resume, but it retains its already spent budget.
+        with closing(self.database.connect()) as db:
+            return int(
+                db.execute(
+                    "SELECT coalesce(max(retry_index),0) FROM generation_requests "
+                    "WHERE episode_id IS ? AND run_id IS ? AND kind IN (?,?) "
+                    "AND input_fingerprint=?",
+                    (episode_id, run_id, kind, kind + "_repair", fingerprint),
+                ).fetchone()[0]
             )
 
     def prepare_creative(
@@ -212,6 +227,7 @@ class CreativeRequestLedger:
         fallback_reason: str | None = None,
         fallback_index: int = 0,
         previous_attempt_id: str | None = None,
+        retry_index: int = 0,
     ) -> Row:
         request_id, now = str(uuid4()), datetime.now(UTC).isoformat()
         family = kind.removesuffix("_repair")
@@ -240,8 +256,8 @@ class CreativeRequestLedger:
                     "INSERT INTO generation_requests (request_id,episode_id,run_id,kind,slot_key,"
                     "provider,model,prompt_version,input_fingerprint,status,attempt,parent_request_id,"
                     "messages_json,created_at,updated_at,requested_provider,requested_model,"
-                    "fallback_reason,fallback_index,previous_attempt_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "fallback_reason,fallback_index,previous_attempt_id,retry_index) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         request_id,
                         episode_id,
@@ -263,6 +279,7 @@ class CreativeRequestLedger:
                         fallback_reason,
                         fallback_index,
                         previous_attempt_id,
+                        retry_index,
                     ),
                 )
                 db.commit()
