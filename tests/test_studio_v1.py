@@ -240,7 +240,7 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
     )
 
     class Workflow:
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             assert target == ProductionTarget.PUBLISH
             gate.wait(5)
             return {

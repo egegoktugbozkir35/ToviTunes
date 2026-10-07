@@ -3,7 +3,10 @@
 import json
 import socket
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
+from pathlib import Path
 
 import httpx
 import pytest
@@ -13,11 +16,14 @@ from test_studio_v1 import wait
 
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.fake import FakeNIMTransport
+from tovitunes.creative.service import CreativeService
+from tovitunes.errors import ExecutionOwnershipLostError
 from tovitunes.orchestrator import ProductionReference, build_orchestrator
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import CreativeRequestLedger
 from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.web import app as web_app
+from tovitunes.web.jobs import JobManager
 
 
 @pytest.fixture
@@ -298,7 +304,7 @@ def test_studio_recovery_uses_job_identity_and_preserves_it_after_worker_error(
     references = []
 
     class Workflow:
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             return {"status": "FAILED", "episode_key": episode_key, "run_id": "saved-run"}
 
         def resume(self, reference, target):
@@ -328,7 +334,7 @@ def test_studio_recovery_without_identity_cannot_call_generate(production, monke
     config, _ = production
 
     class Workflow:
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             return {"status": "FAILED"}
 
     monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: Workflow())
@@ -340,3 +346,184 @@ def test_studio_recovery_without_identity_cannot_call_generate(production, monke
         assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 409
         assert snapshot(Database(config.database_path))["creative_runs"] == []
     app.state.jobs.close()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, ExecutionOwnershipLostError])
+def test_initial_studio_exception_retains_run_and_receipt_across_restart(
+    production, monkeypatch, failure
+):
+    config, database = production
+    historical = exhaust(production)["run_id"]
+    before = snapshot(database)
+    calls = []
+    flow = build_orchestrator(config, creative_provider=build(database, successful_handler(calls)))
+    monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: flow)
+    original = CreativeService._reserve_brief
+
+    def fail(*a, **k):
+        raise failure("Bearer secret signed-url")
+
+    monkeypatch.setattr(CreativeService, "_reserve_brief", fail)
+    app = web_app.create_app(config)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        job_id = client.post("/api/studio/create", json={"target": "draft"}).json()["job_id"]
+        job = wait(app.state.jobs, job_id)
+        assert job.status == "failed" and job.result is None and job.episode_key is None
+        reference = job.recovery_reference
+        assert reference and reference.run_id and reference.run_id != historical
+        payload = client.get(f"/api/jobs/{job_id}").json()
+        assert len(payload["creative_diagnostics"]["attempts"]) == 1
+        assert all(
+            secret not in json.dumps(payload) for secret in ("Bearer", "secret", "signed-url")
+        )
+    app.state.jobs.close()
+    retained = snapshot(database)
+    assert calls == [CHAIN[0]]
+    root = retained["generation_requests"][-1]
+    assert root["run_id"] == reference.run_id and root["status"] == "succeeded"
+    for table, rows in before.items():
+        assert retained[table][: len(rows)] == rows
+
+    app = web_app.create_app(config)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        # A failing recovery worker keeps the dedicated identity even without a result.
+        assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
+        assert wait(app.state.jobs, job_id).recovery_reference == reference
+        assert snapshot(database) == retained and calls == [CHAIN[0]]
+        monkeypatch.setattr(CreativeService, "_reserve_brief", original)
+        assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
+        recovered = wait(app.state.jobs, job_id)
+        assert recovered.status == "complete" and recovered.recovery_reference == reference
+        assert recovered.result["run_id"] == reference.run_id
+        after = snapshot(database)
+        assert after["production_requests"] == retained["production_requests"]
+        assert (
+            after["generation_requests"][: len(retained["generation_requests"])]
+            == retained["generation_requests"]
+        )
+        assert calls == [CHAIN[0]] * 4  # Original subject receipt plus three new draft requests.
+    app.state.jobs.close()
+
+
+@pytest.mark.parametrize("boundary", ["reserved", "intent", "identity", "committed"])
+def test_process_death_at_reservation_boundaries_is_atomic_and_restart_safe(production, boundary):
+    config, database = production
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("offline_reservation_process.py")),
+            str(config.database_path),
+            str(config.data_root),
+            str(config.brand_root),
+            boundary,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    assert completed.returncode == 73, completed.stderr
+    state = snapshot(database)
+    jobs = JobManager(Database(config.database_path))
+    try:
+        job = jobs.list()[0]
+        assert job.status == "interrupted"
+        assert state["generation_requests"] == []
+        if boundary == "committed":
+            assert len(state["creative_runs"]) == len(state["production_requests"]) == 1
+            assert job.recovery_reference == ProductionReference(
+                run_id=state["creative_runs"][0]["run_id"]
+            )
+            # Emulate the dead process's lease expiry; never bypass a live owner in production.
+            with closing(database.connect()) as db:
+                db.execute(
+                    "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+                )
+                db.commit()
+            calls = []
+            resumed = build_orchestrator(
+                config, creative_provider=build(database, successful_handler(calls))
+            ).resume(job.recovery_reference, ProductionTarget.DRAFT)
+            assert resumed["run_id"] == job.recovery_reference.run_id
+            assert snapshot(database)["production_requests"] == state["production_requests"]
+        else:
+            assert job.recovery_reference is None
+            assert state["creative_runs"] == state["production_requests"] == []
+    finally:
+        jobs.close()
+
+
+@pytest.mark.parametrize("boundary", ["intent", "identity"])
+def test_failed_reservation_persistence_rolls_back_before_provider_effect(production, boundary):
+    config, database = production
+    calls = []
+    flow = build_orchestrator(config, creative_provider=build(database, successful_handler(calls)))
+    if boundary == "intent":
+        with closing(database.connect()) as db:
+            db.execute(
+                "CREATE TRIGGER reject_intent BEFORE INSERT ON production_requests "
+                "BEGIN SELECT RAISE(ABORT, 'offline intent failure'); END"
+            )
+            db.commit()
+
+    def reject_identity(db, reference):
+        assert reference.run_id
+        assert db.execute("SELECT count(*) FROM production_requests").fetchone()[0] == 1
+        raise RuntimeError("offline job persistence failure")
+
+    with pytest.raises((RuntimeError, sqlite3.IntegrityError)):
+        flow.generate(ProductionTarget.DRAFT, retain_reservation=reject_identity)
+    assert calls == []
+    assert all(not rows for rows in snapshot(database).values())
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"run_id": " "}, {"episode_key": ""}, {"run_id": "pending", "episode_key": "other"}],
+)
+def test_creative_preparation_requires_explicit_identity_without_adoption(production, fields):
+    config, database = production
+    exhaust(production)
+    before = snapshot(database)
+    service = CreativeService(
+        config, build(database, lambda _: pytest.fail("provider effect")), assert_owner=lambda: None
+    )
+    with pytest.raises(ValueError):
+        service.prepare(**fields)
+    with pytest.raises(ValueError):
+        service._run(None)
+    assert snapshot(database) == before
+
+
+def test_pre_episode_resume_history_identifies_named_run(production):
+    config, database = production
+    run_id = exhaust(production)["run_id"]
+    build_orchestrator(
+        config, creative_provider=build(database, lambda _: pytest.fail("replay"))
+    ).resume(ProductionReference(run_id=run_id), ProductionTarget.DRAFT)
+    with closing(database.connect()) as db:
+        diagnostic = db.execute(
+            "SELECT * FROM production_runs ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert diagnostic["operation"] == "resume" and diagnostic["episode_key"] == run_id
+
+
+def test_studio_identity_write_failure_aborts_reservation_without_effect(production, monkeypatch):
+    config, database = production
+    calls = []
+    flow = build_orchestrator(config, creative_provider=build(database, successful_handler(calls)))
+    monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: flow)
+    with closing(database.connect()) as db:
+        db.execute(
+            "CREATE TRIGGER reject_studio_identity BEFORE UPDATE ON studio_jobs "
+            "WHEN json_extract(NEW.payload_json,'$.recovery_reference.run_id') IS NOT NULL "
+            "BEGIN SELECT RAISE(ABORT, 'offline identity persistence failure'); END"
+        )
+        db.commit()
+    app = web_app.create_app(config)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        job_id = client.post("/api/studio/create", json={"target": "draft"}).json()["job_id"]
+        job = wait(app.state.jobs, job_id)
+        assert job.status == "failed" and job.recovery_reference is None
+        assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 409
+    app.state.jobs.close()
+    assert calls == [] and all(not rows for rows in snapshot(database).values())

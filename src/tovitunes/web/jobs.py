@@ -8,12 +8,14 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import UTC, datetime
+from sqlite3 import Connection
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from tovitunes.errors import ChannelMismatch
+from tovitunes.orchestrator import ProductionReference
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.targets import ProductionTarget, steps_for
 from tovitunes.progress import PipelineProgress
@@ -37,6 +39,7 @@ class Job(BaseModel):
     error: str | None = None
     error_category: str | None = None
     result: dict[str, Any] | None = None
+    recovery_reference: ProductionReference | None = None
     execution: int = 1
     target: ProductionTarget | None = None
     current_stage: str | None = None
@@ -94,7 +97,16 @@ class JobManager:
     def _save(self, job: Job) -> None:
         try:
             if self.database:
-                with closing(self.database.connect()) as db:
+                with closing(self.database.connect()) as db, db:
+                    db.execute("BEGIN IMMEDIATE")
+                    saved = db.execute(
+                        "SELECT payload_json FROM studio_jobs WHERE job_id=?", (job.job_id,)
+                    ).fetchone()
+                    if saved:
+                        # The reservation transaction may have retained identity while this
+                        # diagnostic in-memory projection still predates that commit.
+                        retained = Job.model_validate_json(saved[0]).recovery_reference
+                        job.recovery_reference = retained or job.recovery_reference
                     db.execute(
                         "INSERT INTO studio_jobs VALUES (?,?) ON CONFLICT(job_id) DO "
                         "UPDATE SET payload_json=excluded.payload_json",
@@ -103,6 +115,32 @@ class JobManager:
                     db.commit()
         except Exception:
             logging.getLogger(__name__).exception("diagnostic job persistence failed")
+
+    def retain_reservation(self, db: Connection, reference: ProductionReference) -> None:
+        """Bind only the active job's explicit identity in Orchestrator's reservation commit.
+
+        Unlike best-effort progress, failure here must abort reservation before any provider call.
+        Do not mutate memory before commit: rollback/process exit must leave no false identity.
+        """
+        if self.database is None or self._active is None:
+            raise RuntimeError("Production reservation requires a persisted active job")
+        from pathlib import Path
+
+        if Path(db.execute("PRAGMA database_list").fetchone()[2]).resolve() != self.database.path:
+            raise RuntimeError("Production and job persistence must share one database")
+        row = db.execute(
+            "SELECT payload_json FROM studio_jobs WHERE job_id=?", (self._active,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Active job has no durable recovery record")
+        job = Job.model_validate_json(row[0])
+        if job.recovery_reference is not None:
+            raise RuntimeError("Job already names a production")
+        job.recovery_reference = reference
+        db.execute(
+            "UPDATE studio_jobs SET payload_json=? WHERE job_id=?",
+            (job.model_dump_json(), job.job_id),
+        )
 
     def submit(
         self,
@@ -126,6 +164,7 @@ class JobManager:
                 target=target,
                 # Keep the safe recovery identity if this worker fails before returning a result.
                 result=previous.result if previous else None,
+                recovery_reference=previous.recovery_reference if previous else None,
                 steps=list(steps_for(target)) if target else [],
                 total_steps=len(steps_for(target)) if target else 0,
             )

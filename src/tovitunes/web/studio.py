@@ -235,7 +235,7 @@ def studio_router(
             return safe_production_result(
                 flow.resume(reference=reference, target=target)
                 if reference is not None
-                else flow.generate(target)
+                else flow.generate(target, retain_reservation=jobs.retain_reservation)
             )
 
         try:
@@ -279,7 +279,9 @@ def studio_router(
             or job.status in {"queued", "running"}
         ):
             raise HTTPException(409, "Task cannot be resumed")
-        if job.episode_key:
+        if job.recovery_reference is not None:
+            reference = job.recovery_reference
+        elif job.episode_key:
             reference = ProductionReference(episode_key=job.episode_key)
         else:
             run_id = (job.result or {}).get("run_id")

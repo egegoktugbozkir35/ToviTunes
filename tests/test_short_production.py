@@ -840,7 +840,7 @@ def test_cli_frontends_use_application_service(case, monkeypatch, capsys, comman
         def __init__(self, config, **kwargs):
             pass
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "READY"}
 
@@ -884,7 +884,7 @@ def test_web_frontend_plan_and_confirmation(case, monkeypatch):
             calls.append(("resume", key, target))
             return {"status": "PENDING_PROVIDER", "episode_key": key, "current_stage": "MUSIC"}
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "NEEDS_REVIEW"}
 

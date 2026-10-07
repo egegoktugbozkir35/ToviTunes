@@ -215,7 +215,9 @@ def create_app(
         return submit(
             "short_production",
             None,
-            lambda: production_workflow().generate(ProductionTarget.PUBLISH),
+            lambda: production_workflow().generate(
+                ProductionTarget.PUBLISH, retain_reservation=jobs.retain_reservation
+            ),
         )
 
     @app.post("/api/episodes/{episode_key}/produce")

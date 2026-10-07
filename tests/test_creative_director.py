@@ -72,7 +72,7 @@ def candidate(**updates):
 
 def test_end_to_end_generates_pinned_selected_creative_only(workflow):
     flow, fake = workflow
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     assert result["episode_key"].startswith("big-and-small-")
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
     episode = flow.database.get_episode(result["episode_id"])
@@ -152,7 +152,7 @@ def test_live_cli_contract_through_mock_nim_creates_nvidia_provenance(
 
 def test_same_run_and_episode_resume_make_no_more_calls(workflow):
     flow, fake = workflow
-    first = flow.prepare()
+    first = flow.prepare(run_id=flow.reserve_next_run())
     second = flow.prepare(run_id=first["run_id"])
     third = flow.prepare(episode_key=first["episode_key"])
     assert len(fake.calls) == 4
@@ -181,11 +181,12 @@ def test_interrupted_after_selected_stage_resumes_only_missing_work(
         return original_generate(model_type, messages, **kwargs)
 
     monkeypatch.setattr(flow.provider, "generate", interrupted)
+    run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
-        flow.prepare()
+        flow.prepare(run_id=run_id)
     before = len(fake.calls)
     monkeypatch.setattr(flow.provider, "generate", original_generate)
-    flow.prepare()
+    flow.prepare(run_id=run_id)
     assert fake.calls[before:] == expected
 
 
@@ -199,11 +200,12 @@ def test_crash_after_remote_receipt_before_artifact_ingest_reuses_it(workflow, m
         return original(*args, **kwargs)
 
     monkeypatch.setattr(flow.store, "ingest", interrupt)
+    run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
-        flow.prepare()
+        flow.prepare(run_id=run_id)
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec"]
     monkeypatch.setattr(flow.store, "ingest", original)
-    flow.prepare()
+    flow.prepare(run_id=run_id)
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
 
@@ -219,11 +221,12 @@ def test_crash_after_ingest_before_selection_reuses_same_artifact(workflow, monk
         original(service, artifact_id)
 
     monkeypatch.setattr(CreativeDraftService, "select_structural", interrupt)
+    run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
-        flow.prepare()
+        flow.prepare(run_id=run_id)
     lyric_id = observed[-1]
     monkeypatch.setattr(CreativeDraftService, "select_structural", original)
-    result = flow.prepare()
+    result = flow.prepare(run_id=run_id)
     assert result["lyrics_artifact_id"] == lyric_id and len(fake.calls) == 4
 
 
@@ -235,23 +238,25 @@ def test_crash_after_subject_reservation_recovers_same_episode_without_subject_p
     monkeypatch.setattr(
         flow.database, "create_episode", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
     )
+    run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
-        flow.prepare()
+        flow.prepare(run_id=run_id)
     with flow.database.connect() as db:
         reserved = json.loads(
             db.execute("SELECT reserved_episode_json FROM creative_runs").fetchone()[0]
         )
     monkeypatch.setattr(flow.database, "create_episode", original)
-    result = flow.prepare()
+    result = flow.prepare(run_id=run_id)
     assert result["episode_id"] == reserved["episode_id"] and fake.calls.count("TopicPool") == 1
 
 
 def test_ambiguous_subject_is_never_restarted(workflow):
     flow, fake = workflow
     fake.responses["TopicPool"] = [ProviderError("timeout", ambiguous=True)]
+    run_id = flow.reserve_next_run()
     for _ in range(2):
         with pytest.raises(ProviderError):
-            flow.prepare()
+            flow.prepare(run_id=run_id)
     assert fake.calls == ["TopicPool"]
     with flow.database.connect() as db:
         assert db.execute("SELECT count(*) FROM episodes").fetchone()[0] == 0
@@ -272,7 +277,7 @@ def test_curriculum_exhaustion_does_not_limit_new_editorial_subjects(workflow):
         flow.database.create_episode(
             flow.catalog, Episode.create(flow.catalog, c.concept_id, c.concept_id)
         )
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     assert flow.database.get_episode(result["episode_id"]).subject == "Big and small"
     assert fake.calls[0] == "TopicPool"
 
@@ -314,8 +319,8 @@ def test_lexical_paraphrase_does_not_evade_treatment_check():
 
 def test_next_fresh_run_excludes_previous_selected_concept(workflow):
     flow, fake = workflow
-    first = flow.prepare()
-    second = flow.prepare()
+    first = flow.prepare(run_id=flow.reserve_next_run())
+    second = flow.prepare(run_id=flow.reserve_next_run())
     assert first["episode_id"] != second["episode_id"]
     assert flow.database.get_episode(second["episode_id"]).subject == "Name a leaf"
     assert fake.calls.count("TopicPool") == 2
@@ -337,7 +342,7 @@ def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monke
         return result
 
     monkeypatch.setattr(fake, "chat", chat)
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     assert fake.calls.count("EpisodeSpec") == 2 and result["provider_calls"]["repair"] == 1
     with flow.database.connect() as db:
         saved = db.execute(
@@ -353,9 +358,10 @@ def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monke
 def test_invalid_episode_spec_repair_remains_failed_closed(workflow):
     flow, fake = workflow
     fake.responses["EpisodeSpec"] = ["{}", "{}"]
+    run_id = flow.reserve_next_run()
     for _ in range(2):
         with pytest.raises(StructuredOutputError):
-            flow.prepare()
+            flow.prepare(run_id=run_id)
     assert fake.calls == ["TopicPool", "EpisodeSpec", "EpisodeSpec"]
 
 
@@ -394,9 +400,10 @@ def test_all_bad_candidates_get_bounded_durable_subject_rounds(workflow):
     )
     pool = TopicPool(candidates=(bad,) * 3)
     fake.responses["TopicPool"] = [pool.model_dump_json()] * 3
+    run_id = flow.reserve_next_run()
     for _ in range(2):
         with pytest.raises(ValueError, match="TOPIC_POOLS_EXHAUSTED"):
-            flow.prepare()
+            flow.prepare(run_id=run_id)
     assert fake.calls == ["TopicPool"] * 3
 
 
@@ -485,7 +492,7 @@ def test_music_brief_pins_duration_and_moderate_tempo(workflow):
 
 def test_curriculum_machine_approval_does_not_overwrite_human_rejection(workflow):
     flow, _ = workflow
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     service = CreativeDraftService(flow.store, flow.generated, FakeDraftGenerator())
     service.review_objective(result["episode_id"], "rejected", actor="human", reason="hold")
     with pytest.raises(PermissionError, match="escalation"):
