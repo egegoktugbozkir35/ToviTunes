@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -31,6 +32,21 @@ from tovitunes.services.visual import VisualService
 
 ServiceFactory = Callable[[ProductionExecutionOwnership, Callable[[str, str], None]], StageContext]
 PublisherFactory = Callable[[ProductionExecutionOwnership], PublicationService]
+
+
+@dataclass(frozen=True)
+class ProductionReference:
+    """Explicit identity of one production to continue, including before episode reservation."""
+
+    episode_key: str | None = None
+    run_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.episode_key is None) == (self.run_id is None):
+            raise ValueError("Exactly one of episode_key or run_id is required")
+        identity = self.episode_key if self.episode_key is not None else self.run_id
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("Production identity must be a nonempty string")
 
 
 class Orchestrator:
@@ -74,17 +90,28 @@ class Orchestrator:
         return self._execute("generate", None, target)
 
     def resume(
-        self, episode_key: str, target: ProductionTarget = ProductionTarget.RENDER
+        self,
+        reference: ProductionReference | str,
+        target: ProductionTarget = ProductionTarget.RENDER,
     ) -> dict[str, Any]:
-        return self._execute("resume", episode_key, target)
+        if isinstance(reference, str):
+            reference = ProductionReference(episode_key=reference)
+        if not isinstance(reference, ProductionReference):
+            raise TypeError("Resume requires an explicit production reference")
+        return self._execute("resume", reference, target)
 
-    def _execute(self, operation: str, key: str | None, target: ProductionTarget) -> dict[str, Any]:
+    def _execute(
+        self, operation: str, reference: ProductionReference | None, target: ProductionTarget
+    ) -> dict[str, Any]:
         self._milestone_percent = 0
         self.database.migrate()
         history = RunHistory(self.database)
-        with ProductionExecutionOwnership(self.database, operation=operation, item_id=key) as owner:
+        key = reference.episode_key if reference else None
+        run_id = reference.run_id if reference else None
+        with ProductionExecutionOwnership(
+            self.database, operation=operation, item_id=key or run_id
+        ) as owner:
             diagnostic_id = history.start(operation, target.value, key)
-            run_id: str | None = None
             creative_result: dict[str, Any] = {}
             stage = "CREATIVE"
             services: dict[str, StageContext] = {}
@@ -98,49 +125,36 @@ class Orchestrator:
                 return services[name]
 
             try:
-                if key is None:
-                    # Intent records contain identity only. Completion is computed from facts.
+                if reference is not None and run_id is not None:
+                    # Resolve only the requested run. A bound episode uses normal continuation.
                     with closing(self.database.connect()) as db:
-                        intents = db.execute(
-                            "SELECT p.run_id,p.target,e.external_key FROM production_requests p "
-                            "JOIN creative_runs c ON c.run_id=p.run_id "
-                            "LEFT JOIN episodes e ON e.episode_id=c.episode_id ORDER BY "
-                            "p.rowid DESC"
-                        ).fetchall()
-                    for intent in intents:
-                        saved_key = intent["external_key"]
-                        saved_target = ProductionTarget(intent["target"])
-                        if saved_key and plan_continuation(
-                            self.config, saved_key, target=saved_target
-                        ).get("historical"):
-                            continue
-                        if (
-                            saved_key is None
-                            or not plan_continuation(self.config, saved_key, target=saved_target)[
-                                "target_complete"
-                            ]
-                        ):
-                            run_id, key = intent["run_id"], saved_key
-                            break
-                    if key is None:
-                        with service("context")._creative() as creative:
-                            if run_id is None:
-                                run_id = creative.reserve_next_run()
-                                owner.assert_owned()
-                                with closing(self.database.connect()) as db:
-                                    db.execute(
-                                        "INSERT INTO production_requests VALUES (?,?,?,?)",
-                                        (
-                                            str(uuid4()),
-                                            run_id,
-                                            target.value,
-                                            datetime.now(UTC).isoformat(),
-                                        ),
-                                    )
-                                    db.commit()
-                            generated = creative.prepare(run_id=run_id)
-                            key = str(generated["episode_key"])
-                            creative_result = generated
+                        saved = db.execute(
+                            "SELECT e.external_key FROM creative_runs c "
+                            "LEFT JOIN episodes e ON e.episode_id=c.episode_id WHERE c.run_id=?",
+                            (run_id,),
+                        ).fetchone()
+                    if saved is None:
+                        raise KeyError(f"unknown creative run: {run_id}")
+                    key = saved["external_key"]
+                if key is None:
+                    with service("context")._creative() as creative:
+                        if reference is None:
+                            run_id = creative.reserve_next_run()
+                            owner.assert_owned()
+                            with closing(self.database.connect()) as db:
+                                db.execute(
+                                    "INSERT INTO production_requests VALUES (?,?,?,?)",
+                                    (
+                                        str(uuid4()),
+                                        run_id,
+                                        target.value,
+                                        datetime.now(UTC).isoformat(),
+                                    ),
+                                )
+                                db.commit()
+                        assert run_id is not None
+                        creative_result = creative.prepare(run_id=run_id)
+                        key = str(creative_result["episode_key"])
                 assert key is not None
                 # Recompute after acquiring ownership, then before every effect.
                 plan = plan_continuation(self.config, key, target=target)

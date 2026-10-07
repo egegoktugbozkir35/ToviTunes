@@ -16,7 +16,7 @@ from tovitunes.creative.learning import LearningBrief
 from tovitunes.creative.service import episode_by_key
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.errors import FailureCategory
-from tovitunes.orchestrator import Orchestrator
+from tovitunes.orchestrator import Orchestrator, ProductionReference
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.targets import ProductionTarget
@@ -226,17 +226,25 @@ def studio_router(
     router = APIRouter(prefix="/api/studio")
 
     def submit(
-        target: ProductionTarget, key: str | None, resume_job_id: str | None = None
+        target: ProductionTarget,
+        reference: ProductionReference | None,
+        resume_job_id: str | None = None,
     ) -> dict[str, Any]:
         def runner() -> dict[str, Any]:
             flow = workflow()
             return safe_production_result(
-                flow.resume(key, target) if key else flow.generate(target)
+                flow.resume(reference=reference, target=target)
+                if reference is not None
+                else flow.generate(target)
             )
 
         try:
             return jobs.submit(
-                "studio", key, runner, target=target, resume_job_id=resume_job_id
+                "studio",
+                reference.episode_key if reference else None,
+                runner,
+                target=target,
+                resume_job_id=resume_job_id,
             ).model_dump()
         except JobBusy as exc:
             raise HTTPException(409, "Another production task is active") from exc
@@ -252,7 +260,7 @@ def studio_router(
             episode_by_key(Database(config.database_path), key)
         except KeyError as exc:
             raise HTTPException(404, "Episode unavailable") from exc
-        return submit(action.target, key)
+        return submit(action.target, ProductionReference(episode_key=key))
 
     @router.get("/library")
     def get_library() -> list[dict[str, Any]]:
@@ -271,8 +279,15 @@ def studio_router(
             or job.status in {"queued", "running"}
         ):
             raise HTTPException(409, "Task cannot be resumed")
-        # The worker recomputes durable continuation inside resume/generate under the lease.
-        return submit(job.target, job.episode_key, job.job_id)
+        if job.episode_key:
+            reference = ProductionReference(episode_key=job.episode_key)
+        else:
+            run_id = (job.result or {}).get("run_id")
+            if not isinstance(run_id, str) or not run_id.strip():
+                raise HTTPException(409, "Task has no retained production identity to resume")
+            reference = ProductionReference(run_id=run_id)
+        # The worker recomputes this exact production's continuation under the lease.
+        return submit(job.target, reference, job.job_id)
 
     @router.post("/jobs/{job_id}/stop")
     def stop(job_id: str) -> dict[str, Any]:

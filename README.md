@@ -24,6 +24,8 @@ render = app.resume(draft["episode_key"], ProductionTarget.RENDER)
 
 Advanced CLI aliases delegate to these same two operations. Provider-free commands include `creative doctor`, `creative history`, `creative request-status` and production dry-run planning. The former creative reconciliation command was removed; PR40 decisions remain read-only audit evidence.
 
+Every `generate(target)` creates a new creative run and production request, even when older runs are unfinished or exhausted. Studio Retry / Resume continues the failed job's exact episode or pre-episode run. For a planning failure without an episode, use `app.resume(ProductionReference(run_id=result["run_id"]), target)` with `ProductionReference` imported from `tovitunes.orchestrator`. Exactly one of `episode_key` and `run_id` is required. Stop only changes job history; retained production and provider receipts remain available for explicit continuation.
+
 Domain references: [creative contracts](docs/CREATIVE.md), [editorial memory](docs/OPEN_EDITORIAL_MEMORY_V1.md), [artifact storage](docs/ARTIFACT_STORE.md), [production rendering](docs/PRODUCTION_RENDER.md), [historical storyboard data](docs/PRODUCTION_STORYBOARD.md), [release gates](docs/PUBLIC_RELEASE_V1.md), [music benchmark](docs/MUSIC_BENCHMARK.md), [character intake](docs/CHARACTER_PACK_INTAKE.md), [visual benchmark](docs/VISUAL_BENCHMARK.md), and [development](docs/DEVELOPMENT.md).
 
 Install `dev`, `web`, `youtube` and `video-render` extras with `uv sync --locked`. Validate with `uv run --locked ruff check .`, `uv run --locked mypy src` and `uv run --locked pytest -q`. Windows CI uses system FFmpeg and the same offline suite.

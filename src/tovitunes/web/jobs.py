@@ -124,6 +124,8 @@ class JobManager:
                 episode_key=episode_key,
                 submitted_at=_now(),
                 target=target,
+                # Keep the safe recovery identity if this worker fails before returning a result.
+                result=previous.result if previous else None,
                 steps=list(steps_for(target)) if target else [],
                 total_steps=len(steps_for(target)) if target else 0,
             )

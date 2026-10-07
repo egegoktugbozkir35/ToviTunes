@@ -244,6 +244,7 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
             assert target == ProductionTarget.PUBLISH
             gate.wait(5)
             return {
+                "episode_key": "saved-production",
                 "status": "AMBIGUOUS",
                 "current_stage": "YOUTUBE",
                 "blocker": {
@@ -251,6 +252,10 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
                     "response_body": "private-provider-body",
                 },
             }
+
+        def resume(self, reference, target):
+            assert reference.episode_key == "saved-production"
+            return self.generate(target)
 
     monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: Workflow())
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
