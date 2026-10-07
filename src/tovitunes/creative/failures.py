@@ -16,6 +16,8 @@ class FailureScope(StrEnum):
 class FailureDecision:
     scope: FailureScope
     category: FailureCategory
+    retry_delays: tuple[float, ...] = ()
+    retry_after: float | None = None
 
 
 def classify_creative_failure(error: Exception) -> FailureDecision:
@@ -25,7 +27,11 @@ def classify_creative_failure(error: Exception) -> FailureDecision:
         return FailureDecision(FailureScope.FAIL_CLOSED, FailureCategory.CONFIGURATION)
     category = error.category
     if category == FailureCategory.ENDPOINT_UNREACHABLE:
-        return FailureDecision(FailureScope.ENDPOINT, category)
+        return FailureDecision(FailureScope.ENDPOINT, category, (2.0, 5.0, 15.0))
+    if category in {FailureCategory.HTTP_SERVER, FailureCategory.RATE_LIMITED}:
+        return FailureDecision(FailureScope.MODEL, category, (2.0, 5.0), error.retry_after)
+    if category in {FailureCategory.READ_TIMEOUT, FailureCategory.STREAM_INTERRUPTED}:
+        return FailureDecision(FailureScope.MODEL, category, (2.0,))
     if category in {
         FailureCategory.EMPTY_ANSWER,
         FailureCategory.MODEL_UNAVAILABLE,

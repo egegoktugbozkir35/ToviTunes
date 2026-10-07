@@ -1,8 +1,10 @@
-"""First-party donor NIM transport adapted with typed terminal failures and no hidden retries."""
+"""First-party donor NIM transport adapted with typed, secret-safe failures."""
 
 import json
 import os
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -10,6 +12,22 @@ import httpx
 from tovitunes.config import CreativeLLMConfig
 from tovitunes.creative.provider import ChatResponse, Message, http_failure
 from tovitunes.errors import FailureCategory, ProviderError
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(raw)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            return max(0.0, (retry_at - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
 
 
 class NvidiaNIMClient:
@@ -79,9 +97,10 @@ class NvidiaNIMClient:
                 if codes & {"429", "rate_limit_exceeded", "rate_limit_error", "insufficient_quota"}
                 else FailureCategory.CONFIGURATION
                 if codes & {"400", "invalid_request", "invalid_parameter"}
-                else FailureCategory.AMBIGUOUS
-                if codes
-                & {"408", "500", "502", "503", "504", "server_error", "timeout", "request_timeout"}
+                else FailureCategory.READ_TIMEOUT
+                if codes & {"408", "timeout", "request_timeout"}
+                else FailureCategory.HTTP_SERVER
+                if codes & {"500", "502", "503", "504", "server_error"}
                 else FailureCategory.MODEL_UNAVAILABLE
                 if codes & {"model_not_found", "model_unavailable", "model_not_supported"}
                 else FailureCategory.CONFIGURATION
@@ -91,7 +110,12 @@ class NvidiaNIMClient:
             raise ProviderError(
                 "NVIDIA NIM returned a provider error",
                 category=category,
-                ambiguous=category == FailureCategory.AMBIGUOUS,
+                ambiguous=category
+                in {
+                    FailureCategory.AMBIGUOUS,
+                    FailureCategory.HTTP_SERVER,
+                    FailureCategory.READ_TIMEOUT,
+                },
             )
 
     @staticmethod
@@ -128,10 +152,12 @@ class NvidiaNIMClient:
         self, messages: Sequence[Message], *, record_identity: Callable[[str], None]
     ) -> ChatResponse:
         headers = self._headers()
+        timeout = httpx.Timeout(
+            self.config.timeout_seconds,
+            connect=min(self.config.timeout_seconds, 15.0),
+        )
         if self._client is None:
-            self._client = httpx.Client(
-                timeout=self.config.timeout_seconds, transport=httpx.HTTPTransport(retries=0)
-            )
+            self._client = httpx.Client(timeout=timeout, transport=httpx.HTTPTransport(retries=0))
         remote_id: str | None = None
         response_started = False
 
@@ -154,7 +180,7 @@ class NvidiaNIMClient:
                     "temperature": self.config.temperature,
                     "max_tokens": self.config.max_tokens,
                 },
-                timeout=self.config.timeout_seconds,
+                timeout=timeout,
             ) as response:
                 response_started = True
                 for name in ("x-request-id", "request-id", "x-nvidia-request-id"):
@@ -163,7 +189,7 @@ class NvidiaNIMClient:
                         record_identity(remote_id)
                         break
                 if response.status_code >= 400:
-                    category = http_failure(response.status_code)
+                    category = http_failure(response.status_code, nvidia_transient=True)
                     if response.status_code in {400, 404, 422}:
                         response.read()
                         try:
@@ -174,8 +200,14 @@ class NvidiaNIMClient:
                             self._provider_error(error_body)
                     raise ProviderError(
                         f"NVIDIA NIM HTTP {response.status_code} for {self.model_name}",
-                        ambiguous=category == FailureCategory.AMBIGUOUS,
+                        ambiguous=category
+                        in {
+                            FailureCategory.AMBIGUOUS,
+                            FailureCategory.HTTP_SERVER,
+                            FailureCategory.READ_TIMEOUT,
+                        },
                         category=category,
+                        retry_after=_retry_after_seconds(response),
                     )
                 if "text/event-stream" not in response.headers.get("content-type", "").casefold():
                     response.read()
@@ -240,7 +272,9 @@ class NvidiaNIMClient:
                             break
                     if not complete:
                         raise ProviderError(
-                            "NVIDIA NIM stream ended without completion", ambiguous=True
+                            "NVIDIA NIM stream ended without completion",
+                            ambiguous=True,
+                            category=FailureCategory.STREAM_INTERRUPTED,
                         )
                     content = "".join(parts)
         except httpx.ConnectError as exc:
@@ -263,9 +297,20 @@ class NvidiaNIMClient:
                 ambiguous=not safe,
                 category=FailureCategory.ENDPOINT_UNREACHABLE,
             ) from exc
+        except httpx.ConnectTimeout as exc:
+            raise ProviderError(
+                "NVIDIA endpoint connect timeout",
+                category=FailureCategory.ENDPOINT_UNREACHABLE,
+            ) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(
-                f"NVIDIA NIM transport {type(exc).__name__}; do not resend", ambiguous=True
+                f"NVIDIA NIM transport {type(exc).__name__}; original request is never resent",
+                ambiguous=True,
+                category=(
+                    FailureCategory.READ_TIMEOUT
+                    if isinstance(exc, httpx.ReadTimeout)
+                    else FailureCategory.STREAM_INTERRUPTED
+                ),
             ) from exc
         except (ValueError, UnicodeError) as exc:
             raise ProviderError(

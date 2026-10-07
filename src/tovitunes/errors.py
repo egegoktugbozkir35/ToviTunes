@@ -51,6 +51,9 @@ class FailureCategory(StrEnum):
     PROVIDER_REJECTED = "provider_rejected"
     RATE_LIMITED = "rate_limited"
     AMBIGUOUS = "ambiguous"
+    HTTP_SERVER = "http_server"
+    READ_TIMEOUT = "read_timeout"
+    STREAM_INTERRUPTED = "stream_interrupted"
 
 
 class ProviderError(LLMError):
@@ -60,10 +63,16 @@ class ProviderError(LLMError):
         *,
         ambiguous: bool = False,
         category: FailureCategory = FailureCategory.CONFIGURATION,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.ambiguous = ambiguous
-        self.category = FailureCategory.AMBIGUOUS if ambiguous else category
+        self.category = (
+            FailureCategory.AMBIGUOUS
+            if ambiguous and category == FailureCategory.CONFIGURATION
+            else category
+        )
+        self.retry_after = retry_after
 
 
 class StructuredOutputError(ValueError):
@@ -73,7 +82,13 @@ class StructuredOutputError(ValueError):
 class CreativeAmbiguity(ProviderError):
     """Safe request identity for operator recovery; never carries a remote response body."""
 
-    def __init__(self, row: Row, message: str | None = None) -> None:
+    def __init__(
+        self,
+        row: Row,
+        message: str | None = None,
+        *,
+        category: FailureCategory = FailureCategory.AMBIGUOUS,
+    ) -> None:
         self.evidence: dict[str, object] = {
             "request_id": row["request_id"],
             "provider": row["provider"],
@@ -83,6 +98,7 @@ class CreativeAmbiguity(ProviderError):
         super().__init__(
             message or "Creative outcome is ambiguous; the original request is never resent",
             ambiguous=True,
+            category=category,
         )
 
 

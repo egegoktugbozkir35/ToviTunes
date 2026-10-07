@@ -60,7 +60,9 @@ def test_explicit_model_bearer_schema_timeout_and_json_fallback(request_owner):
         assert request.url.path == "/v1/chat/completions"
         assert request.headers["Authorization"] == "Bearer offline-test-secret"
         assert request.headers["Accept"] == "text/event-stream"
-        assert all(t == 1800 for t in request.extensions["timeout"].values())
+        assert request.extensions["timeout"]["connect"] == 15
+        assert request.extensions["timeout"]["read"] == 1800
+        assert request.extensions["timeout"]["write"] == 1800
         payload = json.loads(request.content)
         calls.append(payload)
         assert payload["model"] == "moonshotai/kimi-k3"
