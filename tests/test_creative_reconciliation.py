@@ -58,11 +58,12 @@ def test_ambiguity_at_each_position_and_repair_advances_once(owner, position, re
         draft = run(build(database, handler), context)
         assert draft.model == CHAIN[position + 1]
     retained = records(database)
-    assert calls == list(CHAIN[:position]) + [CHAIN[position]] * (2 if repair else 1) + list(
+    assert calls == list(CHAIN[:position]) + [CHAIN[position]] * (4 if repair else 3) + list(
         CHAIN[position + 1 : position + 2]
     )
     ambiguous = [r for r in retained if r["status"] == "ambiguous"]
-    assert len(ambiguous) == 1
+    assert len(ambiguous) == 3
+    assert [r["retry_index"] for r in ambiguous] == [0, 1, 2]
     assert "private-response-body" not in json.dumps(retained)
     with database.connect() as db:
         assert (
@@ -173,6 +174,9 @@ def test_additive_upgrade_preserves_all_existing_tables_and_ambiguous_rows(
         after = {
             name: [tuple(row) for row in db.execute(f'SELECT * FROM "{name}"')] for name in tables
         }
+        assert all(row[-1] == 0 for row in after["generation_requests"])
+        # Migration 0025 adds only the default retry index to historical request data.
+        after["generation_requests"] = [row[:-1] for row in after["generation_requests"]]
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     assert after == before
     record_historical_decision(database, "historical-ambiguous")
