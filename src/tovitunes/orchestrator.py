@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from sqlite3 import Connection
 from typing import Any
 from uuid import uuid4
 
@@ -86,8 +87,13 @@ class Orchestrator:
             ),
         )
 
-    def generate(self, target: ProductionTarget = ProductionTarget.DRAFT) -> dict[str, Any]:
-        return self._execute("generate", None, target)
+    def generate(
+        self,
+        target: ProductionTarget = ProductionTarget.DRAFT,
+        *,
+        retain_reservation: Callable[[Connection, ProductionReference], None] | None = None,
+    ) -> dict[str, Any]:
+        return self._execute("generate", None, target, retain_reservation=retain_reservation)
 
     def resume(
         self,
@@ -101,7 +107,12 @@ class Orchestrator:
         return self._execute("resume", reference, target)
 
     def _execute(
-        self, operation: str, reference: ProductionReference | None, target: ProductionTarget
+        self,
+        operation: str,
+        reference: ProductionReference | None,
+        target: ProductionTarget,
+        *,
+        retain_reservation: Callable[[Connection, ProductionReference], None] | None = None,
     ) -> dict[str, Any]:
         self._milestone_percent = 0
         self.database.migrate()
@@ -111,7 +122,7 @@ class Orchestrator:
         with ProductionExecutionOwnership(
             self.database, operation=operation, item_id=key or run_id
         ) as owner:
-            diagnostic_id = history.start(operation, target.value, key)
+            diagnostic_id = history.start(operation, target.value, key or run_id)
             creative_result: dict[str, Any] = {}
             stage = "CREATIVE"
             services: dict[str, StageContext] = {}
@@ -139,9 +150,11 @@ class Orchestrator:
                 if key is None:
                     with service("context")._creative() as creative:
                         if reference is None:
-                            run_id = creative.reserve_next_run()
                             owner.assert_owned()
-                            with closing(self.database.connect()) as db:
+                            # One commit binds the new run, intent and optional Studio reference.
+                            # A crash before commit leaves none; after commit all are recoverable.
+                            with closing(self.database.connect()) as db, db:
+                                run_id = creative.reserve_next_run(connection=db)
                                 db.execute(
                                     "INSERT INTO production_requests VALUES (?,?,?,?)",
                                     (
@@ -151,7 +164,11 @@ class Orchestrator:
                                         datetime.now(UTC).isoformat(),
                                     ),
                                 )
-                                db.commit()
+                                if retain_reservation is not None:
+                                    retain_reservation(db, ProductionReference(run_id=run_id))
+                                # Reservation's first INSERT starts this write transaction after
+                                # the service renews ownership. Verify without a second writer.
+                                self.database.assert_production_execution_owner(owner.owner_token)
                         assert run_id is not None
                         creative_result = creative.prepare(run_id=run_id)
                         key = str(creative_result["episode_key"])
@@ -364,9 +381,15 @@ class Orchestrator:
             raise StateError("Renderer returned an untrusted media path")
         inputs = load_inputs(self.config, key, local_preview=True)
         manifest_id = str(result["render_manifest_id"])
+        manifest_record = context.store.get(manifest_id)
         manifest = RenderManifest.model_validate(context.store.read_json(manifest_id))
         if (
             manifest.episode_id != inputs.storyboard.episode_id
+            or manifest.timed_storyboard_artifact_id
+            != inputs.storyboard_record.identity.artifact_id
+            or manifest_record.identity.owner_scope != "episode"
+            or manifest_record.identity.owner_id != inputs.storyboard.episode_id
+            or manifest_record.identity.kind != "render_manifest"
             or final.identity.owner_scope != "episode"
             or final.identity.owner_id != inputs.storyboard.episode_id
             or final.identity.kind != "final_render"
@@ -377,6 +400,7 @@ class Orchestrator:
         qa_record = context.store.get(qa_id)
         if (
             qa_record.identity.owner_id != inputs.storyboard.episode_id
+            or qa_record.identity.owner_scope != "episode"
             or qa_record.identity.kind != "media_qa"
         ):
             raise StateError("Renderer returned another episode's QA")
@@ -390,6 +414,23 @@ class Orchestrator:
             )
         ):
             raise StateError("Renderer result failed media QA identity")
+        with closing(self.database.connect()) as db:
+            for consumer, dependency in ((final, manifest_record), (qa_record, final)):
+                if (
+                    db.execute(
+                        "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                        "AND input_artifact_id=? AND input_sha256=?",
+                        (
+                            consumer.identity.artifact_id,
+                            dependency.identity.artifact_id,
+                            dependency.sha256,
+                        ),
+                    ).fetchone()
+                    is None
+                ):
+                    raise StateError(
+                        "Renderer result differs from its pinned artifact dependencies"
+                    )
         owner.assert_owned()
         context.store.admit_render_result(final.identity.artifact_id, qa_id)
 

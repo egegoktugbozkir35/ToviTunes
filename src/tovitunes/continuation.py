@@ -232,10 +232,40 @@ def plan_continuation(
                             store.read_json(manifest_row["artifact_id"])
                         )
                         board = parse_storyboard(store.read_json(storyboard_row["artifact_id"]))
-                        if manifest.episode_id != eid or board.episode_id != eid:
+                        if (
+                            manifest.episode_id != eid
+                            or board.episode_id != eid
+                            or manifest.timed_storyboard_artifact_id
+                            != storyboard_row["artifact_id"]
+                        ):
                             raise ValueError("render identity differs")
+                        if (
+                            db.execute(
+                                "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                                "AND input_artifact_id=? AND input_sha256=?",
+                                (
+                                    final["artifact_id"],
+                                    manifest_row["artifact_id"],
+                                    manifest_row["sha256"],
+                                ),
+                            ).fetchone()
+                            is None
+                        ):
+                            raise ValueError(
+                                "render manifest differs from pinned render dependency"
+                            )
                         validate_manifest(store, manifest, board)
                         if qa_row:
+                            if (
+                                db.execute(
+                                    "SELECT 1 FROM artifact_dependencies "
+                                    "WHERE consumer_artifact_id=? "
+                                    "AND input_artifact_id=? AND input_sha256=?",
+                                    (qa_row["artifact_id"], final["artifact_id"], final["sha256"]),
+                                ).fetchone()
+                                is None
+                            ):
+                                raise ValueError("QA differs from pinned render dependency")
                             qa = store.read_json(qa_row["artifact_id"])
                             if (
                                 not isinstance(qa, dict)

@@ -93,6 +93,60 @@ class FakeClient:
         }
 
 
+@pytest.mark.parametrize("boundary", ["prepared", "returned"])
+def test_public_promotion_fences_real_lease_and_retains_remote_result(ready, boundary):
+    from tovitunes.errors import ExecutionOwnershipLostError
+    from tovitunes.execution import ProductionExecutionOwnership
+    from tovitunes.persistence.db import Database
+
+    (config, database, _, _), *_ = ready
+    clear_graph(ready)
+    record_upload(ready)
+    client = FakeClient()
+    if boundary == "prepared":
+        with database.connect() as db:
+            db.execute(
+                "CREATE TRIGGER lose_visibility_owner "
+                "AFTER INSERT ON publication_visibility_events "
+                "BEGIN UPDATE production_execution_lease "
+                "SET expires_at='2000-01-01T00:00:00+00:00'; END"
+            )
+            db.commit()
+    else:
+        publish = client.publish_video
+
+        def returned(video_id, remote):
+            response = publish(video_id, remote)
+            with database.connect() as db:
+                db.execute(
+                    "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+                )
+                db.commit()
+            return response
+
+        client.publish_video = returned
+    with pytest.raises(ExecutionOwnershipLostError):
+        with ProductionExecutionOwnership(database, operation="resume") as owner:
+            PublicationService(
+                config, ownership=owner, client_factory=lambda: client
+            ).publish_public("colors-red")
+    with database.connect() as db:
+        event = dict(db.execute("SELECT * FROM publication_visibility_events").fetchone())
+    if boundary == "prepared":
+        assert client.calls == 0 and event["remote_started_at"] is None
+        assert event["outcome"] == "terminal_failure"
+    else:
+        assert client.calls == 1 and event["outcome"] == "succeeded"
+        assert event["youtube_video_id"] == "video-123"
+        with ProductionExecutionOwnership(
+            Database(config.database_path), operation="resume"
+        ) as owner:
+            recovered = PublicationService(
+                config, ownership=owner, client_factory=lambda: client
+            ).publish_public("colors-red")
+        assert recovered == event and client.calls == 1
+
+
 def test_public_requires_private_upload_and_rights(ready):
     (config, _, _, store), render, _, _ = ready
     with pytest.raises(ValueError, match="preflight"):
