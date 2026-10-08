@@ -314,9 +314,11 @@ def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
         assert len(diagnostics["attempts"]) == 4
         assert all(a["error_kind"] == "provider_rejected" for a in diagnostics["attempts"])
         assert diagnostics == client.get("/api/jobs").json()[0]["creative_diagnostics"]
-        # Old PR41 paused jobs had no run_id or typed blocker. The latest job still
-        # projects its active durable next-run; older unrelated jobs must not inherit it.
-        old_payload = failed.model_copy(update={"result": None, "blocker": {}})
+        # Old PR41 paused jobs had no result identity, recovery reference or typed
+        # blocker; they must not inherit another job's durable run diagnostics.
+        old_payload = failed.model_copy(
+            update={"result": None, "recovery_reference": None, "blocker": {}}
+        )
         assert studio_job(case["config"], old_payload)["creative_diagnostics"]["attempts"] == []
         unrelated = old_payload.model_copy(update={"job_id": "older-unrelated-job"})
         assert studio_job(case["config"], unrelated)["creative_diagnostics"]["attempts"] == []

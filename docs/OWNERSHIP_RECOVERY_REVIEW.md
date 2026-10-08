@@ -46,4 +46,4 @@ Historical migrations, Red/Blue saved productions, approvals/rights, reconciliat
 5. Resume an existing episode and confirm ordinary durable continuation/reuse.
 6. Do not publish to YouTube during this acceptance without separate explicit authorization.
 
-Final local validation results, commit identities and the completed CI run are recorded in the delivery report accompanying PR #43.
+The delivery report accompanying PR #43 records observed local validation results and commit identities. CI status must be checked against the current PR head; results from an earlier head do not validate later commits.

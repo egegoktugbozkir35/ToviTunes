@@ -222,6 +222,12 @@ class JobManager:
                         )
         finally:
             with self._lock:
+                # A BaseException still propagates to the executor, but a finished
+                # worker must not leave its durable recovery identity inaccessible.
+                if job.status in {"queued", "running"}:
+                    job.status, job.progress = "interrupted", "Interrupted"
+                    job.error = "Studio stopped during this task. Resume its durable work."
+                    job.recovery_action = "resume" if job.target else None
                 job.finished_at = _now()
                 self._active = None
                 self._save(job)

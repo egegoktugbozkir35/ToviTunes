@@ -23,7 +23,7 @@ from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import CreativeRequestLedger
 from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.web import app as web_app
-from tovitunes.web.jobs import JobManager
+from tovitunes.web.jobs import Job, JobManager
 
 
 @pytest.fixture
@@ -403,6 +403,149 @@ def test_initial_studio_exception_retains_run_and_receipt_across_restart(
         )
         assert calls == [CHAIN[0]] * 4  # Original subject receipt plus three new draft requests.
     app.state.jobs.close()
+
+
+def test_studio_system_exit_recovers_reserved_run_without_restart(production, monkeypatch):
+    config, database = production
+    calls = []
+    flow = build_orchestrator(config, creative_provider=build(database, successful_handler(calls)))
+    monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: flow)
+    original = CreativeService._reserve_brief
+
+    def interrupt(*a, **k):
+        raise SystemExit("Bearer offline-ownership-secret signed-url")
+
+    monkeypatch.setattr(CreativeService, "_reserve_brief", interrupt)
+    app = web_app.create_app(config)
+    manager = app.state.jobs
+    futures = []
+    submit = manager._executor.submit
+
+    def capture_submit(*a, **k):
+        future = submit(*a, **k)
+        futures.append(future)
+        return future
+
+    monkeypatch.setattr(manager._executor, "submit", capture_submit)
+    try:
+        with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+            response = client.post("/api/studio/create", json={"target": "draft"})
+            assert response.status_code == 202
+            job_id = response.json()["job_id"]
+            # Wait for the actual worker Future, not a status projection or a restart.
+            with pytest.raises(SystemExit):
+                futures[-1].result(timeout=10)
+            job = manager.get(job_id)
+            assert job.status == "interrupted" and job.progress == "Interrupted"
+            assert job.finished_at and manager._active is None
+            assert job.recovery_action == "resume"
+            assert job.result is None and job.episode_key is None
+            reference = job.recovery_reference
+            assert reference and reference.run_id
+            retained = snapshot(database)
+            assert len(retained["creative_runs"]) == len(retained["production_requests"]) == 1
+            assert retained["creative_runs"][0]["run_id"] == reference.run_id
+            assert retained["production_requests"][0]["run_id"] == reference.run_id
+            assert len(retained["generation_requests"]) == 1
+            root = retained["generation_requests"][0]
+            assert root["run_id"] == reference.run_id and root["status"] == "succeeded"
+            with closing(database.connect()) as db:
+                persisted = Job.model_validate_json(
+                    db.execute(
+                        "SELECT payload_json FROM studio_jobs WHERE job_id=?", (job_id,)
+                    ).fetchone()[0]
+                )
+            assert persisted == job
+            payloads = [
+                job.model_dump_json(),
+                client.get(f"/api/jobs/{job_id}").text,
+                client.get("/api/jobs").text,
+            ]
+            assert all(
+                secret not in payload
+                for payload in payloads
+                for secret in ("Bearer", "offline-ownership-secret", "signed-url")
+            )
+            # Recovery is accepted immediately even while the failed stage is still installed.
+            assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
+            with pytest.raises(SystemExit):
+                futures[-1].result(timeout=10)
+            interrupted = manager.get(job_id)
+            assert interrupted.status == "interrupted" and interrupted.execution == 2
+            assert interrupted.recovery_reference == reference and interrupted.result is None
+            assert snapshot(database) == retained and calls == [CHAIN[0]]
+            monkeypatch.setattr(CreativeService, "_reserve_brief", original)
+            assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
+            futures[-1].result(timeout=10)
+            recovered = manager.get(job_id)
+            assert app.state.jobs is manager  # The original application/manager stayed alive.
+            assert recovered.status == "complete" and recovered.execution == 3
+            assert recovered.recovery_reference == reference
+            assert recovered.result["run_id"] == reference.run_id
+            after = snapshot(database)
+            assert len(after["creative_runs"]) == 1
+            assert after["production_requests"] == retained["production_requests"]
+            assert after["generation_requests"][0] == root
+            assert all(
+                row["run_id"] == reference.run_id
+                or row["episode_id"] == after["creative_runs"][0]["episode_id"]
+                for row in after["generation_requests"]
+            )
+            assert [
+                row["request_id"]
+                for row in after["generation_requests"]
+                if row["kind"] == root["kind"] and row["previous_attempt_id"] is None
+            ] == [root["request_id"]]
+            assert calls == [CHAIN[0]] * 4  # Retained subject plus three new draft requests.
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("failure", [SystemExit, KeyboardInterrupt, BaseException])
+@pytest.mark.parametrize("target", [None, ProductionTarget.DRAFT])
+def test_job_base_exception_finalizes_without_losing_retained_state(
+    production, monkeypatch, caplog, failure, target
+):
+    _, database = production
+    manager = JobManager(database)
+    job = Job(
+        job_id="retained-job",
+        operation="studio",
+        episode_key="saved-episode",
+        submitted_at="2026-01-01",
+        target=target,
+        result={"run_id": "saved-run"},
+        recovery_reference=ProductionReference(run_id="saved-run"),
+    )
+    manager._jobs[job.job_id] = job
+    manager._active = job.job_id
+    manager._save(job)
+
+    def interrupt():
+        # A diagnostic persistence error must not prevent finalization or replace
+        # the BaseException retained by the executor.
+        def unavailable(*a, **k):
+            raise RuntimeError("offline diagnostic store unavailable")
+
+        monkeypatch.setattr(Database, "connect", unavailable)
+        raise failure("Bearer secret signed-url")
+
+    try:
+        future = manager._executor.submit(manager._run, job.job_id, interrupt)
+        with pytest.raises(failure):
+            future.result(timeout=10)
+        finished = manager.get(job.job_id)
+        assert finished.status == "interrupted" and finished.progress == "Interrupted"
+        assert finished.finished_at and manager._active is None
+        assert finished.recovery_action == ("resume" if target else None)
+        assert finished.result == {"run_id": "saved-run"}
+        assert finished.recovery_reference == ProductionReference(run_id="saved-run")
+        assert finished.episode_key == "saved-episode"
+        assert finished.error == "Studio stopped during this task. Resume its durable work."
+        assert "diagnostic job persistence failed" in caplog.text
+        assert all(secret not in finished.model_dump_json() for secret in ("Bearer", "signed-url"))
+    finally:
+        manager.close()
 
 
 @pytest.mark.parametrize("boundary", ["reserved", "intent", "identity", "committed"])
