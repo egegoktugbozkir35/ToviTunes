@@ -228,15 +228,16 @@ def test_restart_after_persisted_brief_before_episode_reservation_reuses_selecti
     monkeypatch.setattr(
         flow, "_reserve_brief", lambda *a: (_ for _ in ()).throw(KeyboardInterrupt())
     )
+    run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
-        flow.prepare()
+        flow.prepare(run_id=run_id)
     memory = TopicMemory(Database(flow.config.database_path), flow.catalog)
     assert memory.history()[0]["subject"] == "Big and small"
     assert fake.calls == ["TopicPool"]
     restarted = CreativeService(
         flow.config, flow.provider, catalog=flow.catalog, assert_owner=lambda: None
     )
-    result = restarted.prepare()
+    result = restarted.prepare(run_id=run_id)
     assert result["episode_key"].startswith("big-and-small-")
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
@@ -251,7 +252,7 @@ def test_memory_precedes_creative_artifacts_and_expensive_media(editorial, monke
         return original(model, messages, **kwargs)
 
     monkeypatch.setattr(flow.provider, "generate", generate)
-    flow.prepare()
+    flow.prepare(run_id=flow.reserve_next_run())
     assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
 
 
@@ -260,7 +261,7 @@ def test_novel_domain_outside_policy_examples_is_allowed(editorial):
     fake.responses["TopicPool"] = [
         TopicPool(candidates=(idea("texture", score=10), idea())).model_dump_json()
     ]
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     ep = flow.database.get_episode(result["episode_id"])
     assert ep.subject == "Smooth and rough" and "textures" not in LEARNING_POLICY.example_domains
     assert ep.curriculum_revision_id is None
@@ -447,7 +448,7 @@ def test_vocabulary_bounds_are_strict(words):
 
 def test_learning_facts_remain_exact_across_episode_and_downstream_specs(editorial):
     flow, _ = editorial
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     episode = flow.database.get_episode(result["episode_id"])
     brief = TopicMemory(flow.database, flow.catalog).get(episode.learning_brief_id)
     assert (
@@ -508,7 +509,7 @@ def test_kimi_failure_glm_topic_success_persists_actual_model_provenance(editori
         for m in (config.model, *config.fallback_models)
     ]
     flow.provider = ResilientStructuredGenerator(flow.database, chain)
-    flow.prepare()
+    flow.prepare(run_id=flow.reserve_next_run())
     with closing(flow.database.connect()) as db:
         rows = [dict(r) for r in db.execute("SELECT * FROM generation_requests ORDER BY rowid")]
         brief = dict(db.execute("SELECT * FROM learning_briefs").fetchone())
@@ -521,7 +522,7 @@ def test_kimi_failure_glm_topic_success_persists_actual_model_provenance(editori
 
 def test_doctor_history_and_config_make_no_provider_calls(editorial, tmp_path, capsys):
     flow, _ = editorial
-    flow.prepare()
+    flow.prepare(run_id=flow.reserve_next_run())
     path = tmp_path / "config.yaml"
     path.write_text(
         f"database_path: {flow.database.path.as_posix()}\n"

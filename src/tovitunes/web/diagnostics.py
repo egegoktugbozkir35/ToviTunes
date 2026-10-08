@@ -43,7 +43,11 @@ def studio_job(config: RuntimeConfig, job: Job) -> dict[str, Any]:
     if job.operation != "studio":
         return result
     database = Database(config.database_path)
-    run_id = (job.result or {}).get("run_id")
+    run_id = (
+        job.recovery_reference.run_id
+        if job.recovery_reference is not None
+        else (job.result or {}).get("run_id")
+    )
     request_id = (job.blocker or {}).get("request_id")
     with closing(database.connect()) as db:
         episode_id = None

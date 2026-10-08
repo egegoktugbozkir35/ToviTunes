@@ -17,7 +17,8 @@ from tovitunes.creative.models import EpisodePublicationMetadata
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import ApprovalDecision, RightsDecision
-from tovitunes.errors import ChannelMismatch, UploadAmbiguous
+from tovitunes.errors import ChannelMismatch, ExecutionOwnershipLostError, UploadAmbiguous
+from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.targets import ProductionTarget
 from tovitunes.publication.preflight import evaluate_release
@@ -614,3 +615,37 @@ def test_durable_success_deduplicates_and_ambiguity_blocks(ready):
     assert fake.calls == 2
     latest = publisher.latest(episode.episode_id)
     assert latest["outcome"] == "ambiguous" and latest["operator_action"]
+
+
+def test_returned_upload_identity_survives_real_lease_loss_and_restart(ready):
+    (config, database, episode, _), _, _, _ = ready
+    calls = []
+
+    class Client:
+        def assert_channel(self, expected):
+            assert expected == config.expected_youtube_channel_id
+
+        def upload_private(self, path, metadata, *, on_remote_start, assert_ownership):
+            on_remote_start()
+            assert_ownership()
+            calls.append("upload")
+            with database.connect() as db:
+                db.execute(
+                    "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+                )
+                db.commit()
+            return "retained-video"
+
+    with pytest.raises(ExecutionOwnershipLostError):
+        with ProductionExecutionOwnership(database, operation="resume") as owner:
+            PublicationService(config, ownership=owner, client_factory=Client).upload_private(
+                episode.external_key
+            )
+    with database.connect() as db:
+        row = dict(db.execute("SELECT * FROM publication_attempts").fetchone())
+    assert row["outcome"] == "succeeded" and row["youtube_video_id"] == "retained-video"
+    with ProductionExecutionOwnership(Database(config.database_path), operation="resume") as owner:
+        result = PublicationService(config, ownership=owner, client_factory=Client).upload_private(
+            episode.external_key
+        )
+    assert result["youtube_video_id"] == "retained-video" and calls == ["upload"]

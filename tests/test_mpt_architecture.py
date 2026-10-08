@@ -16,7 +16,11 @@ from test_creative_fallback import owner as owner
 from test_short_production import case as case
 
 from tovitunes.continuation import plan_continuation
-from tovitunes.errors import ExecutionOwnershipConflictError, ExecutionOwnershipLostError
+from tovitunes.errors import (
+    ExecutionOwnershipConflictError,
+    ExecutionOwnershipLostError,
+    StateError,
+)
 from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.targets import ProductionTarget
@@ -374,3 +378,145 @@ def test_lost_lease_during_image_stage_prevents_further_submissions_and_selectio
             ).fetchone()[0]
             == 1
         )
+
+
+@pytest.mark.parametrize("mutation", ["storyboard_identity", "manifest_dependency"])
+def test_render_acceptance_and_continuation_reject_substituted_manifest(case, mutation):
+    from tovitunes.artifacts.store import InputDependency
+    from tovitunes.domain.artifact import Provenance
+
+    flow = case["flow"]
+    config = case["config"]
+    key = case["episode"].external_key
+    result = flow.resume(key, ProductionTarget.RENDER)
+    assert result["target_complete"]
+    database = Database(config.database_path)
+    with ProductionExecutionOwnership(database, operation="resume", item_id=key) as owner:
+        context = flow._factories["context"](owner, lambda *a: None)
+        final = context.store.get(result["final_render_id"])
+        manifest = context.store.selected(
+            "episode", case["episode"].episode_id, "render_manifest", final.identity.slot_key
+        )
+        qa = context.store.selected(
+            "episode", case["episode"].episode_id, "media_qa", final.identity.slot_key
+        )
+        payload = context.store.read_json(manifest.identity.artifact_id)
+        if mutation == "storyboard_identity":
+            payload["timed_storyboard_artifact_id"] = final.identity.artifact_id
+            payload["dependency_sha256"][final.identity.artifact_id] = final.sha256
+        else:
+            payload["ffmpeg_version"] = "another-render-receipt"
+        with closing(database.connect()) as db:
+            dependencies = [
+                InputDependency(r[0], r[1])
+                for r in db.execute(
+                    "SELECT input_artifact_id,purpose FROM artifact_dependencies "
+                    "WHERE consumer_artifact_id=? ORDER BY rowid",
+                    (manifest.identity.artifact_id,),
+                )
+            ]
+            before = [
+                tuple(r) for r in db.execute("SELECT * FROM artifact_selections ORDER BY rowid")
+            ]
+        if mutation == "storyboard_identity":
+            dependencies.append(
+                InputDependency(final.identity.artifact_id, "substituted_storyboard")
+            )
+        source = context.working / "substituted_manifest.json"
+        source.write_text(json.dumps(payload), encoding="utf-8")
+        substituted = context.store.ingest(
+            source,
+            owner_scope="episode",
+            owner_id=case["episode"].episode_id,
+            kind="render_manifest",
+            slot_key=manifest.identity.slot_key,
+            provenance=Provenance.manual("offline-test", "local://substituted-manifest"),
+            dependencies=dependencies,
+        )
+        with pytest.raises(StateError, match="manifest|dependencies"):
+            flow._accept_render(
+                context,
+                key,
+                {
+                    "output_path": str(context.store.path_for(final.identity.artifact_id)),
+                    "final_render_id": final.identity.artifact_id,
+                    "render_manifest_id": substituted.identity.artifact_id,
+                    "media_qa_id": qa.identity.artifact_id,
+                },
+                owner,
+            )
+        with closing(database.connect()) as db:
+            assert [
+                tuple(r) for r in db.execute("SELECT * FROM artifact_selections ORDER BY rowid")
+            ] == before
+        # Even an externally changed pointer cannot authorize reuse through read-only planning.
+        context.store.admit_preview(substituted.identity.artifact_id)
+        plan = plan_continuation(config, key, target=ProductionTarget.RENDER)
+        assert plan["status"] == "BLOCKED" and not plan["target_complete"]
+
+
+def test_environment_selection_stops_at_each_admission_after_lease_loss(case, monkeypatch):
+    from tovitunes.artifacts.store import AssetStore
+
+    admit = AssetStore.admit_preview
+    admissions = []
+
+    def lose_after_first_source(store, artifact_id, **kwargs):
+        record = store.get(artifact_id)
+        result = admit(store, artifact_id, **kwargs)
+        if record.identity.kind == "environment_source_plate":
+            admissions.append(artifact_id)
+            with closing(store.database.connect()) as db:
+                db.execute(
+                    "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+                )
+                db.commit()
+        return result
+
+    monkeypatch.setattr(AssetStore, "admit_preview", lose_after_first_source)
+    with pytest.raises(ExecutionOwnershipLostError):
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    assert len(admissions) == 1 and case["environment_events"].count("/prompt") == 4
+    with closing(case["store"].database.connect()) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM environment_requests WHERE status='succeeded'"
+            ).fetchone()[0]
+            == 4
+        )
+        assert not db.execute(
+            "SELECT 1 FROM artifact_selections WHERE kind IN "
+            "('environment_plate','environment_set','episode_environment') "
+            "AND owner_scope='episode'"
+        ).fetchone()
+
+
+def test_image_normalization_cannot_select_asset_after_lease_loss(case, monkeypatch):
+    from tovitunes.render import episode_assets
+
+    normalize = episode_assets.normalize
+
+    def lose_during_normalization(*args, **kwargs):
+        result = normalize(*args, **kwargs)
+        with closing(case["store"].database.connect()) as db:
+            db.execute(
+                "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00+00:00'"
+            )
+            db.commit()
+        return result
+
+    monkeypatch.setattr(episode_assets, "normalize", lose_during_normalization)
+    with pytest.raises(ExecutionOwnershipLostError):
+        case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    assert case["image_events"].count("/prompt") == 1
+    with closing(case["store"].database.connect()) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM production_image_receipts "
+                "WHERE source_artifact_id IS NOT NULL"
+            ).fetchone()[0]
+            == 1
+        )
+        assert not db.execute(
+            "SELECT 1 FROM production_image_receipts WHERE normalized_artifact_id IS NOT NULL"
+        ).fetchone()

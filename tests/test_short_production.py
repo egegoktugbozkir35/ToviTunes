@@ -46,7 +46,7 @@ from tovitunes.music.analysis_models import (
 )
 from tovitunes.music.models import TimedText
 from tovitunes.music.timing_runtime import measured_rhythm
-from tovitunes.orchestrator import build_orchestrator
+from tovitunes.orchestrator import ProductionReference, build_orchestrator
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import FakeDraftGenerator
 from tovitunes.pipeline.music_adapter import creative_music_spec
@@ -728,7 +728,7 @@ def test_next_creation_and_active_run_resume(case):
         before = [tuple(row) for row in db.execute("SELECT * FROM production_requests")]
     calls = list(case["fake"].calls)
     with pytest.raises(SystemExit):
-        flow.generate(ProductionTarget.PUBLISH)
+        flow.resume(ProductionReference(run_id=before[0][1]), ProductionTarget.PUBLISH)
     with closing(flow.database.connect()) as db:
         assert [tuple(row) for row in db.execute("SELECT * FROM production_requests")] == before
     assert case["fake"].calls == calls and calls.count("TopicPool") == 1
@@ -806,7 +806,7 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
     assert parse_storyboard(store.read_json(storyboard.identity.artifact_id)).schema_version == 2
     assert case["music_events"].count("/release_task") == 1
     calls = (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
-    second = case["flow"].generate(target=ProductionTarget.PUBLISH)
+    second = case["flow"].resume(result["episode_key"], target=ProductionTarget.PUBLISH)
     assert second["final_render_id"] == result["final_render_id"]
     assert calls == (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
 
@@ -840,7 +840,7 @@ def test_cli_frontends_use_application_service(case, monkeypatch, capsys, comman
         def __init__(self, config, **kwargs):
             pass
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "READY"}
 
@@ -884,7 +884,7 @@ def test_web_frontend_plan_and_confirmation(case, monkeypatch):
             calls.append(("resume", key, target))
             return {"status": "PENDING_PROVIDER", "episode_key": key, "current_stage": "MUSIC"}
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "NEEDS_REVIEW"}
 

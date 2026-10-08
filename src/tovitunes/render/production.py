@@ -424,6 +424,7 @@ class ProductionRenderer:
                         dependencies=[InputDependency(d, "render_input") for d in deps],
                     )
                 if kind not in {"final_render", "media_qa"}:
+                    assert_owner()
                     self._approve_select(store, record)
                 return record
 

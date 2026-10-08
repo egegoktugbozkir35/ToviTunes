@@ -240,10 +240,11 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
     )
 
     class Workflow:
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             assert target == ProductionTarget.PUBLISH
             gate.wait(5)
             return {
+                "episode_key": "saved-production",
                 "status": "AMBIGUOUS",
                 "current_stage": "YOUTUBE",
                 "blocker": {
@@ -251,6 +252,10 @@ def test_api_concurrency_failure_safety_and_body_validation(context, monkeypatch
                     "response_body": "private-provider-body",
                 },
             }
+
+        def resume(self, reference, target):
+            assert reference.episode_key == "saved-production"
+            return self.generate(target)
 
     monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: Workflow())
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
@@ -309,9 +314,11 @@ def test_studio_exhaustion_exposes_each_safe_model_outcome(case, monkeypatch):
         assert len(diagnostics["attempts"]) == 4
         assert all(a["error_kind"] == "provider_rejected" for a in diagnostics["attempts"])
         assert diagnostics == client.get("/api/jobs").json()[0]["creative_diagnostics"]
-        # Old PR41 paused jobs had no run_id or typed blocker. The latest job still
-        # projects its active durable next-run; older unrelated jobs must not inherit it.
-        old_payload = failed.model_copy(update={"result": None, "blocker": {}})
+        # Old PR41 paused jobs had no result identity, recovery reference or typed
+        # blocker; they must not inherit another job's durable run diagnostics.
+        old_payload = failed.model_copy(
+            update={"result": None, "recovery_reference": None, "blocker": {}}
+        )
         assert studio_job(case["config"], old_payload)["creative_diagnostics"]["attempts"] == []
         unrelated = old_payload.model_copy(update={"job_id": "older-unrelated-job"})
         assert studio_job(case["config"], unrelated)["creative_diagnostics"]["attempts"] == []

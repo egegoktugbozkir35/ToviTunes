@@ -558,18 +558,19 @@ def test_partial_real_workflow_restart_keeps_episode_artifacts_and_historical_re
         catalog=catalog,
         assert_owner=lambda: None,
     )
+    run_id = old_flow.reserve_next_run()
     with pytest.raises(ProviderError):
-        old_flow.prepare()
+        old_flow.prepare(run_id=run_id)
     before = records(database)
     with database.connect() as db:
         original_run = dict(db.execute("SELECT * FROM creative_runs").fetchone())
         artifacts = [dict(r) for r in db.execute("SELECT * FROM artifact_versions")]
     fail_lyrics = False
-    # Normal no-ID discovery in a fresh instance resumes the very same incomplete run.
+    # Explicit identity in a fresh instance resumes the very same incomplete run.
     flow = CreativeService(
         config, build(database, handler), catalog=catalog, assert_owner=lambda: None
     )
-    result = flow.prepare()
+    result = flow.prepare(run_id=run_id)
     assert result["run_id"] == original_run["run_id"]
     assert result["episode_id"] == original_run["episode_id"]
     assert records(database)[: len(before)] == before
