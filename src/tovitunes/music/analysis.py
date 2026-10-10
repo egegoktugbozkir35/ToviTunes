@@ -652,7 +652,12 @@ def analyze_audio(
         miniaudio.mp3_read_f32(data) if mime_type == "audio/mpeg" else miniaudio.wav_read_f32(data)
     )
     technical = technical_measurements(decoded)
-    if abs(info.duration_seconds - technical.duration_seconds) > 0.001:
+    if (
+        abs(info.duration_seconds - technical.duration_seconds) > 0.001
+        or (info.channel_count is not None and info.channel_count != technical.channel_count)
+        or (info.frame_count is not None and info.frame_count != technical.decoded_frames)
+        or info.sample_rate_hz != technical.sample_rate_hz
+    ):
         raise ValueError("decoded duration does not match verified receipt")
     rhythm = analyze_rhythm(
         decoded, spec.brief, path.parent / ".analysis-models", config.device, sha

@@ -39,6 +39,8 @@ from tovitunes.catalog import load_brand
 from tovitunes.config import load_config
 from tovitunes.continuation import plan_continuation
 from tovitunes.creative.service import eligibility
+from tovitunes.errors import ExecutionOwnershipError
+from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.analysis_runtime import prepare_models, runtime_doctor
@@ -186,6 +188,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     music_spec.add_argument("--confirm-provider-generation", action="store_true")
     music_provider_resume = music_commands.add_parser("provider-resume")
     music_provider_resume.add_argument("--request-id", required=True)
+    music_wav_reconcile = music_commands.add_parser("reconcile-ace-step-float-wav")
+    music_wav_reconcile.add_argument("--request-id", required=True)
+    music_wav_reconcile.add_argument("--actor", required=True)
+    music_wav_reconcile.add_argument("--rationale", required=True)
     audio_analysis = music_commands.add_parser("analyze-audio")
     audio_analysis.add_argument("--blind-id", required=True)
     audio_analysis.add_argument("--analysis-version", type=int, default=1)
@@ -604,6 +610,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         benchmark = MusicBenchmark(database, config.data_root / "music-benchmark")
         if args.music_command == "status":
             print(json.dumps(benchmark.status(), sort_keys=True))
+        elif args.music_command == "reconcile-ace-step-float-wav":
+            if config.music_generation.provider != "ace_step_local":
+                parser.error("float WAV reconciliation requires configured ace_step_local")
+            try:
+                with ProductionExecutionOwnership(
+                    database, operation="music_wav_reconciliation", item_id=args.request_id
+                ) as ownership:
+                    recovery_benchmark = MusicBenchmark(
+                        database,
+                        config.data_root / "music-benchmark",
+                        assert_owner=ownership.assert_owned,
+                    )
+                    recovered_wav = recovery_benchmark.reconcile_ace_step_float_wav(
+                        args.request_id,
+                        AceStepLocalProvider(config.music_generation),
+                        actor=args.actor,
+                        rationale=args.rationale,
+                    )
+            except (ValueError, KeyError, OSError, RuntimeError, ExecutionOwnershipError) as exc:
+                parser.error(str(exc))
+            print(json.dumps(recovered_wav, sort_keys=True))
+            return 0 if recovered_wav.get("status") == "succeeded" else 1
         elif args.music_command == "analyze-audio":
             audio_report, reused = benchmark.analyze_audio(
                 args.blind_id,
