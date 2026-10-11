@@ -163,10 +163,35 @@ def plan_continuation(
                                     "AND policy_id='music_qa' ORDER BY rowid DESC LIMIT 1",
                                     (binding["blind_id"],),
                                 ).fetchone()
+                                from tovitunes.music.analysis_models import AudioAnalysis
+
+                                report = AudioAnalysis.model_validate_json(analysis["analysis_json"])
+                                preview = report.analyzer_configuration.get("production_timing") is True
+                                admissible = bool(qa and qa["status"] == "pass")
+                                if preview and qa:
+                                    details = json.loads(qa["evidence_json"])
+                                    objective = details.get("objective_checks", {})
+                                    derived = details.get("derived_checks", {})
+                                    timing = db.execute(
+                                        "SELECT * FROM music_policy_evaluations "
+                                        "WHERE subject_type='timing' AND subject_id=? "
+                                        "AND policy_id='music_timing' ORDER BY rowid DESC LIMIT 1",
+                                        (f"{binding['blind_id']}:{analysis['version']}",),
+                                    ).fetchone()
+                                    admissible = (
+                                        timing is not None
+                                        and timing["status"] == "pass"
+                                        and details.get("analysis_version") == analysis["version"]
+                                        and details.get("timing_admission", {}).get("admitted") is True
+                                        and all(objective.get(k) is True for k in (
+                                            "decodes_and_matches_receipt", "duration_in_scope"
+                                        ))
+                                        and all(derived.get(k, {}).get("status") == "pass" for k in (
+                                            "artifact_free", "beat_usable"
+                                        ))
+                                    )
                                 by_name["AUDIO_ANALYSIS"].update(
-                                    status=(
-                                        "COMPLETE" if qa and qa["status"] == "pass" else "BLOCKED"
-                                    ),
+                                    status="COMPLETE" if admissible else "BLOCKED",
                                     evidence={
                                         "audio_sha256": analysis["audio_sha256"],
                                         "version": analysis["version"],
