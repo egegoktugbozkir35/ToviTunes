@@ -1505,6 +1505,9 @@ class MusicBenchmark:
                             spec,
                             report.lyric_comparison,
                             report.transcription,
+                            require_asr=not bool(
+                                report.analyzer_configuration.get("production_timing", False)
+                            ),
                         ),
                         "admitted": bool(report.timing.words),
                     },

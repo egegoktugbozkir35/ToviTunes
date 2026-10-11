@@ -785,3 +785,48 @@ def test_historical_rejected_analysis_deserializes_without_rewrite(case, monkeyp
             ]
             == before
         )
+
+
+def test_preview_timing_ignores_asr_but_requires_measured_canonical_alignment(case, monkeypatch):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as prior
+
+    def unavailable_asr(*args):
+        _, alignment, version, device = prior(*args)
+        return (
+            TranscriptionEvidence(status="unavailable", failure_reason="ASR disabled for preview"),
+            alignment,
+            version,
+            device,
+        )
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", unavailable_asr)
+    store, blind_id, _ = case
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    assert report.transcription.status == "unavailable"
+    assert len(report.timing.words) == 36
+    assert store.evaluate_timing(blind_id, 1)["status"] == "pass"
+    qa = store.evaluate_analysis_qa(blind_id, 1)
+    assert qa["status"] == "fail"  # ASR metrics are retained as unknown, not fabricated.
+    assert json.loads(qa["evidence_json"])["timing_admission"]["eligible"] is True
+
+
+def test_preview_timing_rejects_incomplete_canonical_alignment(case, monkeypatch):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as prior
+
+    def incomplete_alignment(*args):
+        _, alignment, version, device = prior(*args)
+        alignment = alignment.model_copy(update={"status": "incomplete"})
+        return (
+            TranscriptionEvidence(status="unavailable"),
+            alignment,
+            version,
+            device,
+        )
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", incomplete_alignment)
+    store, blind_id, _ = case
+    report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    assert not report.timing.words
+    assert store.evaluate_timing(blind_id, 1)["status"] == "fail"

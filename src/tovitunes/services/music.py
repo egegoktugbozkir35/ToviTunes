@@ -198,6 +198,7 @@ class MusicService(StageContext):
                 asr_model=config.asr_model,
                 device=config.analysis_device,
                 allow_model_download=config.allow_model_download,
+                production_timing=True,
             ),
         )
         with closing(self.database.connect()) as db:
@@ -250,8 +251,20 @@ class MusicService(StageContext):
             "alignment_failure": report.alignment.failure_reason,
             "rhythm_failure": report.rhythm.failure_reason,
         }
-        if qa["status"] != "pass" or timing["status"] != "pass":
+        qa_evidence = json.loads(qa["evidence_json"])
+        objective = qa_evidence.get("objective_checks", {})
+        derived = qa_evidence.get("derived_checks", {})
+        technical_ok = (
+            all(objective.get(name) is True for name in (
+                "decodes_and_matches_receipt", "duration_in_scope"
+            ))
+            and all(derived.get(name, {}).get("status") == "pass" for name in (
+                "artifact_free", "beat_usable"
+            ))
+        )
+        evidence["qa_advisory_only"] = True
+        if not technical_ok or timing["status"] != "pass":
             raise ProductionStop(
-                "BLOCKED", "Objective audio/lyric/timing QA did not pass", evidence
+                "BLOCKED", "Audio integrity, rhythm or measured lyric timing did not pass", evidence
             )
         return evidence

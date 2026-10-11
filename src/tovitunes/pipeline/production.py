@@ -244,6 +244,7 @@ def accept_episode_source(
             != tuple(line.text for line in spec.lyrics.lines)
         ):
             raise ValueError("generic audio/receipt/lyrics/analysis/timing identity differs")
+        advisory_asr = report.analyzer_configuration.get("production_timing") is True
         evaluations = []
         for subject_type, subject, policy, policy_version, evidence_hash in (
             (
@@ -267,17 +268,34 @@ def accept_episode_source(
                 "LIMIT 1",
                 (subject_type, subject, digest, policy, policy_version),
             ).fetchone()
-            if ev is None or ev["status"] != "pass" or ev["evaluator_type"] != "machine":
-                raise ValueError(f"generic handoff requires machine {policy} pass")
+            if (
+                ev is None
+                or ev["evaluator_type"] != "machine"
+                or (ev["status"] != "pass" and not (advisory_asr and policy == "music_qa"))
+            ):
+                raise ValueError(f"generic handoff requires valid machine {policy} evidence")
             evidence = json.loads(ev["evidence_json"])
             if evidence.get("analysis_sha256") != evidence_hash:
                 raise ValueError("QA evaluation differs from exact measured analysis")
-            if subject_type == "audio" and (
-                evidence.get("analysis_version") != analysis_version
-                or evidence.get("request_id") != request_id
-                or evidence.get("timing_admission", {}).get("admitted") is not True
-            ):
-                raise ValueError("QA does not admit exact request/timing version")
+            if subject_type == "audio":
+                if (
+                    evidence.get("analysis_version") != analysis_version
+                    or evidence.get("request_id") != request_id
+                    or evidence.get("timing_admission", {}).get("admitted") is not True
+                ):
+                    raise ValueError("QA does not admit exact request/timing version")
+                if advisory_asr:
+                    objective = evidence.get("objective_checks", {})
+                    derived = evidence.get("derived_checks", {})
+                    if (
+                        not all(objective.get(k) is True for k in (
+                            "decodes_and_matches_receipt", "duration_in_scope"
+                        ))
+                        or not all(derived.get(k, {}).get("status") == "pass" for k in (
+                            "artifact_free", "beat_usable"
+                        ))
+                    ):
+                        raise ValueError("advisory ASR cannot bypass audio integrity or rhythm")
             evaluations.append(ev["evaluation_id"])
         manifest = {
             "schema_version": 2,
