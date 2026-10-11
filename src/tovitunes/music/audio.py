@@ -2,7 +2,7 @@
 
 import io
 import math
-import wave
+import struct
 from dataclasses import dataclass
 
 import miniaudio
@@ -19,34 +19,103 @@ class AudioInfo:
     extension: str
     sample_rate_hz: int
     bitrate_bps: int | None
+    channel_count: int | None = None
+    frame_count: int | None = None
+    sample_format: str | None = None
+
+
+def _inspect_wav(data: bytes) -> AudioInfo:
+    """Validate every RIFF chunk and decode all frames without changing source bytes."""
+    if (
+        len(data) < 12
+        or data[:4] != b"RIFF"
+        or data[8:12] != b"WAVE"
+        or struct.unpack_from("<I", data, 4)[0] + 8 != len(data)
+    ):
+        raise ValueError("invalid or incomplete WAV container")
+    offset = 12
+    chunks: dict[bytes, bytes] = {}
+    while offset < len(data):
+        if offset + 8 > len(data):
+            raise ValueError("truncated WAV chunk header")
+        kind, size = struct.unpack_from("<4sI", data, offset)
+        start, end = offset + 8, offset + 8 + size
+        offset = end + size % 2
+        if offset > len(data):
+            raise ValueError("truncated WAV chunk payload")
+        if kind in {b"fmt ", b"data", b"fact"}:
+            if kind in chunks or (kind == b"data" and b"fmt " not in chunks):
+                raise ValueError("ambiguous WAV chunk layout")
+            chunks[kind] = data[start:end]
+    fmt, audio = chunks.get(b"fmt ", b""), chunks.get(b"data", b"")
+    if len(fmt) < 16 or not audio:
+        raise ValueError("missing WAV format or frames")
+    tag, channels, rate, byte_rate, align, bits = struct.unpack_from("<HHIIHH", fmt)
+    if len(fmt) != 16:
+        if len(fmt) < 18 or len(fmt) != 18 + struct.unpack_from("<H", fmt, 16)[0]:
+            raise ValueError("invalid WAV format extension")
+    if tag == 0xFFFE:
+        if len(fmt) != 40 or struct.unpack_from("<H", fmt, 18)[0] != bits:
+            raise ValueError("unsupported extensible WAV sample width")
+        mask = struct.unpack_from("<I", fmt, 20)[0]
+        if mask and mask.bit_count() != channels:
+            raise ValueError("invalid WAV channel mask")
+        # KSDATAFORMAT_SUBTYPE_PCM / IEEE_FLOAT, little-endian Windows GUID.
+        if fmt[28:40] != bytes.fromhex("00001000800000aa00389b71"):
+            raise ValueError("unsupported WAV subformat")
+        tag = struct.unpack_from("<I", fmt, 24)[0]
+    codecs = {
+        (1, 8): ("pcm_u8", miniaudio.SampleFormat.UNSIGNED8),
+        (1, 16): ("pcm_s16le", miniaudio.SampleFormat.SIGNED16),
+        (1, 24): ("pcm_s24le", miniaudio.SampleFormat.SIGNED24),
+        (1, 32): ("pcm_s32le", miniaudio.SampleFormat.SIGNED32),
+        (3, 32): ("pcm_f32le", miniaudio.SampleFormat.FLOAT32),
+        (3, 64): ("pcm_f64le", miniaudio.SampleFormat.FLOAT32),
+    }
+    if (tag, bits) not in codecs or not 1 <= channels <= 32 or not 1 <= rate <= 384000:
+        raise ValueError("unsupported WAV sample format")
+    width = bits // 8
+    if align != channels * width or byte_rate != rate * align or len(audio) % align:
+        raise ValueError("inconsistent WAV frame layout")
+    frames = len(audio) // align
+    fact = chunks.get(b"fact")
+    if fact is not None and (len(fact) != 4 or struct.unpack("<I", fact)[0] != frames):
+        raise ValueError("inconsistent WAV fact frame count")
+    codec, source_format = codecs[tag, bits]
+    try:
+        source = miniaudio.wav_get_info(data)
+        decoded = miniaudio.wav_read_f32(data)
+    except miniaudio.DecodeError as exc:
+        raise ValueError("invalid WAV audio") from exc
+    duration = frames / rate
+    if (
+        source.sample_format != source_format
+        or (source.num_frames, source.nchannels, source.sample_rate) != (frames, channels, rate)
+        or (decoded.num_frames, decoded.nchannels, decoded.sample_rate) != (frames, channels, rate)
+        or source.duration != duration
+        or decoded.duration != duration
+        or decoded.sample_format != miniaudio.SampleFormat.FLOAT32
+        or len(decoded.samples) != frames * channels
+        or (tag == 3 and not all(math.isfinite(sample) for sample in decoded.samples))
+    ):
+        raise ValueError("inconsistent or nonfinite decoded WAV audio")
+    return AudioInfo(
+        duration,
+        "audio/wav",
+        "wav",
+        codec,
+        ".wav",
+        rate,
+        byte_rate * 8,
+        channels,
+        frames,
+        f"{'float' if tag == 3 else 'integer'}{bits}",
+    )
 
 
 def inspect_audio(data: bytes, mime_type: str) -> AudioInfo:
     if mime_type == "audio/wav":
-        try:
-            with wave.open(io.BytesIO(data), "rb") as stream:
-                if stream.getcomptype() != "NONE" or not stream.getnframes():
-                    raise ValueError("unsupported or empty WAV")
-                rate = stream.getframerate()
-                channels = stream.getnchannels()
-                width = stream.getsampwidth()
-                frames = stream.getnframes()
-                if rate <= 0 or channels <= 0 or width not in (1, 2, 3, 4):
-                    raise ValueError("invalid PCM WAV format")
-                if len(stream.readframes(frames)) != frames * channels * width:
-                    raise ValueError("truncated WAV")
-                codec = {1: "pcm_u8", 2: "pcm_s16le", 3: "pcm_s24le", 4: "pcm_s32le"}[width]
-                return AudioInfo(
-                    frames / rate,
-                    mime_type,
-                    "wav",
-                    codec,
-                    ".wav",
-                    rate,
-                    rate * channels * width * 8,
-                )
-        except (wave.Error, EOFError) as exc:
-            raise ValueError("invalid WAV") from exc
+        return _inspect_wav(data)
     if mime_type != "audio/mpeg":
         raise ValueError("unsupported music audio MIME type")
     if not data:

@@ -146,7 +146,7 @@ def finished(workflow):
 
 def test_metadata_requires_selected_final_render_before_provider(workflow):
     flow, fake = workflow
-    result = flow.prepare()
+    result = flow.prepare(run_id=flow.reserve_next_run())
     with pytest.raises(ValueError, match="selected final_render"):
         MetadataWriter(flow).generate(result["episode_key"])
     assert len(fake.calls) == 4

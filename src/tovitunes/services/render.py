@@ -16,7 +16,12 @@ from tovitunes.domain.storyboard import (
 from tovitunes.domain.visual_plan import EpisodeVisualPlan
 from tovitunes.errors import ProductionStop
 from tovitunes.pipeline.music_adapter import creative_music_spec
-from tovitunes.pipeline.production import accept_episode_source, extract_alignment, extract_beats
+from tovitunes.pipeline.production import (
+    accept_episode_source,
+    extract_alignment,
+    extract_beats,
+    production_analysis_version,
+)
 from tovitunes.render.production import ProductionRenderer
 from tovitunes.services.context import StageContext
 
@@ -33,12 +38,19 @@ class RenderService(StageContext):
         environment_id: str,
     ) -> None:
         spec, lyrics, music, ids = inputs
+        with closing(self.database.connect()) as db:
+            output = db.execute(
+                "SELECT blind_id FROM music_outputs WHERE request_id=?", (request_id,)
+            ).fetchone()
+            if output is None:
+                raise ValueError("storyboard lacks retained music output")
+            version = production_analysis_version(db, output["blind_id"], self.config)
         source = accept_episode_source(
             self.config,
             episode,
             request_id,
             creative_music_spec(episode, spec, lyrics, music, ids),
-            self.config.automation.analysis_version,
+            version,
         )
         master = self._selected(episode, "audio_master")
         assert master is not None

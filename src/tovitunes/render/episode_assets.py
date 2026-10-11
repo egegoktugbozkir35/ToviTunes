@@ -339,6 +339,7 @@ def generate_assets(
             )
         )
         image.save(path)
+        assert_owner()
         record = persist_file(
             store,
             episode,

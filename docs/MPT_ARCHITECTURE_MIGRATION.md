@@ -130,13 +130,17 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   participant UI as CLI / FastAPI / recovered job
-  participant O as Orchestrator.resume(key,target)
+  participant O as Orchestrator.resume(reference,target)
   participant L as SQLite heartbeat lease
   participant P as plan_continuation
   participant D as Domain service
   participant R as Renderer
   UI->>O: Saved identity and requested target
   O->>L: Acquire owner, reject cross-process overlap
+  opt Pre-episode run reference
+    O->>D: Load exact run, continue its durable creative receipts
+    D-->>O: Reserved episode identity
+  end
   O->>P: Recompute (ignore stale browser/jobs/events)
   P-->>O: Reusable stages and next stage
   alt Complete or protected historical data
@@ -155,7 +159,7 @@ sequenceDiagram
 
 ## Compatibility and deletion
 
-Migration `0024_mpt_architecture.sql` adds the singleton lease, request identities and diagnostic history. It snapshots existing episode identities as read-only historical production and imports bound old `production_next_runs` identities once into `production_requests`; historical intents are skipped when generating a new episode. Unbound historical runs remain audit evidence. New runtime never reads/writes the old lifecycle table. Migrations 0001–0023 remain byte-identical. Old requests, reconciliation evidence, publication IDs, selected artifacts and rights rows are retained. A pre-0021 upgrade fixture and pre-editorial Red/Blue fixture verify data/checksum preservation. Tests and screenshots use isolated data roots; live saved Red/Blue production is not regenerated.
+Migration `0024_mpt_architecture.sql` adds the singleton lease, request identities and diagnostic history. It snapshots existing episode identities as read-only historical production and imports bound old `production_next_runs` identities once into `production_requests`. Generate always reserves a new creative run and request without reading historical production requests. Resume explicitly identifies an episode or pre-episode run through `ProductionReference`; it never discovers another pending run. Studio recovery uses only the failed job's retained episode or run identity. Unbound historical runs remain audit evidence. New runtime never reads/writes the old lifecycle table. Migrations 0001–0023 remain byte-identical. Old requests, reconciliation evidence, publication IDs, selected artifacts and rights rows are retained. A pre-0021 upgrade fixture and pre-editorial Red/Blue fixture verify data/checksum preservation. Tests and screenshots use isolated data roots; live saved Red/Blue production is not regenerated.
 
 Deleted source modules: `pipeline/short_production.py`, `pipeline/planner.py`, `pipeline/execution.py`, `creative/workflow.py`. Their callers now use the canonical application or specialized domain services. Removed the old curriculum subject-pool generation/reservation branch, creative abandon writer/CLI command, event-derived editorial status, duplicate library eligibility, independent Web metadata/render/upload effects, renderer-owned production lease, nested publication/creative leases, Studio fallback/reconciliation workflow and the second provider failure whitelist.
 

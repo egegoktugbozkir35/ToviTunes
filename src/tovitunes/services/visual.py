@@ -152,8 +152,11 @@ class VisualService(StageContext):
             environment = EnvironmentSet.model_validate(self.store.read_json(aid))
             for plate in environment.plates:
                 if plate.source_artifact_id:
+                    self.ownership.assert_owned()
                     self.store.admit_preview(plate.source_artifact_id)
+                self.ownership.assert_owned()
                 self.store.admit_preview(plate.artifact_id)
+            self.ownership.assert_owned()
             self.store.admit_preview(aid)
             self._json(
                 episode,

@@ -46,7 +46,7 @@ from tovitunes.music.analysis_models import (
 )
 from tovitunes.music.models import TimedText
 from tovitunes.music.timing_runtime import measured_rhythm
-from tovitunes.orchestrator import build_orchestrator
+from tovitunes.orchestrator import ProductionReference, build_orchestrator
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import FakeDraftGenerator
 from tovitunes.pipeline.music_adapter import creative_music_spec
@@ -449,20 +449,14 @@ def test_pending_then_success_same_task(case, monkeypatch):
     assert case["analysis_calls"]
 
 
-def test_qa_failure_stops_without_regeneration(case, monkeypatch):
-    monkeypatch.setattr(
-        "tovitunes.music.analysis.compare_lyrics",
-        lambda *a, **k: __import__(
-            "tovitunes.music.analysis", fromlist=["LyricComparison"]
-        ).LyricComparison(
-            status="incomplete",
-            expected_transcript=a[0],
-            recognized_transcript="",
-            expected_word_count=0,
-            recognized_word_count=0,
-            required_phrase_presence={},
-        ),
-    )
+def test_missing_canonical_alignment_stops_without_regeneration(case, monkeypatch):
+    from tovitunes.music.analysis import transcribe_and_align as original
+
+    def invalid(*args):
+        transcript, alignment, version, device = original(*args)
+        return transcript, alignment.model_copy(update={"status": "incomplete"}), version, device
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", invalid)
     for _ in range(2):
         result = case["flow"].resume(case["episode"].external_key, target=ProductionTarget.PUBLISH)
         assert result["status"] == "BLOCKED", result
@@ -728,7 +722,7 @@ def test_next_creation_and_active_run_resume(case):
         before = [tuple(row) for row in db.execute("SELECT * FROM production_requests")]
     calls = list(case["fake"].calls)
     with pytest.raises(SystemExit):
-        flow.generate(ProductionTarget.PUBLISH)
+        flow.resume(ProductionReference(run_id=before[0][1]), ProductionTarget.PUBLISH)
     with closing(flow.database.connect()) as db:
         assert [tuple(row) for row in db.execute("SELECT * FROM production_requests")] == before
     assert case["fake"].calls == calls and calls.count("TopicPool") == 1
@@ -806,7 +800,7 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
     assert parse_storyboard(store.read_json(storyboard.identity.artifact_id)).schema_version == 2
     assert case["music_events"].count("/release_task") == 1
     calls = (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
-    second = case["flow"].generate(target=ProductionTarget.PUBLISH)
+    second = case["flow"].resume(result["episode_key"], target=ProductionTarget.PUBLISH)
     assert second["final_render_id"] == result["final_render_id"]
     assert calls == (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
 
@@ -840,7 +834,7 @@ def test_cli_frontends_use_application_service(case, monkeypatch, capsys, comman
         def __init__(self, config, **kwargs):
             pass
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "READY"}
 
@@ -884,7 +878,7 @@ def test_web_frontend_plan_and_confirmation(case, monkeypatch):
             calls.append(("resume", key, target))
             return {"status": "PENDING_PROVIDER", "episode_key": key, "current_stage": "MUSIC"}
 
-        def generate(self, target):
+        def generate(self, target, **kwargs):
             calls.append(("next", target))
             return {"status": "NEEDS_REVIEW"}
 
@@ -1010,3 +1004,156 @@ def test_remote_id_is_success_evidence_even_when_diagnostics_are_stale(ready, mo
         config, publisher_factory=lambda owner: pytest.fail("duplicate upload")
     )
     assert app.resume(episode.external_key, ProductionTarget.PUBLISH)["target_complete"]
+
+
+@pytest.mark.parametrize("asr_status", ["unavailable", "mismatch"])
+def test_advisory_asr_renders_and_resumes_without_regeneration(case, monkeypatch, asr_status):
+    from tovitunes.music.analysis import transcribe_and_align as original
+
+    def advisory(*args):
+        transcript, alignment, version, device = original(*args)
+        if asr_status == "unavailable":
+            transcript = TranscriptionEvidence(
+                status="unavailable", failure_reason="offline ASR error"
+            )
+        else:
+            transcript = transcript.model_copy(update={"recognized_text": "Tovey wrong words"})
+        return transcript, alignment, version, device
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", advisory)
+    key = case["episode"].external_key
+    result = case["flow"].resume(key, ProductionTarget.RENDER)
+    assert result["status"] == "COMPLETE", result.get("blocker")
+    assert Path(result["output_path"]).read_bytes()[4:8] == b"ftyp"
+    with closing(case["store"].database.connect()) as db:
+        qa = db.execute(
+            "SELECT status,evidence_json FROM music_policy_evaluations "
+            "WHERE policy_id='music_qa' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        assert qa["status"] == "fail"
+        assert json.loads(qa["evidence_json"])["timing_admission"]["admitted"] is True
+        assert db.execute("SELECT count(*) FROM publication_attempts").fetchone()[0] == 0
+        output = db.execute("SELECT sha256 FROM music_outputs").fetchone()[0]
+    calls = len(case["music_events"]), len(case["image_events"]), len(case["analysis_calls"])
+    again = case["flow"].resume(key, ProductionTarget.RENDER)
+    assert again["status"] == "COMPLETE"
+    assert calls == (
+        len(case["music_events"]),
+        len(case["image_events"]),
+        len(case["analysis_calls"]),
+    )
+    assert case["music_events"].count("/release_task") == 1
+    from hashlib import sha256
+
+    master = case["store"].selected("episode", case["episode"].episode_id, "audio_master", "main")
+    assert (
+        sha256(case["store"].path_for(master.identity.artifact_id).read_bytes()).hexdigest()
+        == output
+    )
+
+
+def retain_analysis(case, monkeypatch):
+    """Interrupt after admission, before visuals; retain real fixture ledgers for planning."""
+    with monkeypatch.context() as scoped:
+        scoped.setattr(VisualService, "_visual", lambda *args: (_ for _ in ()).throw(SystemExit()))
+        with pytest.raises(SystemExit):
+            case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    with closing(case["store"].database.connect()) as db:
+        return dict(db.execute("SELECT * FROM music_audio_analysis").fetchone())
+
+
+@pytest.mark.parametrize(
+    "damage", ["analysis_version", "request", "analysis_hash", "human", "timing_hash"]
+)
+def test_resume_rejects_stale_or_unbound_evaluations(case, monkeypatch, damage):
+    from uuid import uuid4
+
+    retain_analysis(case, monkeypatch)
+    with closing(case["store"].database.connect()) as db:
+        row = dict(
+            db.execute(
+                "SELECT * FROM music_policy_evaluations WHERE policy_id=? "
+                "ORDER BY rowid DESC LIMIT 1",
+                ("music_timing" if damage == "timing_hash" else "music_qa",),
+            ).fetchone()
+        )
+        details = json.loads(row["evidence_json"])
+        if damage == "analysis_version":
+            details["analysis_version"] += 1
+        elif damage == "request":
+            details["request_id"] = "other"
+        elif damage in {"analysis_hash", "timing_hash"}:
+            details["analysis_sha256"] = "f" * 64
+        else:
+            row["evaluator_type"] = "human"
+        row["evaluation_id"] = str(uuid4())
+        row["evidence_json"] = json.dumps(details)
+        db.execute(
+            "INSERT INTO music_policy_evaluations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            tuple(row.values()),
+        )
+        db.commit()
+    before = rows_snapshot(case["config"].database_path)
+    plan = plan_continuation(
+        case["config"], case["episode"].external_key, target=ProductionTarget.RENDER
+    )
+    assert plan["current_stage"] == "AUDIO_ANALYSIS" and plan["status"] == "BLOCKED"
+    assert rows_snapshot(case["config"].database_path) == before
+    assert case["music_events"].count("/release_task") == 1 and not case["image_events"]
+
+
+def test_resume_appends_new_analysis_configuration_keeps_original_song(case, monkeypatch):
+    from tovitunes.music.analysis import AnalysisConfig
+    from tovitunes.music.benchmark import MusicBenchmark
+    from tovitunes.services.music import MusicService
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(MusicService, "_analysis", lambda *args: (_ for _ in ()).throw(SystemExit()))
+        with pytest.raises(SystemExit):
+            case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    benchmark = MusicBenchmark(case["store"].database, case["config"].data_root / "music-benchmark")
+    with closing(case["store"].database.connect()) as db:
+        blind_id = db.execute("SELECT blind_id FROM music_outputs").fetchone()[0]
+    legacy, _ = benchmark.analyze_audio(blind_id, 1, AnalysisConfig())
+    benchmark.evaluate_analysis_qa(blind_id, 1)
+    benchmark.evaluate_timing(blind_id, 1)
+    plan = plan_continuation(
+        case["config"], case["episode"].external_key, target=ProductionTarget.RENDER
+    )
+    assert plan["next_stage"] == "AUDIO_ANALYSIS" and plan["allowed"]
+    retained = retain_analysis(case, monkeypatch)
+    with closing(case["store"].database.connect()) as db:
+        rows = db.execute(
+            "SELECT version,analysis_json FROM music_audio_analysis ORDER BY version"
+        ).fetchall()
+    assert [r["version"] for r in rows] == [1, 2]
+    assert rows[0]["analysis_json"] == legacy.model_dump_json()
+    assert retained["audio_sha256"] == legacy.audio_sha256
+    assert case["music_events"].count("/release_task") == 1
+    plan = plan_continuation(
+        case["config"], case["episode"].external_key, target=ProductionTarget.RENDER
+    )
+    assert plan["next_stage"] == "VISUAL_PLAN"
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt", "sha_mismatch"])
+def test_preview_resume_rejects_damaged_retained_source(case, monkeypatch, damage):
+    retain_analysis(case, monkeypatch)
+    with closing(case["store"].database.connect()) as db:
+        path = (
+            case["config"].data_root
+            / "music-benchmark"
+            / db.execute("SELECT relative_path FROM music_outputs").fetchone()[0]
+        )
+    if damage == "missing":
+        path.unlink()
+    elif damage == "corrupt":
+        path.write_bytes(b"invalid audio")
+    else:
+        path.write_bytes(tone())  # Valid container with different samples and the same duration.
+        data = bytearray(path.read_bytes())
+        data[44:46] = b"\x01\x00"
+        path.write_bytes(data)
+    result = case["flow"].resume(case["episode"].external_key, ProductionTarget.RENDER)
+    assert result["status"] == "BLOCKED" and result["current_stage"] == "AUDIO_ANALYSIS"
+    assert case["music_events"].count("/release_task") == 1 and not case["image_events"]

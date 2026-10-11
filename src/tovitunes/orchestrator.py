@@ -2,7 +2,9 @@
 
 from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from sqlite3 import Connection
 from typing import Any
 from uuid import uuid4
 
@@ -31,6 +33,21 @@ from tovitunes.services.visual import VisualService
 
 ServiceFactory = Callable[[ProductionExecutionOwnership, Callable[[str, str], None]], StageContext]
 PublisherFactory = Callable[[ProductionExecutionOwnership], PublicationService]
+
+
+@dataclass(frozen=True)
+class ProductionReference:
+    """Explicit identity of one production to continue, including before episode reservation."""
+
+    episode_key: str | None = None
+    run_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.episode_key is None) == (self.run_id is None):
+            raise ValueError("Exactly one of episode_key or run_id is required")
+        identity = self.episode_key if self.episode_key is not None else self.run_id
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("Production identity must be a nonempty string")
 
 
 class Orchestrator:
@@ -70,21 +87,42 @@ class Orchestrator:
             ),
         )
 
-    def generate(self, target: ProductionTarget = ProductionTarget.DRAFT) -> dict[str, Any]:
-        return self._execute("generate", None, target)
+    def generate(
+        self,
+        target: ProductionTarget = ProductionTarget.DRAFT,
+        *,
+        retain_reservation: Callable[[Connection, ProductionReference], None] | None = None,
+    ) -> dict[str, Any]:
+        return self._execute("generate", None, target, retain_reservation=retain_reservation)
 
     def resume(
-        self, episode_key: str, target: ProductionTarget = ProductionTarget.RENDER
+        self,
+        reference: ProductionReference | str,
+        target: ProductionTarget = ProductionTarget.RENDER,
     ) -> dict[str, Any]:
-        return self._execute("resume", episode_key, target)
+        if isinstance(reference, str):
+            reference = ProductionReference(episode_key=reference)
+        if not isinstance(reference, ProductionReference):
+            raise TypeError("Resume requires an explicit production reference")
+        return self._execute("resume", reference, target)
 
-    def _execute(self, operation: str, key: str | None, target: ProductionTarget) -> dict[str, Any]:
+    def _execute(
+        self,
+        operation: str,
+        reference: ProductionReference | None,
+        target: ProductionTarget,
+        *,
+        retain_reservation: Callable[[Connection, ProductionReference], None] | None = None,
+    ) -> dict[str, Any]:
         self._milestone_percent = 0
         self.database.migrate()
         history = RunHistory(self.database)
-        with ProductionExecutionOwnership(self.database, operation=operation, item_id=key) as owner:
-            diagnostic_id = history.start(operation, target.value, key)
-            run_id: str | None = None
+        key = reference.episode_key if reference else None
+        run_id = reference.run_id if reference else None
+        with ProductionExecutionOwnership(
+            self.database, operation=operation, item_id=key or run_id
+        ) as owner:
+            diagnostic_id = history.start(operation, target.value, key or run_id)
             creative_result: dict[str, Any] = {}
             stage = "CREATIVE"
             services: dict[str, StageContext] = {}
@@ -98,49 +136,42 @@ class Orchestrator:
                 return services[name]
 
             try:
-                if key is None:
-                    # Intent records contain identity only. Completion is computed from facts.
+                if reference is not None and run_id is not None:
+                    # Resolve only the requested run. A bound episode uses normal continuation.
                     with closing(self.database.connect()) as db:
-                        intents = db.execute(
-                            "SELECT p.run_id,p.target,e.external_key FROM production_requests p "
-                            "JOIN creative_runs c ON c.run_id=p.run_id "
-                            "LEFT JOIN episodes e ON e.episode_id=c.episode_id ORDER BY "
-                            "p.rowid DESC"
-                        ).fetchall()
-                    for intent in intents:
-                        saved_key = intent["external_key"]
-                        saved_target = ProductionTarget(intent["target"])
-                        if saved_key and plan_continuation(
-                            self.config, saved_key, target=saved_target
-                        ).get("historical"):
-                            continue
-                        if (
-                            saved_key is None
-                            or not plan_continuation(self.config, saved_key, target=saved_target)[
-                                "target_complete"
-                            ]
-                        ):
-                            run_id, key = intent["run_id"], saved_key
-                            break
-                    if key is None:
-                        with service("context")._creative() as creative:
-                            if run_id is None:
-                                run_id = creative.reserve_next_run()
-                                owner.assert_owned()
-                                with closing(self.database.connect()) as db:
-                                    db.execute(
-                                        "INSERT INTO production_requests VALUES (?,?,?,?)",
-                                        (
-                                            str(uuid4()),
-                                            run_id,
-                                            target.value,
-                                            datetime.now(UTC).isoformat(),
-                                        ),
-                                    )
-                                    db.commit()
-                            generated = creative.prepare(run_id=run_id)
-                            key = str(generated["episode_key"])
-                            creative_result = generated
+                        saved = db.execute(
+                            "SELECT e.external_key FROM creative_runs c "
+                            "LEFT JOIN episodes e ON e.episode_id=c.episode_id WHERE c.run_id=?",
+                            (run_id,),
+                        ).fetchone()
+                    if saved is None:
+                        raise KeyError(f"unknown creative run: {run_id}")
+                    key = saved["external_key"]
+                if key is None:
+                    with service("context")._creative() as creative:
+                        if reference is None:
+                            owner.assert_owned()
+                            # One commit binds the new run, intent and optional Studio reference.
+                            # A crash before commit leaves none; after commit all are recoverable.
+                            with closing(self.database.connect()) as db, db:
+                                run_id = creative.reserve_next_run(connection=db)
+                                db.execute(
+                                    "INSERT INTO production_requests VALUES (?,?,?,?)",
+                                    (
+                                        str(uuid4()),
+                                        run_id,
+                                        target.value,
+                                        datetime.now(UTC).isoformat(),
+                                    ),
+                                )
+                                if retain_reservation is not None:
+                                    retain_reservation(db, ProductionReference(run_id=run_id))
+                                # Reservation's first INSERT starts this write transaction after
+                                # the service renews ownership. Verify without a second writer.
+                                self.database.assert_production_execution_owner(owner.owner_token)
+                        assert run_id is not None
+                        creative_result = creative.prepare(run_id=run_id)
+                        key = str(creative_result["episode_key"])
                 assert key is not None
                 # Recompute after acquiring ownership, then before every effect.
                 plan = plan_continuation(self.config, key, target=target)
@@ -350,9 +381,15 @@ class Orchestrator:
             raise StateError("Renderer returned an untrusted media path")
         inputs = load_inputs(self.config, key, local_preview=True)
         manifest_id = str(result["render_manifest_id"])
+        manifest_record = context.store.get(manifest_id)
         manifest = RenderManifest.model_validate(context.store.read_json(manifest_id))
         if (
             manifest.episode_id != inputs.storyboard.episode_id
+            or manifest.timed_storyboard_artifact_id
+            != inputs.storyboard_record.identity.artifact_id
+            or manifest_record.identity.owner_scope != "episode"
+            or manifest_record.identity.owner_id != inputs.storyboard.episode_id
+            or manifest_record.identity.kind != "render_manifest"
             or final.identity.owner_scope != "episode"
             or final.identity.owner_id != inputs.storyboard.episode_id
             or final.identity.kind != "final_render"
@@ -363,6 +400,7 @@ class Orchestrator:
         qa_record = context.store.get(qa_id)
         if (
             qa_record.identity.owner_id != inputs.storyboard.episode_id
+            or qa_record.identity.owner_scope != "episode"
             or qa_record.identity.kind != "media_qa"
         ):
             raise StateError("Renderer returned another episode's QA")
@@ -376,6 +414,23 @@ class Orchestrator:
             )
         ):
             raise StateError("Renderer result failed media QA identity")
+        with closing(self.database.connect()) as db:
+            for consumer, dependency in ((final, manifest_record), (qa_record, final)):
+                if (
+                    db.execute(
+                        "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                        "AND input_artifact_id=? AND input_sha256=?",
+                        (
+                            consumer.identity.artifact_id,
+                            dependency.identity.artifact_id,
+                            dependency.sha256,
+                        ),
+                    ).fetchone()
+                    is None
+                ):
+                    raise StateError(
+                        "Renderer result differs from its pinned artifact dependencies"
+                    )
         owner.assert_owned()
         context.store.admit_render_result(final.identity.artifact_id, qa_id)
 

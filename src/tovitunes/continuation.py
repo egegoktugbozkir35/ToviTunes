@@ -12,6 +12,7 @@ from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.storyboard import parse_storyboard
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.music_adapter import creative_music_spec
+from tovitunes.pipeline.production import accept_episode_source, production_analysis_version
 from tovitunes.pipeline.targets import STAGES, ProductionTarget, stages_for
 from tovitunes.publication.models import PublicationState, publication_state
 from tovitunes.publication.preflight import evaluate_release
@@ -105,10 +106,11 @@ def plan_continuation(
                         )
                     elif by_name[stage]["status"] == "COMPLETE":
                         by_name[stage]["status"] = "BLOCKED"
+                expected_music = None
                 if by_name["CREATIVE"]["status"] == "COMPLETE":
                     ids = by_name["CREATIVE"]["evidence"]["artifact_ids"]
                     try:
-                        creative_music_spec(
+                        expected_music = creative_music_spec(
                             episode_by_key(store.database, str(episode["external_key"])),
                             EpisodeSpec.model_validate(store.read_json(ids[0])),
                             LyricsSpec.model_validate(store.read_json(ids[1])),
@@ -152,26 +154,47 @@ def plan_continuation(
                                 "request_status": state,
                             },
                         )
-                        if binding["blind_id"]:
+                        if binding["blind_id"] and expected_music is not None:
+                            version = production_analysis_version(db, binding["blind_id"], config)
                             analysis = db.execute(
                                 "SELECT * FROM music_audio_analysis WHERE blind_id=? AND version=?",
-                                (binding["blind_id"], config.automation.analysis_version),
+                                (binding["blind_id"], version),
                             ).fetchone()
                             if analysis:
-                                qa = db.execute(
-                                    "SELECT * FROM music_policy_evaluations WHERE subject_id=? "
-                                    "AND policy_id='music_qa' ORDER BY rowid DESC LIMIT 1",
-                                    (binding["blind_id"],),
-                                ).fetchone()
-                                by_name["AUDIO_ANALYSIS"].update(
-                                    status=(
-                                        "COMPLETE" if qa and qa["status"] == "pass" else "BLOCKED"
-                                    ),
-                                    evidence={
-                                        "audio_sha256": analysis["audio_sha256"],
-                                        "version": analysis["version"],
-                                    },
-                                )
+                                evaluations = db.execute(
+                                    "SELECT subject_type FROM music_policy_evaluations "
+                                    "WHERE (subject_type='audio' AND subject_id=? "
+                                    "AND policy_id='music_qa' AND policy_version=2) OR "
+                                    "(subject_type='timing' AND subject_id=? "
+                                    "AND policy_id='music_timing' AND policy_version=1)",
+                                    (binding["blind_id"], f"{binding['blind_id']}:{version}"),
+                                ).fetchall()
+                                stage = by_name["AUDIO_ANALYSIS"]
+                                stage["evidence"] = {
+                                    "audio_sha256": analysis["audio_sha256"],
+                                    "version": version,
+                                }
+                                if {row["subject_type"] for row in evaluations} != {
+                                    "audio",
+                                    "timing",
+                                }:
+                                    stage["status"] = "READY"
+                                else:
+                                    try:
+                                        accept_episode_source(
+                                            config,
+                                            episode_by_key(
+                                                store.database, str(episode["external_key"])
+                                            ),
+                                            binding["request_id"],
+                                            expected_music,
+                                            version,
+                                            connection=db,
+                                        )
+                                        stage["status"] = "COMPLETE"
+                                    except (ValueError, OSError, KeyError) as exc:
+                                        stage["status"] = "BLOCKED"
+                                        stage["evidence"]["reason"] = str(exc)
                 visual = artifacts.get(("episode_visual_plan", "main"))
                 if visual:
                     data = json.loads(
@@ -232,10 +255,40 @@ def plan_continuation(
                             store.read_json(manifest_row["artifact_id"])
                         )
                         board = parse_storyboard(store.read_json(storyboard_row["artifact_id"]))
-                        if manifest.episode_id != eid or board.episode_id != eid:
+                        if (
+                            manifest.episode_id != eid
+                            or board.episode_id != eid
+                            or manifest.timed_storyboard_artifact_id
+                            != storyboard_row["artifact_id"]
+                        ):
                             raise ValueError("render identity differs")
+                        if (
+                            db.execute(
+                                "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                                "AND input_artifact_id=? AND input_sha256=?",
+                                (
+                                    final["artifact_id"],
+                                    manifest_row["artifact_id"],
+                                    manifest_row["sha256"],
+                                ),
+                            ).fetchone()
+                            is None
+                        ):
+                            raise ValueError(
+                                "render manifest differs from pinned render dependency"
+                            )
                         validate_manifest(store, manifest, board)
                         if qa_row:
+                            if (
+                                db.execute(
+                                    "SELECT 1 FROM artifact_dependencies "
+                                    "WHERE consumer_artifact_id=? "
+                                    "AND input_artifact_id=? AND input_sha256=?",
+                                    (qa_row["artifact_id"], final["artifact_id"], final["sha256"]),
+                                ).fetchone()
+                                is None
+                            ):
+                                raise ValueError("QA differs from pinned render dependency")
                             qa = store.read_json(qa_row["artifact_id"])
                             if (
                                 not isinstance(qa, dict)

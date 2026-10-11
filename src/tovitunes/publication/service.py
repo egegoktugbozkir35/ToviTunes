@@ -183,7 +183,6 @@ class PublicationService:
             )
             if not started or not isinstance(video_id, str) or not video_id.strip():
                 raise UploadAmbiguous("Upload returned no trusted remote identity")
-            self._assert_owned()
         except UploadRejected as exc:
             self._finish(attempt_id, "terminal_failure", "upload_rejected", str(exc))
             raise
@@ -215,6 +214,9 @@ class PublicationService:
                 "SELECT * FROM publication_attempts WHERE attempt_id=?", (attempt_id,)
             ).fetchone()
         assert row is not None
+        # A returned remote ID is evidence even if the lease expired during upload.
+        # Retain it before fencing the caller from promotion or any subsequent effect.
+        self._assert_owned()
         return _row_dict(row)
 
     def publish_public(self, episode_key: str) -> dict[str, Any]:
@@ -306,6 +308,7 @@ class PublicationService:
             db.commit()
         started = False
         try:
+            self._assert_owned()
             with closing(self.database.connect()) as db:
                 db.execute(
                     "UPDATE publication_visibility_events SET outcome='remote_started', "
@@ -314,6 +317,7 @@ class PublicationService:
                 )
                 db.commit()
             started = True
+            self._assert_owned()
             result = client.publish_video(video_id, remote)
             status = result.get("status", {})
             if (
@@ -338,6 +342,7 @@ class PublicationService:
                 ) from exc
             raise
         self._finish_visibility(event_id, "succeeded", None)
+        self._assert_owned()
         with closing(self.database.connect()) as db:
             event = db.execute(
                 "SELECT * FROM publication_visibility_events WHERE event_id=?", (event_id,)

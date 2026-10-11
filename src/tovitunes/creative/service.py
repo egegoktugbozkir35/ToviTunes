@@ -7,7 +7,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from sqlite3 import Row
+from sqlite3 import Connection, Row
 from typing import Any, cast
 from uuid import uuid4
 
@@ -182,25 +182,19 @@ class CreativeService:
             config.data_root, self.database, generated_source_roots=[self.generated]
         )
 
-    def _run(self, run_id: str | None) -> Row | None:
+    def _run(self, run_id: str) -> Row:
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValueError("An explicit nonempty run_id is required")
         with closing(self.database.connect()) as db:
-            if run_id:
-                row = db.execute("SELECT * FROM creative_runs WHERE run_id=?", (run_id,)).fetchone()
-                if row is None:
-                    raise KeyError(run_id)
-                return cast(Row, row)
-            return cast(
-                Row | None,
-                db.execute(
-                    "SELECT r.* FROM creative_runs r JOIN brand_revisions b "
-                    "ON b.revision_id=r.brand_revision_id WHERE b.brand_id=? "
-                    "AND r.status<>'complete' "
-                    "ORDER BY r.created_at LIMIT 1",
-                    (self.catalog.definition.brand_id,),
-                ).fetchone(),
-            )
+            row = db.execute("SELECT * FROM creative_runs WHERE run_id=?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            return cast(Row, row)
 
-    def _new_run(self) -> Row:
+    def _new_run(self, connection: Connection | None = None) -> Row:
+        if connection is None:
+            with closing(self.database.connect()) as db, db:
+                return self._new_run(db)
         facts = {
             "brand": self.catalog.definition.model_dump(mode="json"),
             "creative_bible": self.catalog.creative_bible.model_dump(mode="json"),
@@ -210,30 +204,28 @@ class CreativeService:
             "creative_topics": self.config.creative_topics.model_dump(mode="json"),
         }
         run_id, now = str(uuid4()), datetime.now(UTC).isoformat()
-        with closing(self.database.connect()) as db:
-            db.execute(
-                "INSERT INTO creative_runs "
-                "(run_id,brand_revision_id,curriculum_revision_id,provider,"
-                "model,prompt_version,input_fingerprint,input_json,status,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    run_id,
-                    self.catalog.version.revision_id,
-                    self.catalog.curriculum_revision.revision_id,
-                    self.config.creative_llm.provider,
-                    self.config.creative_llm.model,
-                    OPEN_TOPIC_PROMPT,
-                    fingerprint(facts),
-                    canonical(facts),
-                    "planning",
-                    now,
-                    now,
-                ),
-            )
-            db.commit()
-        row = self._run(run_id)
+        connection.execute(
+            "INSERT INTO creative_runs "
+            "(run_id,brand_revision_id,curriculum_revision_id,provider,"
+            "model,prompt_version,input_fingerprint,input_json,status,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                self.catalog.version.revision_id,
+                self.catalog.curriculum_revision.revision_id,
+                self.config.creative_llm.provider,
+                self.config.creative_llm.model,
+                OPEN_TOPIC_PROMPT,
+                fingerprint(facts),
+                canonical(facts),
+                "planning",
+                now,
+                now,
+            ),
+        )
+        row = connection.execute("SELECT * FROM creative_runs WHERE run_id=?", (run_id,)).fetchone()
         assert row is not None
-        return row
+        return cast(Row, row)
 
     def _reserve_brief(self, row: Row, brief: LearningBrief) -> Episode:
         stem = subject_slug(brief.subject) + "-" + brief.idea_fingerprint[:8]
@@ -271,9 +263,9 @@ class CreativeService:
             db.commit()
         return episode
 
-    def reserve_next_run(self) -> str:
+    def reserve_next_run(self, *, connection: Connection | None = None) -> str:
         self.assert_owner()
-        return str(self._new_run()["run_id"])
+        return str(self._new_run(connection)["run_id"])
 
     def prepare(
         self,
@@ -281,6 +273,11 @@ class CreativeService:
         run_id: str | None = None,
         episode_key: str | None = None,
     ) -> dict[str, Any]:
+        if (run_id is None) == (episode_key is None):
+            raise ValueError("Exactly one of run_id or episode_key is required")
+        identity = run_id if run_id is not None else episode_key
+        if not isinstance(identity, str) or not identity.strip():
+            raise ValueError("Creative production identity must be a nonempty string")
         if self.progress:
             self.progress("CREATIVE", "TOPIC_RUNNING")
         before = call_snapshot(self.database)
@@ -291,11 +288,11 @@ class CreativeService:
         assert_owner = self.assert_owner
         assert_owner()
 
-        row = self._run(run_id) if not episode_key else None
-        if episode_key:
+        row = self._run(run_id) if run_id is not None else None
+        if episode_key is not None:
             episode = episode_by_key(self.database, episode_key)
         else:
-            row = row if row is not None else self._new_run()
+            assert row is not None
             if row["prompt_version"] != OPEN_TOPIC_PROMPT:
                 raise StateError("Historical creative planning runs are retained read-only")
             if row["brand_revision_id"] != self.catalog.version.revision_id:

@@ -4,9 +4,9 @@ import json
 import os
 import re
 import sqlite3
-import wave
 from collections.abc import Callable, Sequence
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -16,8 +16,10 @@ from uuid import uuid4
 from pydantic import Field
 
 from tovitunes.errors import ExecutionOwnershipError
+from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import (
     AnalysisConfig,
+    build_timing,
     compare_lyrics,
     configuration_sha,
     normalized_words,
@@ -38,6 +40,14 @@ from tovitunes.music.models import (
 )
 from tovitunes.music.providers import MusicFailure, MusicProvider, MusicResult, MusicTaskPending
 from tovitunes.persistence.db import Database
+
+
+@dataclass(frozen=True)
+class _WavRecovery:
+    reconciliation_id: str
+    actor: str
+    rationale: str
+    prior_request: dict[str, Any]
 
 
 def now() -> str:
@@ -108,27 +118,8 @@ def plan(
 
 
 def inspect_wav_metadata(data: bytes) -> tuple[float, str]:
-    import io
-
-    try:
-        with wave.open(io.BytesIO(data), "rb") as stream:
-            if stream.getnframes() == 0 or stream.getframerate() == 0:
-                raise ValueError("empty WAV")
-            if stream.getcomptype() != "NONE":
-                raise ValueError("unsupported compressed WAV")
-            duration = stream.getnframes() / stream.getframerate()
-            if len(stream.readframes(stream.getnframes())) != (
-                stream.getnframes() * stream.getnchannels() * stream.getsampwidth()
-            ):
-                raise ValueError("truncated WAV")
-            codec = {1: "pcm_u8", 2: "pcm_s16le", 3: "pcm_s24le", 4: "pcm_s32le"}.get(
-                stream.getsampwidth()
-            )
-            if codec is None:
-                raise ValueError("unsupported PCM sample width")
-            return duration, codec
-    except (wave.Error, EOFError) as exc:
-        raise ValueError("invalid WAV") from exc
+    info = inspect_audio(data, "audio/wav")
+    return info.duration_seconds, info.codec
 
 
 def inspect_wav(data: bytes) -> float:
@@ -306,7 +297,14 @@ class MusicBenchmark:
         if not path.is_file() or path.is_symlink():
             raise ValueError("received audio bytes missing")
         data = path.read_bytes()
-        if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
+        if (
+            sha256(data).hexdigest() != receipt["sha256"]
+            or len(data) != receipt["byte_count"]
+            or (
+                "receipt_sha256" in receipt.keys()
+                and receipt["receipt_sha256"] != receipt["sha256"]
+            )
+        ):
             raise ValueError("received audio bytes changed")
         info = inspect_audio(data, receipt["mime_type"])
         if (
@@ -324,6 +322,13 @@ class MusicBenchmark:
             raise ValueError("received audio sample rate changed")
         if "audio_bitrate_bps" in metadata and metadata["audio_bitrate_bps"] != info.bitrate_bps:
             raise ValueError("received audio bitrate changed")
+        for key, value in (
+            ("audio_channel_count", info.channel_count),
+            ("audio_frame_count", info.frame_count),
+            ("audio_sample_format", info.sample_format),
+        ):
+            if key in metadata and metadata[key] != value:
+                raise ValueError("received audio sample metadata changed")
 
     def _finalize(self, request_id: str) -> dict[str, Any]:
         with closing(self.database.connect()) as db:
@@ -587,6 +592,98 @@ class MusicBenchmark:
             return {"request_id": request_id, "status": "ambiguous", "action": "retrieval_failed"}
         return self._finish_result(request_id, result, provider.provider)
 
+    def reconcile_ace_step_float_wav(
+        self,
+        request_id: str,
+        provider: AceStepLocalProvider,
+        *,
+        actor: str,
+        rationale: str,
+    ) -> dict[str, Any]:
+        """Explicitly accept a validated float WAV from the exact previously rejected task.
+
+        Ordinary provider-resume and terminal-failure admission remain unchanged.
+        No task is created; rejection evidence is retained in an immutable audit row.
+        """
+        if not actor.strip() or not rationale.strip():
+            raise ValueError("WAV reconciliation requires an actor and rationale")
+        row = self.request(request_id)
+        with closing(self.database.connect()) as db:
+            audit = db.execute(
+                "SELECT * FROM music_wav_reconciliations WHERE request_id=?", (request_id,)
+            ).fetchone()
+            receipt = db.execute(
+                "SELECT * FROM music_receipts WHERE request_id=?", (request_id,)
+            ).fetchone()
+            binding = db.execute(
+                "SELECT provider_endpoint FROM episode_music_bindings WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+        if (row["provider"], row["model"]) != (provider.provider, provider.model):
+            raise ValueError("provider identity differs from rejected ACE-Step request")
+        if binding and binding["provider_endpoint"] != provider.base_url:
+            raise ValueError("ACE-Step endpoint differs from the durable episode binding")
+        if audit is not None:
+            if receipt is None or (
+                receipt["sha256"] != audit["audio_sha256"]
+                or receipt["provider_request_id"] != audit["provider_request_id"]
+            ):
+                raise ValueError("WAV reconciliation lacks its exact retained receipt")
+            self.assert_owner()
+            return {**self.reconcile(request_id), "reconciliation_id": audit["reconciliation_id"]}
+        if (
+            row["provider"] != "ace_step_local"
+            or row["model"] != AceStepLocalProvider.model
+            or row["status"] != "terminal_failure"
+            or row["failure_category"] not in {"provider", "provider_retrieval"}
+            or row["failure_reason"] != "ACE-Step returned invalid WAV audio"
+            or not row["remote_started_at"]
+            or not row["provider_request_id"]
+            or receipt is not None
+        ):
+            raise ValueError("request is not eligible for ACE-Step float WAV reconciliation")
+        spec = CanonicalMusicSpec.model_validate_json(row["canonical_spec_json"])
+        translated = json.loads(row["translated_request_json"])
+        if translated != provider.translate(spec) or row["input_fingerprint"] != fingerprint(
+            spec, row["provider"], row["model"], translated
+        ):
+            raise ValueError("rejected ACE-Step request inputs or provider configuration changed")
+        self.assert_owner()
+        try:
+            result = provider.retrieve(row["provider_request_id"], translated)
+        except MusicFailure:
+            return {
+                "request_id": request_id,
+                "status": row["status"],
+                "action": "reconciliation_not_complete",
+            }
+        info = inspect_audio(result.audio_bytes, result.mime_type)
+        if (
+            result.provider_request_id != row["provider_request_id"]
+            or info.codec not in {"pcm_f32le", "pcm_f64le"}
+            or result.codec != info.codec
+            or result.container != "wav"
+        ):
+            raise ValueError("reconciliation requires the same task and validated IEEE-float WAV")
+        recovery = _WavRecovery(str(uuid4()), actor, rationale, row)
+        staged = self._staged_path(request_id)
+        if staged.exists() or staged.is_symlink():
+            if staged.is_symlink() or staged.read_bytes() != result.audio_bytes:
+                raise ValueError("staged bytes differ from retrieved provider audio")
+        else:
+            self._write_audio(request_id, result.audio_bytes)
+        # The audit and immutable receipt are one commit, before any success admission.
+        self._record_receipt(request_id, result, info.duration_seconds, info.codec, recovery)
+        self.assert_owner()
+        output = self._finalize(request_id)
+        return {
+            "request_id": request_id,
+            "status": "succeeded",
+            "blind_id": output["blind_id"],
+            "action": "reconciled",
+            "reconciliation_id": recovery.reconciliation_id,
+        }
+
     def _finish_result(
         self, request_id: str, result: MusicResult, provider_name: str
     ) -> dict[str, Any]:
@@ -640,7 +737,12 @@ class MusicBenchmark:
             }
 
     def _record_receipt(
-        self, request_id: str, result: MusicResult, duration: float, codec: str
+        self,
+        request_id: str,
+        result: MusicResult,
+        duration: float,
+        codec: str,
+        recovery: _WavRecovery | None = None,
     ) -> None:
         request = self.request(request_id)
         info = inspect_audio(result.audio_bytes, result.mime_type)
@@ -658,6 +760,12 @@ class MusicBenchmark:
             raise ValueError("staged audio differs from returned bytes")
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
+            if recovery is not None:
+                current = db.execute(
+                    "SELECT * FROM music_requests WHERE request_id=?", (request_id,)
+                ).fetchone()
+                if current is None or dict(current) != recovery.prior_request:
+                    raise ValueError("rejected music request changed during reconciliation")
             db.execute(
                 "INSERT INTO music_receipts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -690,12 +798,29 @@ class MusicBenchmark:
                             ),
                             "audio_sample_rate_hz": info.sample_rate_hz,
                             "audio_bitrate_bps": info.bitrate_bps,
+                            "audio_channel_count": info.channel_count,
+                            "audio_frame_count": info.frame_count,
+                            "audio_sample_format": info.sample_format,
                         },
                         sort_keys=True,
                     ),
                     now(),
                 ),
             )
+            if recovery is not None:
+                db.execute(
+                    "INSERT INTO music_wav_reconciliations VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        recovery.reconciliation_id,
+                        request_id,
+                        result.provider_request_id,
+                        sha256(result.audio_bytes).hexdigest(),
+                        recovery.actor,
+                        recovery.rationale,
+                        json.dumps(recovery.prior_request, sort_keys=True),
+                        now(),
+                    ),
+                )
             db.execute(
                 "UPDATE music_requests SET provider_request_id = ?, updated_at = ? "
                 "WHERE request_id = ?",
@@ -1084,6 +1209,7 @@ class MusicBenchmark:
         """Measure only the authoritative retained bytes and append an immutable version."""
         if version <= 0:
             raise ValueError("analysis version must be positive")
+        self.assert_owner()
         config_sha = configuration_sha(config)
         with closing(self.database.connect()) as db:
             output = self._output(db, blind_id)
@@ -1120,6 +1246,16 @@ class MusicBenchmark:
         report = analyze_local_audio(
             path, data, mime_type, spec, blind_id, request_id, version, config
         )
+        if (
+            report.version != version
+            or report.timing.version != version
+            or report.blind_id != blind_id
+            or report.request_id != request_id
+            or report.audio_sha256 != expected_sha
+            or report.analyzer_config_sha256 != config_sha
+        ):
+            raise ValueError("analyzer result differs from requested source/version/configuration")
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)
@@ -1147,6 +1283,7 @@ class MusicBenchmark:
 
     def evaluate_analysis_qa(self, blind_id: str, version: int) -> dict[str, Any]:
         """QA v2 derives every check from persisted SHA-bound measurements."""
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)
@@ -1162,6 +1299,9 @@ class MusicBenchmark:
                 or report.request_id != output["request_id"]
                 or report.blind_id != blind_id
                 or row["audio_sha256"] != report.audio_sha256
+                or report.version != version
+                or row["request_id"] != report.request_id
+                or row["analyzer_config_sha256"] != report.analyzer_config_sha256
             ):
                 raise ValueError("persisted analysis identity differs from output")
             spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
@@ -1190,6 +1330,26 @@ class MusicBenchmark:
             )
             thresholds = report.thresholds
             rhythm = report.rhythm
+            require_asr = report.analyzer_configuration.get("production_timing") is not True
+            admission = timing_admission_evidence(
+                report.duration_seconds,
+                report.alignment,
+                spec,
+                report.lyric_comparison,
+                transcript,
+                require_asr=require_asr,
+            )
+            measured_timing = build_timing(
+                version,
+                report.audio_sha256,
+                report.duration_seconds,
+                rhythm,
+                report.alignment,
+                spec,
+                report.lyric_comparison,
+                transcript,
+                require_asr=require_asr,
+            )
             asr_ok = transcript.status == "complete" and comparison.status == "complete"
             adequate_recognition = (
                 asr_ok
@@ -1382,14 +1542,12 @@ class MusicBenchmark:
                     "objective_checks": objective,
                     "derived_checks": checks,
                     "timing_admission": {
-                        **timing_admission_evidence(
-                            report.duration_seconds,
-                            report.alignment,
-                            spec,
-                            report.lyric_comparison,
-                            report.transcription,
+                        **admission,
+                        "admitted": bool(
+                            admission["eligible"]
+                            and report.timing.words
+                            and report.timing == measured_timing
                         ),
-                        "admitted": bool(report.timing.words),
                     },
                     "analysis_version": version,
                     "analysis_sha256": sha256(row["analysis_json"].encode()).hexdigest(),
@@ -1546,6 +1704,7 @@ class MusicBenchmark:
         return record
 
     def evaluate_timing(self, blind_id: str, version: int) -> dict[str, Any]:
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)

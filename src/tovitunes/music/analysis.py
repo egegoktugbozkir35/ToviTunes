@@ -56,6 +56,8 @@ class AnalysisConfig(StrictModel):
     asr_model: str = Field(default="small.en", min_length=1)
     device: Literal["auto", "cpu", "cuda"] = "auto"
     allow_model_download: bool = False
+    # Render timing can rely on measured canonical alignment without treating ASR as truth.
+    production_timing: bool = False
 
 
 def configuration_sha(config: AnalysisConfig) -> str:
@@ -317,7 +319,108 @@ def transcribe_and_align(
     config: AnalysisConfig,
 ) -> tuple[TranscriptionEvidence, AlignmentEvidence, str, str]:
     with model_environment(path.parent / ".analysis-models", config.allow_model_download):
+        if config.production_timing:
+            return _canonical_production_alignment(path, spec, duration, config)
         return _transcribe_and_align_impl(path, spec, duration, config)
+
+
+def _canonical_production_alignment(
+    path: Path, spec: CanonicalMusicSpec, duration: float, config: AnalysisConfig
+) -> tuple[TranscriptionEvidence, AlignmentEvidence, str, str]:
+    """Align the selected lyrics to real audio for local preview; never run independent ASR."""
+    transcription = TranscriptionEvidence(
+        status="unavailable", failure_reason="Independent ASR is advisory and not run for preview"
+    )
+    try:
+        import torch
+        import whisperx
+    except ImportError:
+        return (
+            transcription,
+            AlignmentEvidence(
+                status="unavailable",
+                aligned_word_count=0,
+                aligned_line_count=0,
+                failure_reason="WhisperX alignment unavailable",
+            ),
+            "unavailable",
+            config.device,
+        )
+    device = "cuda" if config.device == "auto" and torch.cuda.is_available() else config.device
+    if device == "auto":
+        device = "cpu"
+    root = path.parent / ".analysis-models"
+    stage = "ffmpeg_unavailable"
+    try:
+        if ffmpeg_status()["status"] != "found":
+            raise RuntimeFailure("ffmpeg_unavailable: install FFmpeg on PATH")
+        stage = "alignment_model_load_failed"
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeFailure("cuda_unavailable: select --device cpu")
+        _prepare_alignment_resources(root, config.allow_model_download)
+        audio = whisperx.load_audio(str(path))
+        model_a, metadata = whisperx.load_align_model(
+            language_code="en",
+            device=device,
+            model_name=ALIGNMENT_MODEL,
+            model_dir=str(root / "alignment"),
+            model_cache_only=not config.allow_model_download,
+        )
+        stage = "canonical_alignment_inference_failed"
+        with tokenizer_environment(root):
+            canonical = whisperx.align(
+                [{"start": 0.0, "end": duration, "text": spec.lyrics.text()}],
+                model_a,
+                metadata,
+                audio,
+                device,
+                return_char_alignments=False,
+                interpolate_method="ignore",
+            )
+        raw_words = [w for seg in canonical.get("segments", []) for w in seg.get("words", [])]
+        expected = normalized_words(spec.lyrics.text())
+        if (
+            tuple(token for w in raw_words for token in normalized_words(str(w.get("word", ""))))
+            != expected
+        ):
+            raise RuntimeFailure("canonical_alignment_omitted_or_changed_words")
+        indexed: list[RecognizedWord | None] = []
+        missing: list[str] = []
+        for raw in raw_words:
+            if raw.get("start") is None or raw.get("end") is None:
+                indexed.append(None)
+                missing.append(str(raw.get("word", "")))
+            else:
+                indexed.append(_aligned_words([{"words": [raw]}], duration)[0])
+        words = tuple(w for w in indexed if w is not None)
+        if any(left.end > right.start for left, right in zip(words, words[1:])):
+            raise RuntimeFailure("canonical_alignment_overlapping_words")
+        lines: list[TimedText] = []
+        offset = 0
+        for line in spec.lyrics.lines:
+            count = len(normalized_words(line.text))
+            group = indexed[offset : offset + count]
+            if len(group) == count and all(w is not None for w in group):
+                present = [w for w in group if w is not None]
+                lines.append(TimedText(start=present[0].start, end=present[-1].end, text=line.text))
+            offset += count
+        alignment = AlignmentEvidence(
+            status="incomplete" if missing else "complete",
+            canonical_words=words,
+            lyric_lines=tuple(lines),
+            aligned_word_count=len(words),
+            aligned_line_count=len(lines),
+            missing_words=tuple(missing),
+            failure_reason="canonical_alignment_missing_word_timestamps" if missing else None,
+        )
+    except Exception as exc:
+        alignment = AlignmentEvidence(
+            status="incomplete",
+            aligned_word_count=0,
+            aligned_line_count=0,
+            failure_reason=diagnostic(stage, exc),
+        )
+    return transcription, alignment, _version("whisperx"), device
 
 
 def _transcribe_and_align_impl(
@@ -502,8 +605,10 @@ def timing_admission_evidence(
     spec: CanonicalMusicSpec,
     comparison: LyricComparison,
     transcription: TranscriptionEvidence,
+    *,
+    require_asr: bool = True,
 ) -> dict[str, Any]:
-    """Two-source admission; CTC character means are not recognition probabilities."""
+    """Admit measured canonical timestamps; independent ASR is optional in preview."""
     thresholds = AnalysisThresholds()
     words = alignment.canonical_words
     expected = normalized_words(spec.lyrics.text())
@@ -556,8 +661,22 @@ def timing_admission_evidence(
         and ordered_bounded(alignment.lyric_lines)
         and ordered_bounded(transcription.words),
     }
+    if not require_asr:
+        for name in (
+            "transcription_complete",
+            "comparison_complete",
+            "wer_in_range",
+            "coverage_in_range",
+            "independent_mean_in_range",
+            "comparison_identity_matches",
+        ):
+            checks.pop(name)
+        checks["timestamps_ordered_bounded"] = ordered_bounded(words) and ordered_bounded(
+            alignment.lyric_lines
+        )
     return {
-        "rule": "aggregate_two_source_v1",
+        "rule": "aggregate_two_source_v1" if require_asr else "canonical_preview_v1",
+        "independent_asr_required": require_asr,
         "independent_mean_word_score": transcription.mean_word_score,
         "canonical_mean_word_score": mean,
         "canonical_minimum_word_score": minimum_word.score if minimum_word else None,
@@ -583,10 +702,12 @@ def build_timing(
     spec: CanonicalMusicSpec,
     comparison: LyricComparison,
     transcription: TranscriptionEvidence,
+    *,
+    require_asr: bool = True,
 ) -> TimingAnalysis:
-    reliable = timing_admission_evidence(duration, alignment, spec, comparison, transcription)[
-        "eligible"
-    ]
+    reliable = timing_admission_evidence(
+        duration, alignment, spec, comparison, transcription, require_asr=require_asr
+    )["eligible"]
     sections: list[TimedText] = []
     if reliable and spec.brief.id.startswith("episode_"):
         # Creative sections can repeat; group adjacent measured lines, never prompt durations.
@@ -647,12 +768,19 @@ def analyze_audio(
     config: AnalysisConfig,
 ) -> AudioAnalysis:
     sha = sha256(data).hexdigest()
+    if path.read_bytes() != data:
+        raise ValueError("analysis path differs from retained source bytes")
     info = inspect_audio(data, mime_type)
     decoded = (
         miniaudio.mp3_read_f32(data) if mime_type == "audio/mpeg" else miniaudio.wav_read_f32(data)
     )
     technical = technical_measurements(decoded)
-    if abs(info.duration_seconds - technical.duration_seconds) > 0.001:
+    if (
+        abs(info.duration_seconds - technical.duration_seconds) > 0.001
+        or (info.channel_count is not None and info.channel_count != technical.channel_count)
+        or (info.frame_count is not None and info.frame_count != technical.decoded_frames)
+        or info.sample_rate_hz != technical.sample_rate_hz
+    ):
         raise ValueError("decoded duration does not match verified receipt")
     rhythm = analyze_rhythm(
         decoded, spec.brief, path.parent / ".analysis-models", config.device, sha
@@ -672,8 +800,18 @@ def analyze_audio(
         ),
     )
     timing = build_timing(
-        version, sha, technical.duration_seconds, rhythm, alignment, spec, comparison, transcription
+        version,
+        sha,
+        technical.duration_seconds,
+        rhythm,
+        alignment,
+        spec,
+        comparison,
+        transcription,
+        require_asr=not config.production_timing,
     )
+    if sha256(path.read_bytes()).hexdigest() != sha:
+        raise ValueError("source audio changed during model analysis")
     config_sha = configuration_sha(config)
     warnings = []
     if not timing.downbeat_seconds:
