@@ -19,6 +19,7 @@ from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.analysis import (
     AnalysisConfig,
+    build_timing,
     compare_lyrics,
     configuration_sha,
     normalized_words,
@@ -296,7 +297,14 @@ class MusicBenchmark:
         if not path.is_file() or path.is_symlink():
             raise ValueError("received audio bytes missing")
         data = path.read_bytes()
-        if sha256(data).hexdigest() != receipt["sha256"] or len(data) != receipt["byte_count"]:
+        if (
+            sha256(data).hexdigest() != receipt["sha256"]
+            or len(data) != receipt["byte_count"]
+            or (
+                "receipt_sha256" in receipt.keys()
+                and receipt["receipt_sha256"] != receipt["sha256"]
+            )
+        ):
             raise ValueError("received audio bytes changed")
         info = inspect_audio(data, receipt["mime_type"])
         if (
@@ -1201,6 +1209,7 @@ class MusicBenchmark:
         """Measure only the authoritative retained bytes and append an immutable version."""
         if version <= 0:
             raise ValueError("analysis version must be positive")
+        self.assert_owner()
         config_sha = configuration_sha(config)
         with closing(self.database.connect()) as db:
             output = self._output(db, blind_id)
@@ -1237,6 +1246,16 @@ class MusicBenchmark:
         report = analyze_local_audio(
             path, data, mime_type, spec, blind_id, request_id, version, config
         )
+        if (
+            report.version != version
+            or report.timing.version != version
+            or report.blind_id != blind_id
+            or report.request_id != request_id
+            or report.audio_sha256 != expected_sha
+            or report.analyzer_config_sha256 != config_sha
+        ):
+            raise ValueError("analyzer result differs from requested source/version/configuration")
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)
@@ -1264,6 +1283,7 @@ class MusicBenchmark:
 
     def evaluate_analysis_qa(self, blind_id: str, version: int) -> dict[str, Any]:
         """QA v2 derives every check from persisted SHA-bound measurements."""
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)
@@ -1279,6 +1299,9 @@ class MusicBenchmark:
                 or report.request_id != output["request_id"]
                 or report.blind_id != blind_id
                 or row["audio_sha256"] != report.audio_sha256
+                or report.version != version
+                or row["request_id"] != report.request_id
+                or row["analyzer_config_sha256"] != report.analyzer_config_sha256
             ):
                 raise ValueError("persisted analysis identity differs from output")
             spec = CanonicalMusicSpec.model_validate_json(output["canonical_spec_json"])
@@ -1307,6 +1330,26 @@ class MusicBenchmark:
             )
             thresholds = report.thresholds
             rhythm = report.rhythm
+            require_asr = report.analyzer_configuration.get("production_timing") is not True
+            admission = timing_admission_evidence(
+                report.duration_seconds,
+                report.alignment,
+                spec,
+                report.lyric_comparison,
+                transcript,
+                require_asr=require_asr,
+            )
+            measured_timing = build_timing(
+                version,
+                report.audio_sha256,
+                report.duration_seconds,
+                rhythm,
+                report.alignment,
+                spec,
+                report.lyric_comparison,
+                transcript,
+                require_asr=require_asr,
+            )
             asr_ok = transcript.status == "complete" and comparison.status == "complete"
             adequate_recognition = (
                 asr_ok
@@ -1499,17 +1542,12 @@ class MusicBenchmark:
                     "objective_checks": objective,
                     "derived_checks": checks,
                     "timing_admission": {
-                        **timing_admission_evidence(
-                            report.duration_seconds,
-                            report.alignment,
-                            spec,
-                            report.lyric_comparison,
-                            report.transcription,
-                            require_asr=not bool(
-                                report.analyzer_configuration.get("production_timing", False)
-                            ),
+                        **admission,
+                        "admitted": bool(
+                            admission["eligible"]
+                            and report.timing.words
+                            and report.timing == measured_timing
                         ),
-                        "admitted": bool(report.timing.words),
                     },
                     "analysis_version": version,
                     "analysis_sha256": sha256(row["analysis_json"].encode()).hexdigest(),
@@ -1666,6 +1704,7 @@ class MusicBenchmark:
         return record
 
     def evaluate_timing(self, blind_id: str, version: int) -> dict[str, Any]:
+        self.assert_owner()
         with closing(self.database.connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             output = self._output(db, blind_id)

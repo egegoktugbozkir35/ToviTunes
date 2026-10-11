@@ -830,3 +830,155 @@ def test_preview_timing_rejects_incomplete_canonical_alignment(case, monkeypatch
     report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
     assert not report.timing.words
     assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
+
+
+@pytest.mark.parametrize("damage", ["no_scores", "low_mean", "words", "lines", "overlap"])
+def test_preview_rejects_invalid_measured_alignment(case, monkeypatch, damage):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as prior
+
+    def invalid(*args):
+        _, alignment, version, device = prior(*args)
+        words = list(alignment.canonical_words)
+        lines = alignment.lyric_lines
+        if damage in {"no_scores", "low_mean"}:
+            words = [
+                w.model_copy(update={"score": None if damage == "no_scores" else 0.1})
+                for w in words
+            ]
+        elif damage == "words":
+            words[0] = words[0].model_copy(update={"text": "other"})
+        elif damage == "lines":
+            lines = lines[:-1]
+        else:
+            words[1] = words[1].model_copy(update={"start": words[0].start})
+        alignment = alignment.model_copy(
+            update={
+                "canonical_words": tuple(words),
+                "lyric_lines": lines,
+                "aligned_line_count": len(lines),
+            }
+        )
+        return TranscriptionEvidence(status="unavailable"), alignment, version, device
+
+    monkeypatch.setattr("tovitunes.music.analysis.transcribe_and_align", invalid)
+    store, blind_id, _ = case
+    if damage == "overlap":
+        with pytest.raises(ValueError, match="ordered"):
+            store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    else:
+        report, _ = store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+        assert not report.timing.words
+        assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
+
+
+@pytest.mark.parametrize("field", ["beat_seconds", "downbeat_seconds"])
+def test_preview_missing_rhythm_fails_timing(case, monkeypatch, field):
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import analyze_rhythm as prior
+
+    def missing(*args):
+        rhythm = prior(*args)
+        changes = {field: ()}
+        if field == "beat_seconds":
+            changes.update(beat_count=0, downbeat_seconds=())
+        return rhythm.model_copy(update=changes)
+
+    monkeypatch.setattr("tovitunes.music.analysis.analyze_rhythm", missing)
+    store, blind_id, _ = case
+    store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    assert store.evaluate_timing(blind_id, 1)["status"] == "fail"
+
+
+def test_analysis_rejects_wrong_version_identity(case, monkeypatch):
+    from tovitunes.music.benchmark import analyze_local_audio as prior
+
+    def wrong(*args):
+        return prior(*args).model_copy(update={"version": 2})
+
+    monkeypatch.setattr("tovitunes.music.benchmark.analyze_local_audio", wrong)
+    store, blind_id, _ = case
+    with pytest.raises(ValueError, match="source/version/configuration"):
+        store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    with store.database.connect() as db:
+        assert db.execute("SELECT count(*) FROM music_audio_analysis").fetchone()[0] == 0
+
+
+def test_analysis_ownership_loss_after_measurement_keeps_no_evidence(case, monkeypatch):
+    from tovitunes.errors import ExecutionOwnershipLostError
+    from tovitunes.music.benchmark import analyze_local_audio as prior
+
+    def lost(*args):
+        report = prior(*args)
+
+        def reject():
+            raise ExecutionOwnershipLostError("offline lost owner")
+
+        store.assert_owner = reject
+        return report
+
+    store, blind_id, provider = case
+    monkeypatch.setattr("tovitunes.music.benchmark.analyze_local_audio", lost)
+    with pytest.raises(ExecutionOwnershipLostError):
+        store.analyze_audio(blind_id, 1, AnalysisConfig(production_timing=True))
+    with store.database.connect() as db:
+        assert db.execute("SELECT count(*) FROM music_audio_analysis").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM music_timing").fetchone()[0] == 0
+    assert provider.calls == 1
+
+
+@pytest.mark.parametrize("omit_timestamp", [False, True])
+def test_production_alignment_runtime_never_calls_asr(case, monkeypatch, omit_timestamp):
+    import sys
+    from contextlib import nullcontext
+
+    from tovitunes.music.analysis import _canonical_production_alignment
+
+    production_fixture(monkeypatch)
+    from tovitunes.music.analysis import transcribe_and_align as fixture
+
+    store, _, _ = case
+    spec = plan(
+        load_brief(ROOT / "colors_red_v1.yaml"),
+        load_lyrics(ROOT / "colors_red_lyrics_v1.yaml"),
+        [FakeMusicProvider()],
+        attempt=1,
+    )[0].canonical_spec
+    _, alignment, _, _ = fixture(None, spec, 30, None)
+    raw = [
+        dict(word=w.text, start=w.start, end=w.end, score=w.score)
+        for w in alignment.canonical_words
+    ]
+    if omit_timestamp:
+        raw[0].pop("start")
+
+    def no_asr(*args, **kwargs):
+        pytest.fail("production preview must not require independent ASR")
+
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "whisperx",
+        SimpleNamespace(
+            load_model=no_asr,
+            load_audio=lambda _: [],
+            load_align_model=lambda **_: (None, {}),
+            align=lambda *a, **k: {"segments": [{"words": raw}]},
+        ),
+    )
+    monkeypatch.setattr("tovitunes.music.analysis.ffmpeg_status", lambda: {"status": "found"})
+    monkeypatch.setattr("tovitunes.music.analysis._prepare_alignment_resources", lambda *a: None)
+    monkeypatch.setattr("tovitunes.music.analysis.tokenizer_environment", lambda *a: nullcontext())
+    transcript, measured, _, _ = _canonical_production_alignment(
+        store.audio_root / "fixture.wav",
+        spec,
+        30,
+        AnalysisConfig(production_timing=True),
+    )
+    assert transcript.status == "unavailable" and not transcript.recognized_text
+    assert measured.status == ("incomplete" if omit_timestamp else "complete")
+    assert measured.canonical_words == (
+        alignment.canonical_words[1:] if omit_timestamp else alignment.canonical_words
+    )

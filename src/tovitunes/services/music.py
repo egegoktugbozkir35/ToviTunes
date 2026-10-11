@@ -11,10 +11,14 @@ from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
 from tovitunes.errors import ProductionStop
 from tovitunes.music.ace_step import AceStepLocalProvider
-from tovitunes.music.analysis import AnalysisConfig
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
 from tovitunes.pipeline.music_adapter import creative_music_spec
+from tovitunes.pipeline.production import (
+    accept_episode_source,
+    production_analysis_config,
+    production_analysis_version,
+)
 from tovitunes.render.episode_assets import persist_file
 from tovitunes.services.context import StageContext
 
@@ -185,32 +189,28 @@ class MusicService(StageContext):
         return request_id, blind_id
 
     def _analysis(self, episode: Episode, blind_id: str) -> dict[str, Any]:
-        config = self.config.automation
         benchmark = MusicBenchmark(
             self.database,
             self.config.data_root / "music-benchmark",
             assert_owner=self.ownership.assert_owned,
         )
+        with closing(self.database.connect()) as db:
+            version = production_analysis_version(db, blind_id, self.config)
         report, reused = benchmark.analyze_audio(
-            blind_id,
-            config.analysis_version,
-            AnalysisConfig(
-                asr_model=config.asr_model,
-                device=config.analysis_device,
-                allow_model_download=config.allow_model_download,
-                production_timing=True,
-            ),
+            blind_id, version, production_analysis_config(self.config)
         )
         with closing(self.database.connect()) as db:
             qa_row = db.execute(
                 "SELECT * FROM music_policy_evaluations WHERE subject_type='audio' AND "
-                "subject_id=? AND policy_id='music_qa' ORDER BY rowid DESC LIMIT 1",
+                "subject_id=? AND policy_id='music_qa' AND policy_version=2 "
+                "ORDER BY rowid DESC LIMIT 1",
                 (blind_id,),
             ).fetchone()
             timing_row = db.execute(
                 "SELECT * FROM music_policy_evaluations WHERE subject_type='timing' AND "
-                "subject_id=? AND policy_id='music_timing' ORDER BY rowid DESC LIMIT 1",
-                (f"{blind_id}:{config.analysis_version}",),
+                "subject_id=? AND policy_id='music_timing' AND policy_version=1 "
+                "ORDER BY rowid DESC LIMIT 1",
+                (f"{blind_id}:{version}",),
             ).fetchone()
         analysis_hash = sha256(report.model_dump_json().encode()).hexdigest()
         timing_hash = sha256(
@@ -233,12 +233,12 @@ class MusicService(StageContext):
         qa = (
             dict(qa_row)
             if qa_cached and qa_row
-            else benchmark.evaluate_analysis_qa(blind_id, config.analysis_version)
+            else benchmark.evaluate_analysis_qa(blind_id, version)
         )
         timing = (
             dict(timing_row)
             if timing_cached and timing_row
-            else benchmark.evaluate_timing(blind_id, config.analysis_version)
+            else benchmark.evaluate_timing(blind_id, version)
         )
         evidence = {
             "analysis_version": report.version,
@@ -251,20 +251,17 @@ class MusicService(StageContext):
             "alignment_failure": report.alignment.failure_reason,
             "rhythm_failure": report.rhythm.failure_reason,
         }
-        qa_evidence = json.loads(qa["evidence_json"])
-        objective = qa_evidence.get("objective_checks", {})
-        derived = qa_evidence.get("derived_checks", {})
-        technical_ok = (
-            all(objective.get(name) is True for name in (
-                "decodes_and_matches_receipt", "duration_in_scope"
-            ))
-            and all(derived.get(name, {}).get("status") == "pass" for name in (
-                "artifact_free", "beat_usable"
-            ))
-        )
-        evidence["qa_advisory_only"] = True
-        if not technical_ok or timing["status"] != "pass":
-            raise ProductionStop(
-                "BLOCKED", "Audio integrity, rhythm or measured lyric timing did not pass", evidence
+        evidence["asr_advisory_only"] = True
+        try:
+            inputs = self._creative_inputs(episode)
+            spec, lyrics, music, ids = inputs
+            accept_episode_source(
+                self.config,
+                episode,
+                report.request_id,
+                creative_music_spec(episode, spec, lyrics, music, ids),
+                report.version,
             )
+        except (ValueError, OSError) as exc:
+            raise ProductionStop("BLOCKED", str(exc), evidence) from exc
         return evidence

@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -27,6 +27,7 @@ from tovitunes.domain.storyboard import (
     TimedText,
     build_storyboard,
 )
+from tovitunes.music.analysis import AnalysisConfig, build_timing, configuration_sha
 from tovitunes.music.analysis_models import AudioAnalysis
 from tovitunes.music.models import CanonicalMusicSpec, TimingAnalysis
 from tovitunes.persistence.db import Database
@@ -36,6 +37,37 @@ READY = "MUSIC_TECHNICAL_PIPELINE_READY_FOR_STORYBOARD"
 TOOL = "tovitunes.production_handoff"
 VERSION = "production_storyboard_v1"
 PILOT_AUDIO_SHA256 = "06820bff29d0127ae3b25e53c73ba96b874732916acee5b4800e688c1d73e991"
+
+
+def production_analysis_config(config: RuntimeConfig) -> AnalysisConfig:
+    automation = config.automation
+    return AnalysisConfig(
+        asr_model=automation.asr_model,
+        device=automation.analysis_device,
+        allow_model_download=automation.allow_model_download,
+        production_timing=True,
+    )
+
+
+def production_analysis_version(
+    db: sqlite3.Connection, blind_id: str, config: RuntimeConfig
+) -> int:
+    """Reuse exact configuration or append a version; never overwrite historical evidence."""
+    digest = configuration_sha(production_analysis_config(config))
+    minimum = config.automation.analysis_version
+    existing = db.execute(
+        "SELECT version FROM music_audio_analysis WHERE blind_id=? "
+        "AND version>=? AND analyzer_config_sha256=? ORDER BY version DESC LIMIT 1",
+        (blind_id, minimum, digest),
+    ).fetchone()
+    if existing:
+        return int(existing["version"])
+    versions = db.execute(
+        "SELECT version FROM music_audio_analysis WHERE blind_id=? UNION "
+        "SELECT version FROM music_timing WHERE blind_id=?",
+        (blind_id, blind_id),
+    ).fetchall()
+    return max(minimum, max((int(row["version"]) for row in versions), default=0) + 1)
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -120,6 +152,8 @@ def _source(
         or version != 3
     ):
         raise ValueError("source differs from authoritative pilot identity/SHA/version")
+    if report.analyzer_configuration.get("production_timing") is True:
+        raise ValueError("historical handoff requires independent ASR policy")
     if row["rights_status"] != "unknown" or row["approval_status"] != "pending":
         raise ValueError("music rights/approval differ from unknown/pending handoff state")
     analysis_hash = sha256(analysis_row["analysis_json"].encode()).hexdigest()
@@ -173,13 +207,19 @@ def accept_episode_source(
     request_id: str,
     expected: CanonicalMusicSpec,
     analysis_version: int,
+    *,
+    connection: sqlite3.Connection | None = None,
 ) -> AcceptedSource:
     """V2 handoff verifies a generic retained receipt, exact lyrics and machine evidence.
 
     The frozen Red/Lyria `_source` path above remains independently fail-closed.
     Rights and subjective approval do not become commercial clearance here.
     """
-    with closing(Database(config.database_path).connect()) as db:
+    with (
+        nullcontext(connection)
+        if connection is not None
+        else closing(Database(config.database_path).connect())
+    ) as db:
         request = db.execute(
             "SELECT * FROM music_requests WHERE request_id=?", (request_id,)
         ).fetchone()
@@ -245,6 +285,48 @@ def accept_episode_source(
         ):
             raise ValueError("generic audio/receipt/lyrics/analysis/timing identity differs")
         advisory_asr = report.analyzer_configuration.get("production_timing") is True
+        if advisory_asr:
+            # Recompute admission from observations, rather than trusting stored passing labels.
+            measured = build_timing(
+                report.version,
+                digest,
+                report.duration_seconds,
+                report.rhythm,
+                report.alignment,
+                spec,
+                report.lyric_comparison,
+                report.transcription,
+                require_asr=not advisory_asr,
+            )
+            if measured != timing or not timing.words:
+                raise ValueError("canonical timing does not match admitted measured alignment")
+        # Apply the same renderer contracts before any storyboard or visual handoff.
+        provisional = AcceptedSource(path, report, spec, {}, "", "")
+        extract_alignment(provisional, "validation", generic=True)
+        extract_beats(provisional, "validation")
+        if advisory_asr:
+            metrics, thresholds = report.technical_metrics, report.thresholds
+            rhythm = report.rhythm
+            if (
+                not metrics.decode_integrity
+                or metrics.invalid_pcm_samples
+                or metrics.clipping_ratio > thresholds.maximum_clipping_ratio
+                or metrics.near_silence_ratio > thresholds.maximum_silence_ratio
+                or metrics.longest_near_silent_span_seconds > thresholds.maximum_dropout_seconds
+                or metrics.beginning_silence_seconds > thresholds.maximum_edge_silence_seconds
+                or metrics.ending_silence_seconds > thresholds.maximum_edge_silence_seconds
+            ):
+                raise ValueError("advisory ASR cannot bypass measured audio defects")
+            if (
+                rhythm.estimated_bpm is None
+                or not spec.brief.bpm_range[0] <= rhythm.estimated_bpm <= spec.brief.bpm_range[1]
+                or rhythm.beat_count < thresholds.minimum_beats
+                or rhythm.interval_cv is None
+                or rhythm.interval_cv > thresholds.maximum_beat_interval_cv
+                or rhythm.provenance is None
+                or rhythm.provenance.source_audio_sha256 != digest
+            ):
+                raise ValueError("advisory ASR cannot bypass measured rhythm requirements")
         evaluations = []
         for subject_type, subject, policy, policy_version, evidence_hash in (
             (
@@ -287,13 +369,12 @@ def accept_episode_source(
                 if advisory_asr:
                     objective = evidence.get("objective_checks", {})
                     derived = evidence.get("derived_checks", {})
-                    if (
-                        not all(objective.get(k) is True for k in (
-                            "decodes_and_matches_receipt", "duration_in_scope"
-                        ))
-                        or not all(derived.get(k, {}).get("status") == "pass" for k in (
-                            "artifact_free", "beat_usable"
-                        ))
+                    if not all(
+                        objective.get(k) is True
+                        for k in ("decodes_and_matches_receipt", "duration_in_scope")
+                    ) or not all(
+                        derived.get(k, {}).get("status") == "pass"
+                        for k in ("artifact_free", "beat_usable")
                     ):
                         raise ValueError("advisory ASR cannot bypass audio integrity or rhythm")
             evaluations.append(ev["evaluation_id"])
