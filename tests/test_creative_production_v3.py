@@ -11,6 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from test_short_production import case as case
 from test_short_production import connect_offline, tone, visual_plan
 
@@ -41,14 +42,18 @@ from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.music.analysis import technical_measurements
 from tovitunes.music.analysis_models import AlignmentEvidence, TranscriptionEvidence
 from tovitunes.music.benchmark import MusicBenchmark
+from tovitunes.orchestrator import ProductionReference
 from tovitunes.pipeline.duration_source import admit_duration_source
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import production_analysis_config
 from tovitunes.pipeline.targets import ProductionTarget
+from tovitunes.publication.service import PublicationService
 from tovitunes.render.models import RenderManifest, parse_manifest
 from tovitunes.render.production import load_inputs, validate_manifest
 from tovitunes.services.music import MusicService
 from tovitunes.services.visual import VisualService
+from tovitunes.web import app as web_app
+from tovitunes.web.jobs import Job
 from tovitunes.web.studio import safe_production_result
 
 pytest_plugins = ("test_web_youtube_v1",)
@@ -203,9 +208,13 @@ def new_case(case, monkeypatch):
     config = case["config"]
     config = config.model_copy(
         update={
-            "publication_enabled": False,
+            "publication_enabled": True,
+            "expected_youtube_channel_id": "offline-fixture-channel",
             "publication": config.publication.model_copy(
-                update={"youtube": config.publication.youtube.model_copy(update={"enabled": False})}
+                update={"youtube": config.publication.youtube.model_copy(update={"enabled": True})}
+            ),
+            "automation": config.automation.model_copy(
+                update={"auto_publish": False, "require_human_review": True}
             ),
         }
     )
@@ -218,7 +227,9 @@ def new_case(case, monkeypatch):
     result = service.prepare(run_id=service.reserve_next_run())
     episode = service.database.get_episode(result["episode_id"])
     ids = tuple(result[k + "_artifact_id"] for k in ("episode_spec", "lyrics", "music_spec"))
-    new = connect_offline(config, episode, ids, case["fake"], monkeypatch, case["red"])
+    new = connect_offline(
+        config, episode, ids, case["fake"], monkeypatch, case["red"], case["socket_connect"]
+    )
     with closing(service.database.connect()) as db, db:
         db.execute(
             "INSERT INTO production_requests VALUES (?,?,?,?)",
@@ -228,9 +239,17 @@ def new_case(case, monkeypatch):
             "INSERT INTO studio_jobs VALUES (?,?)",
             (
                 "retained-studio-job",
-                json.dumps(
-                    {"episode_key": episode.external_key, "stage": "VISUAL_PLAN", "progress": 33}
-                ),
+                Job(
+                    job_id="retained-studio-job",
+                    operation="studio",
+                    episode_key=episode.external_key,
+                    recovery_reference=ProductionReference(run_id=result["run_id"]),
+                    target=ProductionTarget.RENDER,
+                    status="blocked",
+                    current_stage="VISUAL_PLAN",
+                    submitted_at="2026-01-01",
+                    recovery_action="resume",
+                ).model_dump_json(),
             ),
         )
     new["fake"].responses["CreativeVisualDraft"] = [proposal().model_dump_json()]
@@ -380,10 +399,25 @@ def test_non_lyric_proposals_render_real_complete_mp4_and_reuse(new_case, varian
         assert db.execute("SELECT count(*) FROM music_audio_analysis").fetchone()[0] == 0
 
 
-def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_case):
+@pytest.mark.parametrize("studio_resume", [False, True])
+def test_explicit_recovery_preserves_failures_upstream_music_and_episode(
+    new_case, monkeypatch, studio_resume
+):
     new = new_case
     request, _ = failed_legacy_contract(new)
     store, episode = new["store"], new["episode"]
+    config = new["config"]
+    assert config.publication_enabled and config.publication.youtube.enabled
+    assert not config.automation.auto_publish and config.automation.require_human_review
+    monkeypatch.setattr(
+        new["flow"], "_publisher_factory", lambda *a: pytest.fail("render invoked publisher")
+    )
+    for operation in ("publish", "publish_public"):
+        monkeypatch.setattr(
+            PublicationService,
+            operation,
+            lambda *a, **k: pytest.fail("recovery invoked publication"),
+        )
     exports = new["config"].brand_root.parent.parent / "outputs"
     exports.mkdir(exist_ok=True)
     old_export = (
@@ -408,6 +442,11 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_cas
         }
         old_intent = [tuple(r) for r in db.execute("SELECT * FROM production_requests")]
         old_jobs = [tuple(r) for r in db.execute("SELECT * FROM studio_jobs")]
+        old_selections = [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")]
+        old_decisions = {
+            table: [tuple(r) for r in db.execute(f"SELECT * FROM {table}")]
+            for table in ("approval_decisions", "rights_decisions")
+        }
         receipt = dict(
             db.execute("SELECT * FROM music_receipts WHERE request_id=?", (request,)).fetchone()
         )
@@ -417,6 +456,16 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_cas
     assert plan["status"] == "BLOCKED"
     assert plan["blocker"]["recovery_action"] == "authorize_visual_v2"
     assert "recover-visual-contract" in safe_production_result(plan)["blocker"]["reason"]
+
+    def provider_events():
+        return (
+            list(new["fake"].calls),
+            list(new["music_events"]),
+            list(new["image_events"]),
+            list(new["environment_events"]),
+        )
+
+    before = provider_events()
     grant = authorize_visual_recovery(
         new["config"], episode.external_key, confirmed=True, actor="offline-test"
     )
@@ -424,8 +473,46 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_cas
     authorize_visual_recovery(
         new["config"], episode.external_key, confirmed=True, actor="offline-test"
     )
-    result = new["flow"].resume(episode.external_key, ProductionTarget.RENDER)
+    assert provider_events() == before
+    with closing(store.database.connect()) as db:
+        assert old_selections == [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")]
+        for table, decisions in old_decisions.items():
+            assert decisions == [tuple(r) for r in db.execute(f"SELECT * FROM {table}")]
+    if studio_resume:
+
+        def local_event_loop_connect(sock, address):
+            # Windows asyncio creates its internal socketpair over loopback.
+            if address[0] not in {"127.0.0.1", "::1"}:
+                pytest.fail("live network forbidden")
+            return new["socket_connect"](sock, address)
+
+        monkeypatch.setattr("socket.socket.connect", local_event_loop_connect)
+        monkeypatch.setattr(web_app, "build_orchestrator", lambda *a, **k: new["flow"])
+        app = web_app.create_app(config)  # Reconstruct the target/reference from durable records.
+        try:
+            with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+                response = client.post(
+                    "/api/studio/jobs/retained-studio-job/recover", json={"target": "publish"}
+                )
+                assert response.status_code == 202
+                app.state.jobs._executor.submit(lambda: None).result(timeout=60)
+                job = app.state.jobs.get("retained-studio-job")
+                assert job.status == "complete", job
+                assert job.target == ProductionTarget.RENDER
+                assert "RELEASE" not in job.steps and "YOUTUBE" not in job.steps
+                assert (
+                    job.recovery_reference
+                    == Job.model_validate_json(old_jobs[0][1]).recovery_reference
+                )
+                assert job.result["target"] == "render"
+                result = new["flow"].resume(episode.external_key, ProductionTarget.RENDER)
+        finally:
+            app.state.jobs.close()
+    else:
+        result = new["flow"].resume(episode.external_key, ProductionTarget.RENDER)
     assert result["target_complete"], result
+    assert result["target"] == "render"
+    assert not {"RELEASE", "YOUTUBE"} & {s["name"] for s in result["stages"]}
     with closing(store.database.connect()) as db:
         assert old_rows == [
             tuple(r)
@@ -448,7 +535,14 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_cas
         assert fresh["episode_id"] == episode.episode_id
         assert fresh["input_fingerprint"] not in old_fingerprints
         assert old_intent == [tuple(r) for r in db.execute("SELECT * FROM production_requests")]
-        assert old_jobs == [tuple(r) for r in db.execute("SELECT * FROM studio_jobs")]
+        if not studio_resume:
+            assert old_jobs == [tuple(r) for r in db.execute("SELECT * FROM studio_jobs")]
+        assert db.execute("SELECT count(*) FROM publication_attempts").fetchone()[0] == 0
+        for kind in ("episode_spec", "lyrics", "music_spec", "audio_master"):
+            assert [r for r in old_selections if r[2] == kind] == [
+                tuple(r)
+                for r in db.execute("SELECT * FROM artifact_selections WHERE kind=?", (kind,))
+            ]
         for sql in (
             "DELETE FROM visual_contract_recoveries",
             "UPDATE visual_contract_recoveries SET actor='changed'",
@@ -458,6 +552,10 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(new_cas
     assert sha256(store.path_for(audio.identity.artifact_id).read_bytes()).hexdigest() == audio_hash
     assert new["music_events"].count("/release_task") == 1
     assert old_export.read_bytes() == b"retained earlier draft must remain untouched"
+    publish_plan = plan_continuation(config, episode.external_key, target=ProductionTarget.PUBLISH)
+    checks = publish_plan["blocker"]["release"]["checks"]
+    assert any(c["name"] == "production_human_review" and not c["passed"] for c in checks)
+    assert any(c["name"] == "commercial_rights_direct" and not c["passed"] for c in checks)
 
 
 def test_v3_media_pack_and_dependency_failures_still_block_admission(new_case, monkeypatch):
@@ -591,11 +689,13 @@ def test_failed_retained_asr_stays_failed_while_optional_rhythm_is_reused(new_ca
         assert policies == [tuple(r) for r in db.execute("SELECT * FROM music_policy_evaluations")]
 
 
-def test_recovery_rejects_publication_and_unresolved_receipts(new_case):
+def test_recovery_rejects_auto_publication_and_unresolved_receipts(new_case):
     new = new_case
     failed_legacy_contract(new)
-    unsafe = new["config"].model_copy(update={"publication_enabled": True})
-    with pytest.raises(PermissionError, match="publication"):
+    unsafe = new["config"].model_copy(
+        update={"automation": new["config"].automation.model_copy(update={"auto_publish": True})}
+    )
+    with pytest.raises(PermissionError, match="automatic publication"):
         authorize_visual_recovery(
             unsafe, new["episode"].external_key, confirmed=True, actor="operator"
         )
@@ -610,6 +710,78 @@ def test_recovery_rejects_publication_and_unresolved_receipts(new_case):
             new["config"], new["episode"].external_key, confirmed=True, actor="operator"
         )
     with closing(new["store"].database.connect()) as db:
+        assert db.execute("SELECT count(*) FROM visual_contract_recoveries").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "key,confirmed,actor,error",
+    [
+        ("unknown-episode", True, "operator", KeyError),
+        ("", True, "operator", KeyError),
+        (None, False, "operator", PermissionError),
+        (None, True, "  ", PermissionError),
+    ],
+)
+def test_recovery_requires_existing_identity_and_explicit_operator(
+    new_case, key, confirmed, actor, error
+):
+    new = new_case
+    with pytest.raises(error):
+        authorize_visual_recovery(
+            new["config"],
+            new["episode"].external_key if key is None else key,
+            confirmed=confirmed,
+            actor=actor,
+        )
+    assert not new["music_events"] and not new["image_events"]
+    with closing(new["store"].database.connect()) as db:
+        assert db.execute("SELECT count(*) FROM visual_contract_recoveries").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("status", ["prepared", "remote_started", "ambiguous", "succeeded"])
+def test_recovery_rejects_unresolved_or_successful_original_visual_attempt(new_case, status):
+    new = new_case
+    failed_legacy_contract(new)
+    with closing(new["store"].database.connect()) as db, db:
+        db.execute(
+            "UPDATE generation_requests SET status=? WHERE "
+            "prompt_version='episode_visual_plan_v1' AND attempt=2",
+            (status,),
+        )
+    with pytest.raises(ValueError, match="successful or unresolved"):
+        authorize_visual_recovery(
+            new["config"], new["episode"].external_key, confirmed=True, actor="operator"
+        )
+    with closing(new["store"].database.connect()) as db:
+        assert db.execute("SELECT count(*) FROM visual_contract_recoveries").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("failure", ["audio", "music_attempt", "upstream"])
+def test_recovery_rejects_invalid_retained_sources_without_provider_calls(new_case, failure):
+    new = new_case
+    failed_legacy_contract(new)
+    store, episode = new["store"], new["episode"]
+    if failure == "audio":
+        audio = store.selected("episode", episode.episode_id, "audio_master", "main")
+        store.path_for(audio.identity.artifact_id).write_bytes(b"corrupt retained audio")
+    else:
+        with closing(store.database.connect()) as db, db:
+            if failure == "music_attempt":
+                with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+                    db.execute("UPDATE music_requests SET status='ambiguous'")
+                # Only corrupt this isolated fixture to exercise recovery's second
+                # line of defense against a bound unresolved music source.
+                db.execute("DROP TRIGGER music_succeeded_request_immutable")
+                db.execute("UPDATE music_requests SET status='ambiguous'")
+            else:
+                db.execute("DELETE FROM artifact_selections WHERE kind='lyrics'")
+    before = (list(new["fake"].calls), list(new["music_events"]), list(new["image_events"]))
+    with pytest.raises(ValueError, match="upstream|identity|ineligible|artifact file invalid"):
+        authorize_visual_recovery(
+            config=new["config"], episode_key=episode.external_key, confirmed=True, actor="operator"
+        )
+    assert before == (new["fake"].calls, new["music_events"], new["image_events"])
+    with closing(store.database.connect()) as db:
         assert db.execute("SELECT count(*) FROM visual_contract_recoveries").fetchone()[0] == 0
 
 

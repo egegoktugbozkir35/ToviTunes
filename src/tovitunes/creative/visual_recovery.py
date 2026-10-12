@@ -108,13 +108,12 @@ def authorize_visual_recovery(
 ) -> dict[str, object]:
     if not confirmed or not actor.strip():
         raise PermissionError("visual contract recovery requires explicit operator confirmation")
-    if (
-        config.publication_enabled
-        or config.publication.youtube.enabled
-        or config.automation.auto_publish
-    ):
+    # Publication capability is not consent. This grant only admits a new visual
+    # contract; it neither executes production nor changes any saved job target.
+    # Keep automatic publication disabled for this explicitly local recovery path.
+    if config.automation.auto_publish:
         raise PermissionError(
-            "disable publication settings before authorizing local visual recovery"
+            "disable automatic publication before authorizing local visual recovery"
         )
     database = Database(config.database_path)
     database.migrate()

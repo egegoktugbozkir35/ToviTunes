@@ -211,8 +211,11 @@ ASR transcript, WER, lyric alignment or passing replacement of an old analysis.
 ## Explicit recovery of the retained yellow episode
 
 `production recover-visual-contract` requires explicit confirmation, a nonempty operator actor,
-publication disabled and the production execution lease. It verifies that old visual requests
-are terminal failed/invalid, repair failure evidence exists, response bytes match hashes and
+automatic publication disabled and the production execution lease. Publication and YouTube
+functionality may stay enabled: capability is not publication consent. This local grant does
+not authorize an upload, change a saved production target or execute any provider operation.
+It verifies that old visual requests are terminal failed/invalid, repair failure evidence
+exists, response bytes match hashes and
 all retained upstream selections/source music are valid. Successful, prepared, remote-started
 or ambiguous old requests cannot be recovered this way. It refuses to replace a selected visual
 plan/storyboard/final render or historical production.
@@ -248,30 +251,31 @@ Studio/release consumers remain connected; manifest/storyboard versions identify
    uv sync --python 3.11 --locked --inexact --extra dev --extra video-render --extra web --extra youtube
    ```
 
-3. **The operator must edit their own `config.yaml`** before recovery or live Resume:
+3. Keep the intended settings in the existing `config.yaml`; no configuration edit or YouTube
+   disconnection is needed:
 
    ```yaml
-   publication_enabled: false
+   publication_enabled: true
    automation:
      auto_publish: false
      require_human_review: true
    publication:
      youtube:
-       enabled: false
+       enabled: true
    ```
 
-   Change these existing keys while preserving all other provider/path/model settings. This work
-   did not edit the file. The audited configuration still had publication enabled. `--inexact`
-   preserves already-installed optional historical ASR/rhythm packages; the new render path does
+   Recovery still refuses `auto_publish: true`; it does not relax automatic publishing.
+   `require_human_review: true` continues to gate publication at release/upload boundaries.
+   `--inexact` preserves already-installed optional historical ASR/rhythm packages; the new render path does
    not require those packages.
 4. Inspect the provider-free plan (no confirmation flag):
 
    ```powershell
-   uv run python -m tovitunes.cli --config config.yaml production auto-resume --episode-key identify-yellow-in-familiar-objects-f8de3ea4-001
+   uv run python -m tovitunes.cli --config config.yaml plan e4299d67-961b-4d4c-bd65-0ed55fc91cdd --goal render
    ```
 
-   This existing CLI plan uses the publish target for reporting, but does not execute production
-   or publish. It may identify AUDIO_ANALYSIS/AudioClock as the first missing stage before the
+   This read-only CLI plan explicitly uses the render target and does not execute production.
+   It may identify AUDIO_ANALYSIS/AudioClock as the first missing stage before the
    explicit visual recovery barrier. The VISUAL_PLAN evidence identifies `authorize_visual_v2`.
 5. Authorize only the new contract (this operator command applies the additive migration and
    grant, with no remote effects):
@@ -282,8 +286,10 @@ Studio/release consumers remain connected; manifest/storyboard versions identify
 
 6. Restart Studio on this code, select the existing job
    `9c6bd570-0b85-4941-afc3-bf03b0df96aa`, and use Retry / Resume. Its saved render target/reference
-   remains unchanged. Do not use Generate. CLI alternative for the same episode and local render
-   target:
+   remains unchanged; the server reads it from the durable Studio job, not a button label or
+   a target supplied in the recovery request body. Render targets exclude RELEASE/YOUTUBE
+   regardless of publication settings. Do not use Generate. CLI alternative for the same episode
+   and local render target:
 
    ```powershell
    uv run python -m tovitunes.cli --config config.yaml production render-v4 --episode-key identify-yellow-in-familiar-objects-f8de3ea4-001
@@ -295,8 +301,10 @@ Studio/release consumers remain connected; manifest/storyboard versions identify
    missing-evidence or uncertainty barrier and reconcile it; do not edit statuses or create a song.
 7. Inspect the original audio SHA, new proposal/plan/storyboard, required assets, final MP4,
    media QA and scene frames. Confirm audio sync, thematic relevance, Tovi continuity and
-   preschool suitability on the actual machine. Leave publication disabled pending separate
-   rights/human-review decisions. A test pass is not that production review.
+   preschool suitability on the actual machine. Optional publication capability may remain
+   enabled. Publishing requires a separate explicit publish-target action and the existing
+   rights, human-review, channel identity and upload-ambiguity checks. A test pass is not that
+   production review.
 
 ## Changed files
 
@@ -310,7 +318,7 @@ Studio/release consumers remain connected; manifest/storyboard versions identify
 | `services/render.py`; `render/admission_v3.py`, `visual_evidence.py` | V3 construction and strict model/source/image/dependency replay admission |
 | `render/production.py`, `models.py`, `motion.py`, `character.py`, `props.py` | V3 renderer preparation, duration motion, Manifest V2 and distinct safe exports |
 | `continuation.py`; `orchestrator.py`; `services/context.py`; `creative/metadata.py` | Version-aware source consumers, planner readiness/reuse and metadata decoupling from lyric shots |
-| `creative/visual_recovery.py`; `persistence/migrations/0027_visual_contract_recovery.sql`; `cli.py` | Explicit append-only recovery with ownership and publication barriers |
+| `creative/visual_recovery.py`; `persistence/migrations/0027_visual_contract_recovery.sql`; `cli.py` | Explicit append-only local recovery with ownership and automatic-publication barrier |
 | `web/studio.py`; `publication/preflight.py` | Actionable sanitized recovery/technical messages and V3 source release admission |
 | `music/analysis_runtime.py` | Precise typing for the optional cuDNN version callable; no diagnostic behavior change or Mypy suppression |
 | `tests/test_creative_production_v3.py` | New architecture, real offline rendering, recovery, source/asset failures, receipt and ownership tests |
@@ -362,7 +370,7 @@ httpx TestClient deprecation.
 
 ### Added test inventory
 
-All tests below are in `tests/test_creative_production_v3.py` (31 parameter-expanded cases).
+All tests below are in `tests/test_creative_production_v3.py` (43 parameter-expanded cases).
 
 | Test | Evidence |
 |---|---|
@@ -372,14 +380,40 @@ All tests below are in `tests/test_creative_production_v3.py` (31 parameter-expa
 | `test_model_cannot_supply_authoritative_identity_or_character_image` | Forbidden bookkeeping/Tovi imagery and blank substantive content rejected |
 | `test_pipeline_repairs_unsupported_adapter_tempo_before_success` | Supported technical tempo range validated inside the durable repair boundary |
 | `test_non_lyric_proposals_render_real_complete_mp4_and_reuse` | Three actual FFmpeg/QA renders, source-free scene wording, no ASR or publication and effect-free reuse |
-| `test_explicit_recovery_preserves_failures_upstream_music_and_episode` | Real legacy palette-failure receipts, new grant/contract, same episode/music/intent/job, unchanged audio/old draft and immutable grant |
+| `test_explicit_recovery_preserves_failures_upstream_music_and_episode` | CLI and durable Studio Resume with publication enabled, same render target/reference/music/upstream selections, zero grant provider/publication calls, immutable idempotent grant, and retained review/rights gates |
 | `test_v3_media_pack_and_dependency_failures_still_block_admission` | Missing/corrupt prop, wrong/missing character resources, mismatched manifest/QA and immutable dependency defenses |
 | `test_duration_source_fails_closed` | Original audio missing/corrupt/SHA mismatch, receipt guard and source episode mismatch |
 | `test_failed_retained_asr_stays_failed_while_optional_rhythm_is_reused` | Old unavailable ASR/WER stays unchanged, valid retained beats can be used independently |
-| `test_recovery_rejects_publication_and_unresolved_receipts` | Enabled publication and uncertain old requests cannot authorize a new contract |
+| `test_recovery_rejects_auto_publication_and_unresolved_receipts` | Automatic publication and uncertain old requests cannot authorize a new contract; enabled optional publication is supported |
+| `test_recovery_requires_existing_identity_and_explicit_operator` | Unknown/empty episode identity, missing confirmation and blank actor remain blocked |
+| `test_recovery_rejects_unresolved_or_successful_original_visual_attempt` | Prepared, remote-started, ambiguous and successful old requests remain blocked |
+| `test_recovery_rejects_invalid_retained_sources_without_provider_calls` | Corrupt retained audio, uncertain music attempts and missing upstream selections cannot authorize recovery |
 | `test_restart_after_visual_response_persistence_does_not_resend` | Stored successful draft response reused after process interruption before ingest |
 | `test_new_visual_ambiguity_and_ownership_never_duplicate_call` | New visual ambiguity and loss of ownership before effects cannot duplicate requests |
 | `test_ownership_loss_after_response_preserves_receipt_and_blocks_resend` | Immutable returned response retained after lease loss; automatic resend blocked |
 | `test_v3_uncertain_image_survives_restart_without_a_second_prompt` | ComfyUI uncertainty in the new asset path survives Resume without another prompt/music submission |
 | `test_v3_readiness_rejects_required_image_and_response_corruption` | Raw response corruption blocks renderer and read-only continuation |
 | `test_new_contract_survives_real_process_restart` | Two real Python processes share durable V3 work and only one music submission |
+
+### Publication capability recovery gate verification
+
+The follow-up fix removes only the global publication/YouTube capability checks from local
+visual recovery authorization. The automatic-publication restriction remains. The grant
+does not execute production or change saved intent, so it needs no additional publish consent.
+The existing target projection excludes RELEASE and YOUTUBE for RENDER, and Studio recovery
+passes its durable saved target/reference to that workflow. Publication boundary policies
+and provider request reconciliation are unchanged.
+
+Final local checks for this fix:
+
+- `uv run --locked ruff check .`: passed.
+- `uv run --locked mypy src`: passed for 118 source files.
+- `uv run --locked pytest -q tests/test_creative_production_v3.py tests/test_studio_v1.py tests/test_generate_resume_ownership.py tests/test_web_youtube_v1.py tests/test_public_release_v1.py --tb=short -o faulthandler_timeout=120`:
+  153 passed in 355.17 seconds.
+- `uv run --locked pytest -q -o faulthandler_timeout=120`: 1,061 passed in 919.09 seconds.
+- `git diff --check`: passed.
+
+Both test runs report only the existing Starlette TestClient deprecation warning. All media
+and provider evidence comes from isolated offline fixtures. This fix did not edit `config.yaml`,
+access or modify the live production database, execute the yellow episode, call live providers,
+publish a video or merge the draft PR.
