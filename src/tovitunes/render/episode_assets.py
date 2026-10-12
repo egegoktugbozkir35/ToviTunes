@@ -16,6 +16,7 @@ from tovitunes.benchmark.providers import ImageProvider, ProviderFailure
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
+from tovitunes.domain.visual_draft import EpisodeVisualPlanV2
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
@@ -141,7 +142,7 @@ def generate_assets(
     config: RuntimeConfig,
     store: AssetStore,
     episode: Episode,
-    visual: EpisodeVisualPlan,
+    visual: EpisodeVisualPlan | EpisodeVisualPlanV2,
     plan_id: str,
     working: Path,
     visual_direction: str,
@@ -150,6 +151,9 @@ def generate_assets(
     progress: Callable[[str, str], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
+    if not visual.required_assets:
+        assert_owner()
+        return {}
     provider = provider or _provider(config)
     if provider.provider != "qwen_comfyui":
         raise ValueError("production illustrations require the existing Qwen adapter")

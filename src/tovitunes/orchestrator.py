@@ -14,7 +14,7 @@ from tovitunes.continuation import plan_continuation
 from tovitunes.creative.director import validate_pins
 from tovitunes.creative.provider import StructuredGenerator
 from tovitunes.creative.service import episode_by_key
-from tovitunes.domain.visual_plan import EpisodeVisualPlan
+from tovitunes.domain.visual_draft import parse_visual_plan
 from tovitunes.errors import CreativeChainExhausted, ProductionStop, ProviderError, StateError
 from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.music.providers import MusicProvider
@@ -23,7 +23,7 @@ from tovitunes.pipeline.targets import ProductionTarget, stages_for
 from tovitunes.progress import PipelineProgress, ProgressReporter, report_progress
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.episode_assets import ImageStageBlocked, generate_assets
-from tovitunes.render.models import RenderManifest
+from tovitunes.render.models import parse_manifest
 from tovitunes.render.production import load_inputs, validate_manifest
 from tovitunes.run_history import RunHistory
 from tovitunes.services.context import StageContext
@@ -273,7 +273,7 @@ class Orchestrator:
                     if selected is None:
                         raise StateError("Selected visual plan is missing")
                     plan_id = selected.identity.artifact_id
-                    visual_plan = EpisodeVisualPlan.model_validate(context.store.read_json(plan_id))
+                    visual_plan = parse_visual_plan(context.store.read_json(plan_id))
                     if stage == "VISUAL_ASSETS":
                         if self.config.lesson_object_generation.provider != "qwen_comfyui":
                             raise ProductionStop(
@@ -382,7 +382,7 @@ class Orchestrator:
         inputs = load_inputs(self.config, key, local_preview=True)
         manifest_id = str(result["render_manifest_id"])
         manifest_record = context.store.get(manifest_id)
-        manifest = RenderManifest.model_validate(context.store.read_json(manifest_id))
+        manifest = parse_manifest(context.store.read_json(manifest_id))
         if (
             manifest.episode_id != inputs.storyboard.episode_id
             or manifest.timed_storyboard_artifact_id

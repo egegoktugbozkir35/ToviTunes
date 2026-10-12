@@ -12,12 +12,12 @@ import shutil
 import socket
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 PACKAGES = (
@@ -229,7 +229,7 @@ def runtime_doctor(root: Path, model: str = "small.en", device: str = "cpu") -> 
 
         torch_version = str(torch.__version__)
         torch_cuda_build = torch.version.cuda
-        cudnn_version = torch.backends.cudnn.version()
+        cudnn_version = cast(Callable[[], int | None], torch.backends.cudnn.version)()
         cuda_available = bool(torch.cuda.is_available())
         cuda_count = int(torch.cuda.device_count())
         if cuda_available and cuda_count:

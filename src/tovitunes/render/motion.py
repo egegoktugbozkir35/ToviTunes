@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from tovitunes.domain.production_v3 import AudioClock
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, ProductionModel
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
 from tovitunes.render.composition import SceneComposition
@@ -251,8 +252,8 @@ def plan_motion(
     scene_start: float,
     duration: float,
     storyboard_id: str,
-    beats: BeatAnalysis,
-    alignment: AudioAlignment,
+    beats: BeatAnalysis | AudioClock,
+    alignment: AudioAlignment | AudioClock,
     target_vocabulary: tuple[str, ...],
     *,
     previous: SceneMotionPlan | None = None,
@@ -700,7 +701,7 @@ def activity_diagnostics(plan: SceneMotionPlan) -> dict[str, Any]:
 
 def validate_motion(
     plan: SceneMotionPlan,
-    alignment: AudioAlignment,
+    alignment: AudioAlignment | AudioClock,
     vocabulary: tuple[str, ...],
     animation: CharacterAnimation,
     canvas: tuple[int, int],

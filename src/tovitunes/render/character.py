@@ -4,6 +4,7 @@ import math
 
 from PIL import Image
 
+from tovitunes.domain.production_v3 import AudioClock, VisualTimedScene
 from tovitunes.domain.storyboard import BeatAnalysis, TimedScene
 from tovitunes.render.composition import (
     ACTION_METADATA,
@@ -70,10 +71,10 @@ def attach_poses(
 
 
 def animation_plan(
-    scene: TimedScene,
+    scene: TimedScene | VisualTimedScene,
     sprite: Image.Image,
     artifact_id: str,
-    beats: BeatAnalysis,
+    beats: BeatAnalysis | AudioClock,
     canvas: tuple[int, int],
     storyboard_id: str,
     composition: SceneComposition | None = None,

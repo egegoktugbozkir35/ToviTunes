@@ -9,10 +9,12 @@ from typing import Any
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
+from tovitunes.domain.visual_draft import EpisodeVisualPlanV2, parse_visual_plan
 from tovitunes.errors import ProductionStop
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
+from tovitunes.pipeline.duration_source import admit_duration_source, uses_duration_path
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import (
     accept_episode_source,
@@ -189,6 +191,47 @@ class MusicService(StageContext):
         return request_id, blind_id
 
     def _analysis(self, episode: Episode, blind_id: str) -> dict[str, Any]:
+        visual_record = self._selected(episode, "episode_visual_plan")
+        with closing(self.database.connect()) as db:
+            duration_path = (
+                isinstance(
+                    parse_visual_plan(self.store.read_json(visual_record.identity.artifact_id)),
+                    EpisodeVisualPlanV2,
+                )
+                if visual_record
+                else uses_duration_path(db, episode.episode_id)
+            )
+            binding = db.execute(
+                "SELECT request_id FROM episode_music_bindings WHERE episode_id=?",
+                (episode.episode_id,),
+            ).fetchone()
+        if duration_path:
+            master = self._selected(episode, "audio_master")
+            if master is None or binding is None:
+                raise ValueError("duration analysis requires retained music binding and master")
+            spec, lyrics, music, ids = self._creative_inputs(episode)
+            clock = admit_duration_source(
+                self.config,
+                episode,
+                binding["request_id"],
+                creative_music_spec(episode, spec, lyrics, music, ids),
+                master.identity.artifact_id,
+            )
+            if clock.source_blind_id != blind_id:
+                raise ValueError("duration analysis differs from selected blind identity")
+            record = self._json(
+                episode,
+                "audio_clock",
+                clock.model_dump(mode="json"),
+                (master.identity.artifact_id,),
+            )
+            return {
+                "audio_clock_artifact_id": record.identity.artifact_id,
+                "mode": "duration",
+                "audio_sha256": clock.audio_sha256,
+                "provider_calls": 0,
+                "asr_required": False,
+            }
         benchmark = MusicBenchmark(
             self.database,
             self.config.data_root / "music-benchmark",

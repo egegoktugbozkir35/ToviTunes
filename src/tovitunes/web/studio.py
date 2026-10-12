@@ -14,7 +14,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.continuation import plan_continuation
 from tovitunes.creative.learning import LearningBrief
 from tovitunes.creative.service import episode_by_key
-from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
 from tovitunes.errors import FailureCategory
 from tovitunes.orchestrator import Orchestrator, ProductionReference
 from tovitunes.persistence.db import Database
@@ -56,9 +56,9 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
             try:
                 episode = episode_by_key(database, key)
                 ids = stages["CREATIVE"]["evidence"]["artifact_ids"]
-                spec = EpisodeSpec.model_validate(store.read_json(ids[0]))
-                lyrics = LyricsSpec.model_validate(store.read_json(ids[1]))
-                music = MusicSpec.model_validate(store.read_json(ids[2]))
+                spec = parse_episode_spec(store.read_json(ids[0]))
+                lyrics = parse_lyrics(store.read_json(ids[1]))
+                music = parse_music_spec(store.read_json(ids[2]))
                 creative_music_spec(episode, spec, lyrics, music, tuple(ids))
                 draft = {
                     "premise": spec.concept.premise,
@@ -133,11 +133,7 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 "video_url": f"/api/media/{release.render_artifact_id}" if render_ready else None,
                 "preview_url": preview_url,
                 "draft": draft,
-                "blocker": plan.get("blocker")
-                if isinstance(plan.get("blocker"), str)
-                else "Review or release checks require attention."
-                if plan.get("blocker")
-                else None,
+                "blocker": safe_production_result(plan).get("blocker", {}).get("reason"),
                 "can_render": plan_continuation(config, key, target=ProductionTarget.RENDER)[
                     "allowed"
                 ]
@@ -173,7 +169,15 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(blocker, dict):
             safe["blocker"] = {
                 k: blocker[k]
-                for k in ("request_id", "provider", "model", "kind", "recovery_action")
+                for k in (
+                    "request_id",
+                    "provider",
+                    "model",
+                    "kind",
+                    "recovery_action",
+                    "new_prompt_version",
+                    "old_attempt_ids",
+                )
                 if k in blocker
             }
             category = blocker.get("error_kind")
@@ -183,7 +187,10 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
             safe["blocker"] = {}
         # Stage failures can include third-party text. Only our fixed messages cross the API.
         safe["blocker"]["reason"] = (
-            "Configured creative model chain exhausted. See the per-model outcomes."
+            "Legacy visual planning failed. Authorize visual_creative_v2 using the local "
+            "production recover-visual-contract command, then Resume this episode."
+            if safe["blocker"].get("recovery_action") == "authorize_visual_v2"
+            else "Configured creative model chain exhausted. See the per-model outcomes."
             if safe["blocker"].get("error_kind") == "chain_exhausted"
             else "Creative model " + OUTCOMES[safe["blocker"]["error_kind"]] + "."
             if safe["blocker"].get("error_kind") in OUTCOMES
@@ -200,6 +207,41 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
             if result.get("status") == "PENDING_PROVIDER"
             else "Configured review or release policy requires attention."
             if result.get("status") == "NEEDS_REVIEW"
+            else {
+                "AUDIO_ANALYSIS": (
+                    "Retained audio or receipt validation failed. Check the original audio file, "
+                    "its source identity and measured technical quality before Resume."
+                ),
+                "VISUAL_PLAN": (
+                    "Visual proposal evidence failed validation. Check its retained response "
+                    "receipt; Resume preserves completed upstream work."
+                ),
+                "VISUAL_ASSETS": (
+                    "Required illustrations or backgrounds need attention. Check retained image "
+                    "files and provider receipts before Resume."
+                ),
+                "STORYBOARD": (
+                    "Storyboard timing or source dependencies failed admission. Check selected "
+                    "audio, visual assets and character resources before Resume."
+                ),
+                "RENDER": (
+                    "Render admission failed. Check selected media, the approved Tovi pack "
+                    "and FFmpeg availability before Resume."
+                ),
+                "MEDIA_QA": (
+                    "Final media QA failed. Review the retained QA report and video before Resume."
+                ),
+            }[result["current_stage"]]
+            if result.get("status") == "BLOCKED"
+            and result.get("current_stage")
+            in {
+                "AUDIO_ANALYSIS",
+                "VISUAL_PLAN",
+                "VISUAL_ASSETS",
+                "STORYBOARD",
+                "RENDER",
+                "MEDIA_QA",
+            }
             else "This stage could not complete. Check Settings and resume its retained work."
         )
     if isinstance(blocker, dict) and isinstance(blocker.get("release"), dict):

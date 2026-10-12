@@ -127,6 +127,23 @@ def safe_text(text: str, *, metadata: bool = False) -> None:
             raise ValueError(f"creative safety policy rejects {term!r}")
 
 
+def safe_creative_text(text: str) -> None:
+    """V2 admission keeps V1 prohibitions and catches ordinary dangerous inflections."""
+    safe_text(text)
+    dangerous = (
+        r"\bplay(?:s|ing)? with fire\b",
+        r"\b(?:jump|leap)(?:s|ing)? off\b",
+        r"\brun(?:s|ning)? into (?:the )?road\b",
+        r"\bcross(?:es|ing)? (?:the )?road alone\b",
+        r"\btouch(?:es|ing)? (?:the )?(?:hot )?stove\b",
+        r"\beat(?:s|ing)? paint\b",
+        r"\bhold(?:s|ing)? (?:your|his|her|their) breath\b",
+        r"\bclimb(?:s|ing)? onto\b",
+    )
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in dangerous):
+        raise ValueError("creative safety policy rejects dangerous preschool imitation")
+
+
 def treatment(candidate: CreativeSubjectCandidate) -> str:
     return " ".join((candidate.premise, candidate.hook, *candidate.example_objects))
 
@@ -196,6 +213,9 @@ def validate_episode_spec(episode: Episode, spec: EpisodeSpec) -> None:
         or not set(spec.concept.cast).issubset(p.character_id for p in episode.character_packs)
     ):
         raise ValueError("episode spec differs from pinned learning objective or cast")
+    if spec.schema_version == 3:
+        safe_creative_text(spec.model_dump_json())
+        return
     purposes = [beat.purpose for beat in spec.story_beats]
     if set(purposes) != {"hook", "teach", "practice", "payoff"}:
         raise ValueError("story progression must include hook, teach, practice and payoff")
@@ -234,15 +254,19 @@ def validate_lyrics(episode: Episode, lyrics: LyricsSpec, spec_id: str) -> None:
     ):
         raise ValueError("lyrics differ from selected objective or episode spec")
     texts = [line.text for line in lyrics.lines]
-    if len(texts) > 16 or any(len(t) > 100 or len(t.split()) > 16 for t in texts):
+    if lyrics.schema_version == 2 and any(not text.strip() for text in texts):
+        raise ValueError("lyrics require substantive nonempty lines")
+    if len(texts) > (24 if lyrics.schema_version == 2 else 16) or any(
+        len(t) > 100 or len(t.split()) > 16 for t in texts
+    ):
         raise ValueError("lyrics exceed bounded line count or line length")
     if sum(len(t.split()) for t in texts) > episode.target_duration_seconds * 2:
         raise ValueError("lyrics exceed the target-duration word budget")
-    if max(Counter(texts).values()) > 3:
+    if lyrics.schema_version == 1 and max(Counter(texts).values()) > 3:
         raise ValueError("lyrics have excessive identical-line repetition")
     if any(re.search(r"[\[\]()]", t) for t in texts):
         raise ValueError("lyrics cannot contain production directions")
-    safe_text(" ".join(texts))
+    (safe_creative_text if lyrics.schema_version == 2 else safe_text)(" ".join(texts))
 
 
 def validate_music(episode: Episode, music: MusicSpec, lyrics_id: str) -> None:
@@ -254,7 +278,7 @@ def validate_music(episode: Episode, music: MusicSpec, lyrics_id: str) -> None:
         or music.target_duration_seconds != episode.target_duration_seconds
     ):
         raise ValueError("music spec differs from selected lyrics or objective")
-    if music.tempo_bpm is None or not 80 <= music.tempo_bpm <= 130:
+    if music.schema_version == 1 and (music.tempo_bpm is None or not 80 <= music.tempo_bpm <= 130):
         raise ValueError("preschool music brief requires a moderate 80-130 BPM tempo")
     safe_text(" ".join((music.mood, music.vocal_direction, *music.instrumentation)))
 

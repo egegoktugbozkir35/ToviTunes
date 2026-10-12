@@ -5,12 +5,23 @@ from contextlib import closing
 
 from tovitunes.benchmark.providers import ProviderFailure
 from tovitunes.creative.director import pinned_facts
+from tovitunes.creative.prompts import freedom_messages
 from tovitunes.creative.provider import (
     GenerationContext,
 )
+from tovitunes.creative.visual_recovery import recovery_state
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
+from tovitunes.domain.production_v3 import AudioClock
+from tovitunes.domain.visual_draft import (
+    VISUAL_PROMPT_V2,
+    CreativeVisualDraft,
+    EpisodeVisualPlanV2,
+    compile_visual_draft,
+    parse_visual_plan,
+    validate_compiled_visual,
+)
 from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
 from tovitunes.errors import ProductionStop
 from tovitunes.render.environment_sets import EnvironmentSet, generate_set, selected_set
@@ -19,6 +30,95 @@ from tovitunes.services.context import StageContext
 
 class VisualService(StageContext):
     def _visual(
+        self,
+        episode: Episode,
+        inputs: tuple[EpisodeSpec, LyricsSpec, MusicSpec, tuple[str, str, str]],
+    ) -> tuple[EpisodeVisualPlan | EpisodeVisualPlanV2, str]:
+        spec, lyrics, music, ids = inputs
+        selected = self._selected(episode, "episode_visual_plan")
+        if selected:
+            plan = parse_visual_plan(self.store.read_json(selected.identity.artifact_id))
+            if isinstance(plan, EpisodeVisualPlan):
+                validate_visual_plan(plan, episode, spec, lyrics, ids)
+            else:
+                validate_compiled_visual(plan, episode, ids)
+                self._visual_receipt(plan)
+            return plan, selected.identity.artifact_id
+        if episode.learning_source == "legacy_curriculum":
+            return self._visual_legacy(episode, inputs)
+        with closing(self.database.connect()) as db:
+            success = db.execute(
+                "SELECT 1 FROM generation_requests WHERE episode_id=? "
+                "AND prompt_version='episode_visual_plan_v1' AND status='succeeded'",
+                (episode.episode_id,),
+            ).fetchone()
+            if success:
+                return self._visual_legacy(episode, inputs)
+            recovery = recovery_state(db, episode.episode_id)
+        if recovery and not recovery["authorized"]:
+            raise ProductionStop(
+                "BLOCKED", "Authorize the new visual contract explicitly", recovery
+            )
+        clock_record = self._selected(episode, "audio_clock")
+        if clock_record is None:
+            raise ValueError("visual draft requires an admitted retained audio clock")
+        clock = AudioClock.model_validate(self.store.read_json(clock_record.identity.artifact_id))
+        raw = self._selected(episode, "creative_visual_draft")
+        if raw is None:
+            facts = {
+                "topic": episode.subject or episode.objective,
+                "prior_story": spec.concept.model_dump(mode="json"),
+                "song_mood": music.mood,
+                "optional_lyrics_context": [line.text for line in lyrics.lines],
+                "duration_seconds": clock.duration_seconds,
+                "visual_direction": self.catalog.creative_bible.visual_direction,
+            }
+            with self._creative() as creative:
+                draft = creative.provider.generate(
+                    CreativeVisualDraft,
+                    freedom_messages(VISUAL_PROMPT_V2, facts),
+                    context=GenerationContext(
+                        "creative_visual_draft",
+                        VISUAL_PROMPT_V2,
+                        episode_id=episode.episode_id,
+                        assert_owner=self.ownership.assert_owned,
+                    ),
+                )
+            raw = self._json(
+                episode,
+                "creative_visual_draft",
+                draft.output.model_dump(mode="json"),
+                (*ids, clock_record.identity.artifact_id),
+                Provenance(
+                    source_kind="provider",
+                    acquired_at=draft.generated_at,
+                    provider=draft.provider,
+                    model=draft.model,
+                    request_id=draft.request_id,
+                    local_request_id=draft.local_request_id,
+                    prompt_version=draft.prompt_version,
+                    input_artifact_ids=(*ids, clock_record.identity.artifact_id),
+                ),
+            )
+        proposal = CreativeVisualDraft.model_validate(
+            self.store.read_json(raw.identity.artifact_id)
+        )
+        plan_v2 = compile_visual_draft(proposal, episode, ids, raw.identity.artifact_id, raw.sha256)
+        self._visual_receipt(plan_v2)
+        record = self._json(
+            episode,
+            "episode_visual_plan",
+            plan_v2.model_dump(mode="json"),
+            (*ids, raw.identity.artifact_id),
+        )
+        return plan_v2, record.identity.artifact_id
+
+    def _visual_receipt(self, plan: EpisodeVisualPlanV2) -> None:
+        from tovitunes.render.visual_evidence import validate_visual_receipt
+
+        validate_visual_receipt(self.store, plan)
+
+    def _visual_legacy(
         self,
         episode: Episode,
         inputs: tuple[EpisodeSpec, LyricsSpec, MusicSpec, tuple[str, str, str]],
@@ -97,7 +197,9 @@ class VisualService(StageContext):
         )
         return draft.output, record.identity.artifact_id
 
-    def _environment(self, episode: Episode, visual: EpisodeVisualPlan, plan_id: str) -> str:
+    def _environment(
+        self, episode: Episode, visual: EpisodeVisualPlan | EpisodeVisualPlanV2, plan_id: str
+    ) -> str:
         selected = self._selected(episode, "episode_environment")
         if selected:
             payload = self.store.read_json(selected.identity.artifact_id)

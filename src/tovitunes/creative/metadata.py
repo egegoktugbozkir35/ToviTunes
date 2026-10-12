@@ -14,10 +14,11 @@ from tovitunes.creative.resilience import generation_audit
 from tovitunes.creative.service import CreativeService, call_report, call_snapshot, episode_by_key
 from tovitunes.creative.validation import validate_episode_spec, validate_lyrics, validate_metadata
 from tovitunes.domain.artifact import Provenance
-from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics
+from tovitunes.domain.production_v3 import TimedStoryboardV3
 from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import parse_storyboard
-from tovitunes.render.models import RenderManifest
+from tovitunes.render.models import parse_manifest
 
 
 class MetadataWriter:
@@ -46,16 +47,10 @@ class MetadataWriter:
         if (spec_record is None) != (lyrics_record is None):
             raise ValueError("metadata requires a complete selected creative pair")
         storyboard = parse_storyboard(self.store.read_json(storyboard_record.identity.artifact_id))
-        manifest = RenderManifest.model_validate(
-            self.store.read_json(manifest_record.identity.artifact_id)
-        )
+        manifest = parse_manifest(self.store.read_json(manifest_record.identity.artifact_id))
         if spec_record and lyrics_record:
-            spec = EpisodeSpec.model_validate(
-                self.store.read_json(spec_record.identity.artifact_id)
-            )
-            lyrics = LyricsSpec.model_validate(
-                self.store.read_json(lyrics_record.identity.artifact_id)
-            )
+            spec = parse_episode_spec(self.store.read_json(spec_record.identity.artifact_id))
+            lyrics = parse_lyrics(self.store.read_json(lyrics_record.identity.artifact_id))
             validate_episode_spec(episode, spec)
             validate_lyrics(episode, lyrics, spec_record.identity.artifact_id)
             spec_facts: dict[str, Any] = spec.model_dump(mode="json")
@@ -100,6 +95,7 @@ class MetadataWriter:
             or manifest.duration_seconds != storyboard.duration_seconds
             or (
                 lyrics_record is not None
+                and not isinstance(storyboard, TimedStoryboardV3)
                 and tuple(s.lyric_text for s in storyboard.scenes if s.kind == "lyric")
                 != tuple(line["text"] for line in lyrics_facts["lines"])
             )

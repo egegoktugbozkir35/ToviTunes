@@ -544,7 +544,7 @@ def test_partial_real_workflow_restart_keeps_episode_artifacts_and_historical_re
         payload = json.loads(request.content)
         output = fake.chat(payload["messages"], record_identity=lambda _: None)
         calls.append((payload["model"], fake.calls[-1]))
-        if fail_lyrics and fake.calls[-1] == "LyricsSpec":
+        if fail_lyrics and fake.calls[-1] == "LyricsDraft":
             return reply("", identity=f"failed-{len(calls)}")
         return reply(output.content, identity=f"id-{len(calls)}")
 
@@ -574,7 +574,7 @@ def test_partial_real_workflow_restart_keeps_episode_artifacts_and_historical_re
     assert result["run_id"] == original_run["run_id"]
     assert result["episode_id"] == original_run["episode_id"]
     assert records(database)[: len(before)] == before
-    assert calls[-2:] == [(CHAIN[1], "LyricsSpec"), (CHAIN[1], "MusicSpec")]
+    assert calls[-2:] == [(CHAIN[1], "LyricsDraft"), (CHAIN[1], "MusicDraft")]
     for kind in ("lyrics", "music_spec"):
         record = flow.store.get(result[kind + "_artifact_id"])
         assert record.provenance.model == CHAIN[1]

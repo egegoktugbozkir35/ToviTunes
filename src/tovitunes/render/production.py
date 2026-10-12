@@ -21,6 +21,8 @@ from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.character import CharacterAssetPack
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics
+from tovitunes.domain.production_v3 import AudioClock, TimedStoryboardV3, VisualTimedScene
 from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import (
     AudioAlignment,
@@ -30,8 +32,10 @@ from tovitunes.domain.storyboard import (
     beat_range,
     parse_storyboard,
 )
+from tovitunes.domain.visual_draft import EpisodeVisualPlanV2, parse_visual_plan
 from tovitunes.persistence.db import Database
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
+from tovitunes.render.admission_v3 import load_v3_evidence
 from tovitunes.render.character import (
     ACTION_ROLES,
     animation_plan,
@@ -59,7 +63,7 @@ from tovitunes.render.ffmpeg import (
     probe,
     run_process,
 )
-from tovitunes.render.models import RenderManifest, SceneRender
+from tovitunes.render.models import RenderManifest, RenderManifestV2, SceneRender
 from tovitunes.render.motion import SceneMotionPlan, plan_motion, prop_state, validate_motion
 from tovitunes.render.props import png_info, scene_art, validate_props
 from tovitunes.render.qa import media_qa
@@ -74,6 +78,12 @@ from tovitunes.render.story import (
 V4_VERSION = VISUAL_STORY_VERSION
 
 
+def timing_ids(storyboard: TimedStoryboard | TimedStoryboardV3) -> tuple[str, ...]:
+    if isinstance(storyboard, TimedStoryboardV3):
+        return (storyboard.audio_clock_artifact_id,)
+    return (storyboard.audio_alignment_artifact_id, storyboard.beat_analysis_artifact_id)
+
+
 def canonical(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
@@ -82,10 +92,10 @@ def canonical(value: Any) -> bytes:
 class RenderInputs:
     store: AssetStore
     storyboard_record: ArtifactRecord
-    storyboard: TimedStoryboard
-    beats: BeatAnalysis
+    storyboard: TimedStoryboard | TimedStoryboardV3
+    beats: BeatAnalysis | AudioClock
     pack: CharacterAssetPack
-    alignment: AudioAlignment
+    alignment: AudioAlignment | AudioClock
     target_vocabulary: tuple[str, ...]
 
 
@@ -118,99 +128,110 @@ def load_inputs(
         or storyboard.objective_id != episode.objective_id
     ):
         raise ValueError("storyboard differs from pinned episode")
-    pins = {
-        "audio_master": storyboard.audio_master_artifact_id,
-        "audio_alignment": storyboard.audio_alignment_artifact_id,
-        "beat_analysis": storyboard.beat_analysis_artifact_id,
-    }
-    for kind, artifact_id in pins.items():
-        selected = store.selected("episode", episode.episode_id, kind, "main")
-        if selected is None or selected.identity.artifact_id != artifact_id:
-            raise ValueError(f"stale storyboard {kind} reference")
-    if isinstance(storyboard, TimedStoryboardV2):
-        from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
-        from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
+    if isinstance(storyboard, TimedStoryboardV3):
+        clock = load_v3_evidence(config, store, episode, storyboard, record.identity.artifact_id)
+        alignment: AudioAlignment | AudioClock = clock
+        beats: BeatAnalysis | AudioClock = clock
+    else:
+        pins = {
+            "audio_master": storyboard.audio_master_artifact_id,
+            "audio_alignment": storyboard.audio_alignment_artifact_id,
+            "beat_analysis": storyboard.beat_analysis_artifact_id,
+        }
+        for kind, artifact_id in pins.items():
+            selected = store.selected("episode", episode.episode_id, kind, "main")
+            if selected is None or selected.identity.artifact_id != artifact_id:
+                raise ValueError(f"stale storyboard {kind} reference")
+        if isinstance(storyboard, TimedStoryboardV2):
+            from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
 
-        visual_record = store.selected("episode", episode.episode_id, "episode_visual_plan", "main")
-        lyrics_record = store.selected("episode", episode.episode_id, "lyrics", "main")
-        if (
-            visual_record is None
-            or lyrics_record is None
-            or visual_record.identity.artifact_id != storyboard.visual_plan_artifact_id
-            or lyrics_record.identity.artifact_id != storyboard.lyrics_artifact_id
-        ):
-            raise ValueError("V2 storyboard creative/visual plan selections changed")
-        visual = EpisodeVisualPlan.model_validate(
-            store.read_json(visual_record.identity.artifact_id)
-        )
-        lyrics = LyricsSpec.model_validate(store.read_json(lyrics_record.identity.artifact_id))
-        spec_record = store.selected("episode", episode.episode_id, "episode_spec", "main")
-        music_record = store.selected("episode", episode.episode_id, "music_spec", "main")
-        if spec_record is None or music_record is None:
-            raise ValueError("V2 renderer requires current selected creative evidence")
-        validate_visual_plan(
-            visual,
-            episode,
-            EpisodeSpec.model_validate(store.read_json(spec_record.identity.artifact_id)),
-            lyrics,
-            (
-                spec_record.identity.artifact_id,
-                lyrics_record.identity.artifact_id,
-                music_record.identity.artifact_id,
-            ),
-        )
-        lyric_scenes_v2 = tuple(scene for scene in storyboard.scenes if scene.kind == "lyric")
-        if (
-            tuple(scene.lyric_text for scene in lyric_scenes_v2)
-            != tuple(line.text for line in lyrics.lines)
-            or set(storyboard.asset_artifact_ids) != {a.asset_key for a in visual.required_assets}
-            or len(lyric_scenes_v2) != len(visual.scenes)
-        ):
-            raise ValueError("V2 storyboard differs from exact lyrics or admitted assets")
-        for scene, intent in zip(lyric_scenes_v2, visual.scenes, strict=True):
-            if (
-                scene.required_props != intent.required_assets
-                or scene.tovi_action != intent.tovi_action
-                or scene.visual_focus != intent.visual_focus
-            ):
-                raise ValueError("V2 scene intention differs from admitted plan")
-        for key, aid in storyboard.asset_artifact_ids.items():
-            current = store.selected("episode", episode.episode_id, "visual_asset", key)
-            if current is None or current.identity.artifact_id != aid:
-                raise ValueError("V2 scene asset is not the episode's admitted asset")
-    audio = store.get(storyboard.audio_master_artifact_id)
-    alignment = AudioAlignment.model_validate(
-        store.read_json(storyboard.audio_alignment_artifact_id)
-    )
-    beats = BeatAnalysis.model_validate(store.read_json(storyboard.beat_analysis_artifact_id))
-    for evidence in (alignment, beats):
-        if (
-            evidence.audio_master_artifact_id != audio.identity.artifact_id
-            or evidence.audio_sha256 != audio.sha256
-            or evidence.duration_seconds != storyboard.duration_seconds
-        ):
-            raise ValueError("selected timing/beat evidence differs from audio")
-    if audio.sha256 != storyboard.audio_sha256:
-        raise ValueError("storyboard audio SHA mismatch")
-    audio_duration = float(probe(store.path_for(audio.identity.artifact_id))["format"]["duration"])
-    if abs(audio_duration - storyboard.duration_seconds) > 0.005:
-        raise ValueError("source audio duration differs from storyboard")
-    lyric_scenes = tuple(s for s in storyboard.scenes if s.kind == "lyric")
-    if tuple((s.lyric_text, s.lyric_start, s.lyric_end) for s in lyric_scenes) != tuple(
-        (line.text, line.start, line.end) for line in alignment.lyric_lines
-    ):
-        raise ValueError("storyboard lyrics differ from selected alignment")
-    for scene in storyboard.scenes:
-        if (
-            scene.tovi_action not in ACTION_ROLES
-            or scene.beat_index_range
-            != beat_range(beats.beat_seconds, scene.start, scene.end, storyboard.duration_seconds)
-            or scene.downbeat_index_range
-            != beat_range(
-                beats.downbeat_seconds, scene.start, scene.end, storyboard.duration_seconds
+            visual_record = store.selected(
+                "episode", episode.episode_id, "episode_visual_plan", "main"
             )
+            lyrics_record = store.selected("episode", episode.episode_id, "lyrics", "main")
+            if (
+                visual_record is None
+                or lyrics_record is None
+                or visual_record.identity.artifact_id != storyboard.visual_plan_artifact_id
+                or lyrics_record.identity.artifact_id != storyboard.lyrics_artifact_id
+            ):
+                raise ValueError("V2 storyboard creative/visual plan selections changed")
+            visual = EpisodeVisualPlan.model_validate(
+                store.read_json(visual_record.identity.artifact_id)
+            )
+            lyrics = parse_lyrics(store.read_json(lyrics_record.identity.artifact_id))
+            spec_record = store.selected("episode", episode.episode_id, "episode_spec", "main")
+            music_record = store.selected("episode", episode.episode_id, "music_spec", "main")
+            if spec_record is None or music_record is None:
+                raise ValueError("V2 renderer requires current selected creative evidence")
+            validate_visual_plan(
+                visual,
+                episode,
+                parse_episode_spec(store.read_json(spec_record.identity.artifact_id)),
+                lyrics,
+                (
+                    spec_record.identity.artifact_id,
+                    lyrics_record.identity.artifact_id,
+                    music_record.identity.artifact_id,
+                ),
+            )
+            lyric_scenes_v2 = tuple(scene for scene in storyboard.scenes if scene.kind == "lyric")
+            if (
+                tuple(scene.lyric_text for scene in lyric_scenes_v2)
+                != tuple(line.text for line in lyrics.lines)
+                or set(storyboard.asset_artifact_ids)
+                != {a.asset_key for a in visual.required_assets}
+                or len(lyric_scenes_v2) != len(visual.scenes)
+            ):
+                raise ValueError("V2 storyboard differs from exact lyrics or admitted assets")
+            for scene, intent in zip(lyric_scenes_v2, visual.scenes, strict=True):
+                if (
+                    scene.required_props != intent.required_assets
+                    or scene.tovi_action != intent.tovi_action
+                    or scene.visual_focus != intent.visual_focus
+                ):
+                    raise ValueError("V2 scene intention differs from admitted plan")
+            for key, aid in storyboard.asset_artifact_ids.items():
+                current = store.selected("episode", episode.episode_id, "visual_asset", key)
+                if current is None or current.identity.artifact_id != aid:
+                    raise ValueError("V2 scene asset is not the episode's admitted asset")
+        audio = store.get(storyboard.audio_master_artifact_id)
+        alignment = AudioAlignment.model_validate(
+            store.read_json(storyboard.audio_alignment_artifact_id)
+        )
+        beats = BeatAnalysis.model_validate(store.read_json(storyboard.beat_analysis_artifact_id))
+        for evidence in (alignment, beats):
+            if (
+                evidence.audio_master_artifact_id != audio.identity.artifact_id
+                or evidence.audio_sha256 != audio.sha256
+                or evidence.duration_seconds != storyboard.duration_seconds
+            ):
+                raise ValueError("selected timing/beat evidence differs from audio")
+        if audio.sha256 != storyboard.audio_sha256:
+            raise ValueError("storyboard audio SHA mismatch")
+        audio_duration = float(
+            probe(store.path_for(audio.identity.artifact_id))["format"]["duration"]
+        )
+        if abs(audio_duration - storyboard.duration_seconds) > 0.005:
+            raise ValueError("source audio duration differs from storyboard")
+        lyric_scenes = tuple(s for s in storyboard.scenes if s.kind == "lyric")
+        if tuple((s.lyric_text, s.lyric_start, s.lyric_end) for s in lyric_scenes) != tuple(
+            (line.text, line.start, line.end) for line in alignment.lyric_lines
         ):
-            raise ValueError("unsupported action or stale beat slices")
+            raise ValueError("storyboard lyrics differ from selected alignment")
+        for scene in storyboard.scenes:
+            if (
+                scene.tovi_action not in ACTION_ROLES
+                or scene.beat_index_range
+                != beat_range(
+                    beats.beat_seconds, scene.start, scene.end, storyboard.duration_seconds
+                )
+                or scene.downbeat_index_range
+                != beat_range(
+                    beats.downbeat_seconds, scene.start, scene.end, storyboard.duration_seconds
+                )
+            ):
+                raise ValueError("unsupported action or stale beat slices")
     catalog = load_brand(config.brand_root)
     if catalog.version.revision_id != episode.brand_revision_id:
         raise ValueError("current brand differs from pinned episode")
@@ -247,18 +268,29 @@ def load_inputs(
 
 
 def validate_manifest(
-    store: AssetStore, manifest: RenderManifest, storyboard: TimedStoryboard
+    store: AssetStore,
+    manifest: RenderManifest | RenderManifestV2,
+    storyboard: TimedStoryboard | TimedStoryboardV3,
 ) -> None:
     expected = tuple((s.scene_id, s.start, s.end) for s in storyboard.scenes)
     if (
         tuple((s.scene_id, s.start, s.end) for s in manifest.scenes) != expected
         or manifest.audio_master_artifact_id != storyboard.audio_master_artifact_id
-        or manifest.audio_alignment_artifact_id != storyboard.audio_alignment_artifact_id
-        or manifest.beat_analysis_artifact_id != storyboard.beat_analysis_artifact_id
         or manifest.character_pack_revision != storyboard.character_pack.revision_id
         or manifest.duration_seconds != storyboard.duration_seconds
     ):
         raise ValueError("manifest differs from selected storyboard")
+    if isinstance(storyboard, TimedStoryboardV3):
+        if (
+            not isinstance(manifest, RenderManifestV2)
+            or manifest.audio_clock_artifact_id != storyboard.audio_clock_artifact_id
+        ):
+            raise ValueError("V3 manifest timing version or clock differs")
+    elif not isinstance(manifest, RenderManifest) or (
+        manifest.audio_alignment_artifact_id != storyboard.audio_alignment_artifact_id
+        or manifest.beat_analysis_artifact_id != storyboard.beat_analysis_artifact_id
+    ):
+        raise ValueError("historical manifest timing version or evidence differs")
     for artifact_id, digest in manifest.dependency_sha256.items():
         record = store.get(artifact_id)
         selected = store.selected(
@@ -292,7 +324,7 @@ class ProductionRenderer:
         if visual_story:
             from tovitunes.render.environment_sets import selected_set
 
-            if isinstance(initial.storyboard, TimedStoryboardV2):
+            if isinstance(initial.storyboard, (TimedStoryboardV2, TimedStoryboardV3)):
                 from tovitunes.render.environment_sets import EnvironmentSet
 
                 aid = initial.storyboard.environment_set_artifact_id
@@ -323,6 +355,13 @@ class ProductionRenderer:
         environment_selection: tuple[Any, str] | None = None,
     ) -> dict[str, Any]:
         storyboard = inputs.storyboard
+        renderer_version = (
+            "tovitunes_creative_render_v1"
+            if isinstance(storyboard, TimedStoryboardV3)
+            else V4_VERSION
+            if environment_selection
+            else VERSION
+        )
         owner = storyboard.episode_id
         root = self.config.data_root / ".render-working"
         root.mkdir(exist_ok=True)
@@ -344,15 +383,15 @@ class ProductionRenderer:
             episode_visual = None
             lesson_manifest = (
                 None
-                if isinstance(storyboard, TimedStoryboardV2)
+                if isinstance(storyboard, (TimedStoryboardV2, TimedStoryboardV3))
                 else store.selected(
                     "brand", brand_id, "lesson_object_manifest", LESSON_OBJECT_STYLE_VERSION
                 )
             )
-            if isinstance(storyboard, TimedStoryboardV2):
-                from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan
+            if isinstance(storyboard, (TimedStoryboardV2, TimedStoryboardV3)):
+                from tovitunes.domain.visual_plan import COLORS_V1
 
-                episode_visual = EpisodeVisualPlan.model_validate(
+                episode_visual = parse_visual_plan(
                     store.read_json(storyboard.visual_plan_artifact_id)
                 )
                 prop_definitions = {
@@ -418,7 +457,7 @@ class ProductionRenderer:
                             source_kind="deterministic",
                             acquired_at=datetime.now(UTC),
                             provider="tovitunes.render",
-                            model=V4_VERSION if environment_selection else VERSION,
+                            model=renderer_version,
                             input_artifact_ids=deps,
                         ),
                         dependencies=[InputDependency(d, "render_input") for d in deps],
@@ -435,7 +474,10 @@ class ProductionRenderer:
             previous: SceneComposition | None = None
             previous_motion: SceneMotionPlan | None = None
             previous_motion_id: str | None = None
-            last_lyric_end = max(s.lyric_end for s in storyboard.scenes if s.lyric_end is not None)
+            last_lyric_end = max(
+                (s.lyric_end for s in storyboard.scenes if s.lyric_end is not None),
+                default=storyboard.duration_seconds,
+            )
             tail_seconds = storyboard.duration_seconds - last_lyric_end
             prepared: dict[str, tuple[SceneComposition, VisualStoryPlan]] = {}
             story_record: ArtifactRecord | None = None
@@ -479,7 +521,16 @@ class ProductionRenderer:
                         word_cue=word_cue,
                         scene_kind=item.kind,
                     )
-                    if episode_visual is not None:
+                    if isinstance(item, VisualTimedScene):
+                        planned_story = planned_story.model_copy(
+                            update={
+                                "environment_plate_role": item.environment_role,
+                                "keyword_reactions": False,
+                            }
+                        )
+                    elif episode_visual is not None and not isinstance(
+                        episode_visual, EpisodeVisualPlanV2
+                    ):
                         role = (
                             episode_visual.intro_environment_role
                             if item.kind == "intro"
@@ -508,8 +559,7 @@ class ProductionRenderer:
                         (
                             sid,
                             environment_id,
-                            storyboard.beat_analysis_artifact_id,
-                            storyboard.audio_alignment_artifact_id,
+                            *timing_ids(storyboard),
                             *inputs.pack.asset_artifact_ids.values(),
                         )
                     )
@@ -551,6 +601,10 @@ class ProductionRenderer:
                     story=story,
                     continuity_positions=continuity_positions,
                 )
+                if isinstance(storyboard, TimedStoryboardV3):
+                    motion = motion.model_copy(
+                        update={"keyword_emphasis_policy": "disabled_duration_path"}
+                    )
                 if story_record is not None:
                     motion = motion.model_copy(
                         update={"visual_story_plan_artifact_id": story_record.identity.artifact_id}
@@ -582,7 +636,7 @@ class ProductionRenderer:
                     metadata["environment_plate_role"] = story.environment_plate_role
                     metadata["environmental_theme"] = environment.theme
                     metadata["environment_layers"] = ["selected_provider_plate"]
-                    metadata["renderer_version"] = V4_VERSION
+                    metadata["renderer_version"] = renderer_version
                     background_deps = (
                         sid,
                         environment_id,
@@ -607,7 +661,7 @@ class ProductionRenderer:
                         height_limit=0.48 if environment_selection else 0.38,
                     )
                 if environment_selection:
-                    animation = animation.model_copy(update={"renderer_version": V4_VERSION})
+                    animation = animation.model_copy(update={"renderer_version": renderer_version})
                 validate_layout(animation, self.canvas)
                 poses = []
                 sprite_paths = {}
@@ -627,8 +681,7 @@ class ProductionRenderer:
                     dict.fromkeys(
                         (
                             sid,
-                            storyboard.beat_analysis_artifact_id,
-                            storyboard.audio_alignment_artifact_id,
+                            *timing_ids(storyboard),
                             background.identity.artifact_id,
                             *((story_record.identity.artifact_id,) if story_record else ()),
                             *sprite_paths,
@@ -652,7 +705,7 @@ class ProductionRenderer:
                         dict.fromkeys(
                             (
                                 sid,
-                                storyboard.beat_analysis_artifact_id,
+                                *timing_ids(storyboard),
                                 sprite_id,
                                 *sprite_paths,
                                 motion_record.identity.artifact_id,
@@ -785,8 +838,7 @@ class ProductionRenderer:
                     (
                         sid,
                         storyboard.audio_master_artifact_id,
-                        storyboard.audio_alignment_artifact_id,
-                        storyboard.beat_analysis_artifact_id,
+                        *timing_ids(storyboard),
                         *((environment_id,) if environment_selection else ()),
                         *((story_record.identity.artifact_id,) if story_record else ()),
                         *lesson_asset_ids,
@@ -802,8 +854,19 @@ class ProductionRenderer:
                     )
                 )
             )
-            manifest = RenderManifest(
-                renderer_version=V4_VERSION if environment_selection else VERSION,
+            timing_fields: dict[str, Any] = (
+                {"audio_clock_artifact_id": storyboard.audio_clock_artifact_id}
+                if isinstance(storyboard, TimedStoryboardV3)
+                else {
+                    "audio_alignment_artifact_id": storyboard.audio_alignment_artifact_id,
+                    "beat_analysis_artifact_id": storyboard.beat_analysis_artifact_id,
+                }
+            )
+            manifest_type = (
+                RenderManifestV2 if isinstance(storyboard, TimedStoryboardV3) else RenderManifest
+            )
+            manifest = manifest_type(
+                **{**timing_fields, "renderer_version": renderer_version},
                 camera_policy_version=(
                     "story_camera_v1" if environment_selection else "gentle_camera_v1"
                 ),
@@ -819,9 +882,7 @@ class ProductionRenderer:
                 ),
                 episode_id=owner,
                 audio_master_artifact_id=storyboard.audio_master_artifact_id,
-                audio_alignment_artifact_id=storyboard.audio_alignment_artifact_id,
                 timed_storyboard_artifact_id=sid,
-                beat_analysis_artifact_id=storyboard.beat_analysis_artifact_id,
                 character_pack_revision=storyboard.character_pack.revision_id,
                 dependency_sha256={d: store.get(d).sha256 for d in deps},
                 scenes=tuple(scene_refs),
@@ -906,7 +967,7 @@ class ProductionRenderer:
                             for d in deterministic
                         ),
                     },
-                    "renderer_version": V4_VERSION if environment_selection else VERSION,
+                    "renderer_version": renderer_version,
                     "dynamic_motion_qa": {"passed": True, "major_motion_budget": 3},
                     "visual_activity_diagnostics": [d["motion_diagnostics"] for d in deterministic],
                     "mouth_animation_supported": False,
@@ -927,9 +988,12 @@ class ProductionRenderer:
             output = self.config.brand_root.parent.parent / "outputs"
             output.mkdir(exist_ok=True)
             episode_key = inputs.store.database.get_episode(owner).external_key
-            export_stem = (
-                f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_"
-                f"{'V4' if environment_selection else 'V3'}"
+            export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_" + (
+                "CREATIVE_V2"
+                if isinstance(storyboard, TimedStoryboardV3)
+                else "V4"
+                if environment_selection
+                else "V3"
             )
             export = output / f"{export_stem}.mp4"
             self._export(store.path_for(final.identity.artifact_id), export)
@@ -937,10 +1001,14 @@ class ProductionRenderer:
                 store.path_for(qa_record.identity.artifact_id),
                 output / f"{export_stem}_MEDIA_QA.json",
             )
-            frames = (
-                output / f"{episode_key.replace('-', '_')}_"
-                f"{'v4' if environment_selection else 'v3'}_frames"
+            frame_version = (
+                "creative_v2"
+                if isinstance(storyboard, TimedStoryboardV3)
+                else "v4"
+                if environment_selection
+                else "v3"
             )
+            frames = output / f"{episode_key.replace('-', '_')}_{frame_version}_frames"
             self._frames(export, storyboard, frames)
             review_sheets = (
                 self._review_sheets(
@@ -1073,7 +1141,9 @@ class ProductionRenderer:
             partial.unlink(missing_ok=True)
 
     @staticmethod
-    def _frames(video: Path, storyboard: TimedStoryboard, directory: Path) -> None:
+    def _frames(
+        video: Path, storyboard: TimedStoryboard | TimedStoryboardV3, directory: Path
+    ) -> None:
         directory.mkdir(exist_ok=True)
         # Every scene is exported; review labels for this pilot are documented in the report.
         for scene in storyboard.scenes:
@@ -1119,7 +1189,7 @@ class ProductionRenderer:
     def _review_sheets(
         v4_frames: Path,
         v3_frames: Path,
-        storyboard: TimedStoryboard,
+        storyboard: TimedStoryboard | TimedStoryboardV3,
         output: Path,
         export_stem: str,
     ) -> dict[str, str]:

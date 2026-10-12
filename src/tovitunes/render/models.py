@@ -172,3 +172,78 @@ class RenderManifest(ProductionModel):
         if not required.issubset(self.dependency_sha256):
             raise ValueError("manifest is missing pinned dependencies")
         return self
+
+
+class RenderManifestV2(ProductionModel):
+    schema_version: Literal[2] = 2
+    renderer_version: Literal["tovitunes_creative_render_v1"] = "tovitunes_creative_render_v1"
+    camera_policy_version: str = "gentle_camera_v1"
+    motion_grammar_version: str = "preschool_motion_v1"
+    keyword_emphasis_policy: Literal["disabled_duration_path"] = "disabled_duration_path"
+    environmental_theme: str = "playful_meadow_v2"
+    environment_set_artifact_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    visual_story_plan_artifact_id: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    episode_id: str
+    audio_master_artifact_id: str
+    audio_clock_artifact_id: str
+    timed_storyboard_artifact_id: str
+    character_pack_revision: str
+    dependency_sha256: dict[str, str]
+    scenes: tuple[SceneRender, ...]
+    duration_seconds: float = Field(gt=0)
+    canvas: tuple[int, int] = (1080, 1920)
+    fps: Literal[30] = 30
+    video_codec: Literal["libx264"] = "libx264"
+    pixel_format: Literal["yuv420p"] = "yuv420p"
+    audio_codec: Literal["aac"] = "aac"
+    audio_bitrate: Literal["192k"] = "192k"
+    crf: Literal[18] = 18
+    preset: Literal["medium"] = "medium"
+    faststart: Literal[True] = True
+    moviepy_version: Literal["2.2.1"] = "2.2.1"
+    ffmpeg_version: str
+    ffprobe_version: str
+
+    @model_validator(mode="after")
+    def timeline(self) -> "RenderManifestV2":
+        if not self.scenes or self.scenes[0].start != 0:
+            raise ValueError("manifest must start at zero")
+        if self.scenes[-1].end != self.duration_seconds:
+            raise ValueError("manifest must cover duration")
+        if len({s.scene_id for s in self.scenes}) != len(self.scenes):
+            raise ValueError("duplicate scene IDs")
+        if any(s.end <= s.start for s in self.scenes) or any(
+            a.end != b.start for a, b in zip(self.scenes, self.scenes[1:])
+        ):
+            raise ValueError("manifest has gap, overlap, or empty scene")
+        if min(self.canvas) <= 0 or any(x % 2 for x in self.canvas):
+            raise ValueError("canvas must have positive even dimensions")
+        required = {
+            self.audio_master_artifact_id,
+            self.audio_clock_artifact_id,
+            self.timed_storyboard_artifact_id,
+            *(s.scene_image_artifact_id for s in self.scenes),
+            *(s.character_animation_artifact_id for s in self.scenes),
+            *(s.scene_motion_artifact_id for s in self.scenes if s.scene_motion_artifact_id),
+            *((self.environment_set_artifact_id,) if self.environment_set_artifact_id else ()),
+            *((self.visual_story_plan_artifact_id,) if self.visual_story_plan_artifact_id else ()),
+        }
+        if any(s.scene_motion_artifact_id is None for s in self.scenes):
+            raise ValueError("dynamic manifest requires scene motion pins")
+        if not (
+            self.environment_set_artifact_id and self.visual_story_plan_artifact_id
+        ):
+            raise ValueError("visual story manifest requires environment and story pins")
+        if not required.issubset(self.dependency_sha256):
+            raise ValueError("manifest is missing pinned dependencies")
+        return self
+
+
+def parse_manifest(value: object) -> RenderManifest | RenderManifestV2:
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        return RenderManifestV2.model_validate(value)
+    return RenderManifest.model_validate(value)

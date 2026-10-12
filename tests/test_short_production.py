@@ -26,6 +26,7 @@ from tovitunes.creative.fake import FakeNIMTransport
 from tovitunes.creative.provider import DurableStructuredGenerator
 from tovitunes.creative.service import CreativeService
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.domain.creative_drafts import parse_lyrics
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import RightsDecision
 from tovitunes.domain.storyboard import TimedStoryboardV2, parse_storyboard
@@ -193,7 +194,7 @@ def connect_offline(config, episode, ids, fake, monkeypatch, red=None, socket_co
     monkeypatch.setattr(production, "load_brand", lambda _: replace(catalog, packs=(pack,)))
     provider = DurableStructuredGenerator(database, fake)
     creative = SimpleNamespace(store=store)
-    lyrics = LyricsSpec.model_validate(store.read_json(ids[1]))
+    lyrics = parse_lyrics(store.read_json(ids[1]))
     plan = visual_plan(episode, ids, lyrics)
     fake.responses["EpisodeVisualPlan"] = [plan.model_dump_json()]
     music_events = []
@@ -734,50 +735,40 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
 ):
     from tovitunes.creative.provider import ChatResponse
     from tovitunes.creative.topic_memory import TopicMemory
+    from tovitunes.domain.visual_draft import CreativeVisualDraft
 
     fake = case["fake"]
     original = fake.chat
 
     def chat(messages, *, record_identity):
         schema = json.loads(messages[0]["content"].split("JSON Schema:\n", 1)[1])
-        if schema["title"] != "EpisodeVisualPlan":
+        if schema["title"] != "CreativeVisualDraft":
             return original(messages, record_identity=record_identity)
-        facts = json.loads(messages[-1]["content"])
-        ep = Episode.model_validate(facts["episode"])
-        assert ep.learning_source == "generated_learning_brief"
-        assert TopicMemory(case["store"].database, load_brand(case["config"].brand_root)).get(
-            ep.learning_brief_id
-        )
-        data = case["plan"].model_dump(mode="json")
-        data.update(
-            episode_id=ep.episode_id,
-            concept_id=ep.concept_id,
-            objective_id=ep.objective_id,
-            episode_spec_artifact_id=facts["creative_artifact_ids"][0],
-            lyrics_artifact_id=facts["creative_artifact_ids"][1],
-            music_spec_artifact_id=facts["creative_artifact_ids"][2],
-        )
-        data["required_assets"] = [
-            {
-                "asset_key": key,
-                "kind": "lesson_object",
-                "semantic_label": "balloon",
-                "display_name": word + " balloon",
-                "description": "One " + word + " balloon",
-                "educational_role": "teaching",
-                "educational_claims": [ep.objective],
-            }
-            for key, word in (("big_balloon", "big"), ("small_balloon", "small"))
-        ]
-        for scene, line in zip(data["scenes"], facts["lyrics"]["lines"], strict=True):
-            scene.update(
-                lyric_text=line["text"],
-                required_assets=["big_balloon", "small_balloon"],
-                visual_focus="Compare big and small balloons",
-            )
-        fake.calls.append("EpisodeVisualPlan")
+        facts = json.loads(messages[-1]["content"].split("Authoritative pinned facts:\n", 1)[1])
+        assert facts["topic"] == "Big and small"
+        assert facts["duration_seconds"] == 10
+        assert "episode_id" not in facts and "creative_artifact_ids" not in facts
+        data = {
+            "scenes": [
+                {
+                    "description": "Tovi discovers a large balloon and a little balloon.",
+                    "tovi_action": "look at the balloons",
+                    "setting": "a playful garden",
+                    "objects": [
+                        {"name": "large balloon", "description": "One large soft balloon"},
+                        {"name": "little balloon", "description": "One tiny soft balloon"},
+                    ],
+                },
+                {
+                    "description": "Tovi celebrates the surprising size difference.",
+                    "tovi_action": "dance happily",
+                    "setting": "a sunny clearing",
+                },
+            ]
+        }
+        fake.calls.append("CreativeVisualDraft")
         fake.messages.append(list(messages))
-        return ChatResponse(EpisodeVisualPlan.model_validate(data).model_dump_json())
+        return ChatResponse(CreativeVisualDraft.model_validate(data).model_dump_json())
 
     monkeypatch.setattr(fake, "chat", chat)
     result = case["flow"].generate(target=ProductionTarget.PUBLISH)
@@ -797,7 +788,10 @@ def test_open_editorial_flows_through_existing_engine_to_real_render_and_final_m
     )
     assert store.read_json(metadata.identity.artifact_id)["youtube_title"] != brief.working_title
     storyboard = store.selected("episode", ep_id, "timed_storyboard", "main")
-    assert parse_storyboard(store.read_json(storyboard.identity.artifact_id)).schema_version == 2
+    board = parse_storyboard(store.read_json(storyboard.identity.artifact_id))
+    assert board.schema_version == 3
+    assert board.scheduling_mode == "duration"
+    assert not case["analysis_calls"]
     assert case["music_events"].count("/release_task") == 1
     calls = (len(fake.calls), len(case["music_events"]), len(case["image_events"]))
     second = case["flow"].resume(result["episode_key"], target=ProductionTarget.PUBLISH)

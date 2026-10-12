@@ -87,6 +87,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_metadata.add_argument("--episode-key", required=True)
     production = subcommands.add_parser("production")
     production_commands = production.add_subparsers(dest="production_command", required=True)
+    recover_visual = production_commands.add_parser("recover-visual-contract")
+    recover_visual.add_argument("--episode-key", required=True)
+    recover_visual.add_argument("--confirm-new-contract", action="store_true")
+    recover_visual.add_argument("--actor", default="local-operator")
     for command in ("generate-next-short", "auto-next", "produce", "auto-resume"):
         autonomous = production_commands.add_parser(command)
         if command in {"produce", "auto-resume"}:
@@ -489,6 +493,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "production":
         try:
+            if args.production_command == "recover-visual-contract":
+                from tovitunes.creative.visual_recovery import authorize_visual_recovery
+
+                result = authorize_visual_recovery(
+                    config,
+                    args.episode_key,
+                    confirmed=args.confirm_new_contract,
+                    actor=args.actor,
+                )
+                print(json.dumps(result, sort_keys=True))
+                return 0
             if args.production_command in {
                 "generate-next-short",
                 "auto-next",
