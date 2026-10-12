@@ -11,6 +11,7 @@ EPISODE_PROMPT = "episode-spec-kimi-v1"
 LYRICS_PROMPT = "lyrics-kimi-v1"
 MUSIC_PROMPT = "music-spec-kimi-v1"
 METADATA_PROMPT = "youtube-metadata-kimi-v1"
+METADATA_COPY_PROMPT = "metadata_copy_v2"
 
 FREEDOM_GUIDANCE = (
     "Create English musical preschool content for ages 3-6 with approved Tovi only. "
@@ -205,5 +206,19 @@ def metadata_messages(facts: object) -> list[Message]:
             "made_for_kids=true "
             "are deterministic pins, not creative choices. This does not authorize publishing."
         ),
+        facts,
+    )
+
+
+def metadata_copy_messages(facts: object) -> list[Message]:
+    return build_messages(
+        METADATA_COPY_PROMPT,
+        "Return only youtube_title, youtube_description and tags from the selected final video "
+        "facts. Python supplies all identities, hashes, language and made_for_kids. "
+        "Write an accurate varied title identifying the learning concept and preschool music. "
+        "Title <=100 characters, description <=1000, <=20 relevant tags, each <=80 characters "
+        "and <=500 aggregate characters. Description identifies ToviTunes and what the child "
+        "learns. No absent content, unsupported educational/medical claims, deceptive claims, "
+        "spam, clickbait, excessive emoji or manipulative CTA. This does not authorize publishing.",
         facts,
     )

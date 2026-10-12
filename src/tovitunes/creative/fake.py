@@ -125,7 +125,7 @@ class FakeNIMTransport:
             output = CreativeSubjectPool(candidates=tuple(legacy_candidates)).model_dump(
                 mode="json"
             )
-        elif kind == "EpisodePublicationMetadata":
+        elif kind in {"EpisodePublicationMetadata", "MetadataDraft"}:
             episode = facts["episode"]
             final = facts["final_render"]
             concept = episode["concept_id"]
@@ -141,6 +141,8 @@ class FakeNIMTransport:
                 "final_render_artifact_id": final["artifact_id"],
                 "final_render_sha256": final["sha256"],
             }
+            if kind == "MetadataDraft":
+                output = {k: output[k] for k in ("youtube_title", "youtube_description", "tags")}
         elif kind == "CreativeVisualDraft":
             output = {
                 "scenes": [

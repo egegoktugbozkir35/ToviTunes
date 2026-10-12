@@ -34,6 +34,12 @@ class MusicDraft(CreativeDraftModel):
     tempo_bpm: int | None = Field(default=None, ge=60, le=180)
 
 
+class MetadataDraft(CreativeDraftModel):
+    youtube_title: str = Field(min_length=1, max_length=100)
+    youtube_description: str = Field(min_length=1, max_length=1000)
+    tags: tuple[str, ...] = Field(min_length=1, max_length=20)
+
+
 class EpisodeSpecV3(EpisodeSpec):
     schema_version: int = Field(default=3, ge=3, le=3)
     story_beats: tuple[StoryBeat, ...] = ()

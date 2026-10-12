@@ -6,15 +6,20 @@ from typing import Any
 from uuid import uuid4
 
 from tovitunes.artifacts.store import ArtifactRecord, InputDependency
-from tovitunes.creative.director import pinned_facts, validate_pins
+from tovitunes.creative.director import compiled_draft, pinned_facts, validate_pins
 from tovitunes.creative.models import EpisodePublicationMetadata
-from tovitunes.creative.prompts import METADATA_PROMPT, metadata_messages
+from tovitunes.creative.prompts import (
+    METADATA_COPY_PROMPT,
+    METADATA_PROMPT,
+    metadata_copy_messages,
+    metadata_messages,
+)
 from tovitunes.creative.provider import GenerationContext, canonical
 from tovitunes.creative.resilience import generation_audit
 from tovitunes.creative.service import CreativeService, call_report, call_snapshot, episode_by_key
 from tovitunes.creative.validation import validate_episode_spec, validate_lyrics, validate_metadata
 from tovitunes.domain.artifact import Provenance
-from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics
+from tovitunes.domain.creative_drafts import MetadataDraft, parse_episode_spec, parse_lyrics
 from tovitunes.domain.production_v3 import TimedStoryboardV3
 from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import parse_storyboard
@@ -199,17 +204,54 @@ class MetadataWriter:
                 "provider_calls": call_report(workflow.database, before),
                 "generation_attempts": generation_audit(workflow.database, episode.episode_id),
             }
-        draft = workflow.provider.generate(
-            EpisodePublicationMetadata,
-            metadata_messages(facts),
-            context=GenerationContext(
-                "publication_metadata",
-                METADATA_PROMPT,
-                episode_id=episode.episode_id,
-                assert_owner=workflow.assert_owner,
-            ),
-            validate=validate,
-        )
+        with closing(workflow.database.connect()) as db:
+            legacy = db.execute(
+                "SELECT 1 FROM generation_requests WHERE episode_id=? "
+                "AND kind='publication_metadata' AND prompt_version=?",
+                (episode.episode_id, METADATA_PROMPT),
+            ).fetchone()
+        if facts["timed_storyboard"]["schema_version"] == 3 and legacy is None:
+
+            def compile_copy(copy: MetadataDraft) -> EpisodePublicationMetadata:
+                output = EpisodePublicationMetadata(
+                    **copy.model_dump(),
+                    episode_id=episode.episode_id,
+                    concept_id=episode.concept_id,
+                    final_render_artifact_id=final["artifact_id"],
+                    final_render_sha256=final["sha256"],
+                    language="en",
+                    made_for_kids=True,
+                )
+                validate(output)
+                return output
+
+            def validate_copy(copy: MetadataDraft) -> None:
+                compile_copy(copy)
+
+            copy_draft = workflow.provider.generate(
+                MetadataDraft,
+                metadata_copy_messages(facts),
+                context=GenerationContext(
+                    "publication_metadata",
+                    METADATA_COPY_PROMPT,
+                    episode_id=episode.episode_id,
+                    assert_owner=workflow.assert_owner,
+                ),
+                validate=validate_copy,
+            )
+            draft = compiled_draft(compile_copy(copy_draft.output), copy_draft)
+        else:
+            draft = workflow.provider.generate(
+                EpisodePublicationMetadata,
+                metadata_messages(facts),
+                context=GenerationContext(
+                    "publication_metadata",
+                    METADATA_PROMPT,
+                    episode_id=episode.episode_id,
+                    assert_owner=workflow.assert_owner,
+                ),
+                validate=validate,
+            )
         workflow.assert_owner()
         # Defend against a render selection changing during the remote call.
         if self._facts(episode.episode_id) != (facts, deps):

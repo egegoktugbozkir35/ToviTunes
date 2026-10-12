@@ -106,6 +106,7 @@ repair budget correctly; reopening that exhausted contract in place would be uns
 | Production assets | Model names renderer slots and cross-artifact relationships | Python hashes requested art into stable keys and binds produced, verified assets |
 | Timeline | ASR, WER, aligned lyrics and measured beats required | Original decoded audio duration; optional trustworthy retained rhythm; Python assigns contiguous frames |
 | Local rendering | Lyric scenes in Storyboard V2 and Manifest V1 | Visual scenes in Storyboard V3 and Manifest V2; approved character pack, props, world plates, motion and real final QA remain |
+| Final metadata | Model copies episode/render pins | Model supplies accurate copy; Python adds selected render IDs, SHA and audience flags under the existing metadata policy |
 | Recovery | Exhausted immutable old contract | Explicit append-only new-contract authorization under the same episode and execution lease |
 
 ```mermaid
@@ -142,7 +143,9 @@ is not re-screened on Resume.
 Selected objectives/vocabulary/creative artifacts still pin provenance and supply context.
 They are copied by Python; changing a stored source identity remains an integrity failure.
 Existing publication metadata truthfulness, made-for-kids, source identity and review rules
-remain unchanged; publication metadata retains its existing generation contract.
+remain unchanged. New V3 renders request only title/description/tags; Python compiles the
+unchanged publication artifact with the selected final identity/hash and audience flags.
+Existing metadata requests retain their original generation contract and bounded budget.
 
 ### Preserved hard gates
 
@@ -172,6 +175,7 @@ remain unchanged; publication metadata retains its existing generation contract.
 | Episode spec | Schema 2 | Schema 3; embedded original idea draft, no historical beat taxonomy |
 | Lyrics and music specs | Schema 1 | Schema 2; Python identities/context and model-owned content |
 | Idea/lyrics/music prompts | Existing prompt constants retained | `episode_idea_v2`, `lyrics_idea_v2`, `music_idea_v2` |
+| Metadata generation | Existing `youtube-metadata-kimi-v1` and artifact unchanged | `metadata_copy_v2` requests copy only; Python supplies known pins; pending old requests keep the old prompt |
 | Visual generation | `episode_visual_plan_v1` | `visual_creative_v2`; raw `creative_visual_draft` artifact and receipt |
 | Compiled visual plan | Schema 1 | Schema 2, `visual_compiler_v2`; embeds proposal and pins raw draft SHA |
 | Audio evidence | Existing ASR/alignment/rhythm/QA retained | `audio_clock` schema 1, `duration_audio_v1`; actual technical measurements and optional measured rhythm |
@@ -332,7 +336,9 @@ manifest/QA corruption, immutable dependency gates, source file/SHA/receipt/epis
 explicit recovery and retained audio/intent/job bytes, grant immutability/idempotence, uncertain
 old requests, ownership loss before/after calls, response-before-ingest restart, uncertain image
 restart and a real second Python process completing retained work without a second music call.
-Retained unavailable ASR is also tested alongside reusable measured rhythm: its empty transcript,
+New metadata is tested with real final-render dependencies, rejected tag budget followed by
+durable repair, model identity injection rejected, Python-supplied pins, normalized tags and
+effect-free reuse. Retained unavailable ASR is also tested alongside reusable measured rhythm: its empty transcript,
 missing WER and immutable analysis/policy rows remain unchanged. A 55 BPM draft is repaired before
 being marked successful; a 60 BPM draft compiles through the actual music adapter.
 The existing suite continues to cover historical schemas/migrations, exact old alignment,

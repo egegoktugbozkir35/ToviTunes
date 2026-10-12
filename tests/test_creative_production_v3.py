@@ -16,10 +16,16 @@ from test_short_production import connect_offline, tone, visual_plan
 
 from tovitunes.catalog import load_brand
 from tovitunes.continuation import plan_continuation
+from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.creative.provider import DurableStructuredGenerator, GenerationContext
 from tovitunes.creative.service import CreativeService
 from tovitunes.creative.visual_recovery import authorize_visual_recovery
-from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
+from tovitunes.domain.creative_drafts import (
+    MetadataDraft,
+    parse_episode_spec,
+    parse_lyrics,
+    parse_music_spec,
+)
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.production_v3 import AudioClock, compile_storyboard_v3
 from tovitunes.domain.storyboard import BeatAnalysis, parse_storyboard
@@ -308,6 +314,17 @@ def failed_legacy_contract(new):
 def test_non_lyric_proposals_render_real_complete_mp4_and_reuse(new_case, variant):
     new = new_case
     new["fake"].responses["CreativeVisualDraft"] = [proposal(variant).model_dump_json()]
+    if variant == 0:
+        vocabulary = " and ".join(new["episode"].target_vocabulary)
+        copy = {
+            "youtube_title": f"Learn {vocabulary} with Tovi | Preschool Song",
+            "youtube_description": f"Discover {vocabulary} with ToviTunes in this preschool song.",
+            "tags": ["preschool learning", "kids song", "Kids Song"],
+        }
+        new["fake"].responses["MetadataDraft"] = [
+            json.dumps(copy | {"tags": ["x" * 81]}),
+            json.dumps(copy),
+        ]
     result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
     assert result["target_complete"], result
     store, eid = new["store"], new["episode"].episode_id
@@ -327,6 +344,33 @@ def test_non_lyric_proposals_render_real_complete_mp4_and_reuse(new_case, varian
     assert store.read_json(qa.identity.artifact_id)["passed"] is True
     assert Path(result["output_path"]).read_bytes()[4:8] == b"ftyp"
     assert "final_render" in Path(result["output_path"]).parts
+    if variant == 0:
+        with pytest.raises(ValueError):
+            MetadataDraft.model_validate(copy | {"episode_id": eid})
+        writer = MetadataWriter(
+            CreativeService(
+                new["config"],
+                DurableStructuredGenerator(store.database, new["fake"]),
+                assert_owner=lambda: None,
+            )
+        )
+        writer.store.local_preview = True  # Same local admission policy as RenderService._metadata.
+        metadata = writer.generate(new["episode"].external_key)
+        assert metadata["metadata"]["episode_id"] == eid
+        assert metadata["metadata"]["final_render_artifact_id"] == result["final_render_id"]
+        final = store.get(result["final_render_id"])
+        assert metadata["metadata"]["final_render_sha256"] == final.sha256
+        assert metadata["metadata"]["tags"] == ["preschool learning", "kids song"]
+        assert new["fake"].calls.count("MetadataDraft") == 2
+        with closing(store.database.connect()) as db:
+            requests = db.execute(
+                "SELECT status,response_content FROM generation_requests WHERE episode_id=? "
+                "AND prompt_version='metadata_copy_v2' ORDER BY rowid",
+                (eid,),
+            ).fetchall()
+        assert [r[0] for r in requests] == ["succeeded_response_invalid", "succeeded"]
+        assert set(json.loads(requests[1][1])) == set(copy)
+        assert not any(writer.generate(new["episode"].external_key)["provider_calls"].values())
     before = (len(new["fake"].calls), len(new["music_events"]), len(new["image_events"]))
     again = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
     assert again["final_render_id"] == result["final_render_id"]
