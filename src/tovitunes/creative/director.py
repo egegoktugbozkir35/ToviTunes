@@ -3,16 +3,47 @@
 import json
 from collections.abc import Callable
 from contextlib import closing
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from tovitunes.catalog import BrandCatalog
 from tovitunes.creative import prompts
 from tovitunes.creative.provider import GenerationContext, StructuredGenerator
 from tovitunes.creative.validation import validate_episode_spec, validate_lyrics, validate_music
-from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.domain.creative import (
+    EpisodeConcept,
+    EpisodeSpec,
+    LyricsSpec,
+    MusicSection,
+    MusicSpec,
+)
+from tovitunes.domain.creative_drafts import (
+    EpisodeIdeaDraft,
+    EpisodeSpecV3,
+    LyricsDraft,
+    LyricsSpecV2,
+    MusicDraft,
+    MusicSpecV2,
+)
 from tovitunes.domain.episode import Episode
 from tovitunes.persistence.db import Database
 from tovitunes.pipeline.creative import GeneratedDraft
+
+CompiledT = TypeVar("CompiledT", bound=BaseModel)
+SourceT = TypeVar("SourceT", bound=BaseModel)
+
+
+def compiled_draft(output: CompiledT, draft: GeneratedDraft[SourceT]) -> GeneratedDraft[CompiledT]:
+    return GeneratedDraft(
+        output,
+        draft.provider,
+        draft.model,
+        draft.request_id,
+        draft.prompt_version,
+        draft.generated_at,
+        draft.local_request_id,
+    )
 
 
 def pinned_facts(catalog: BrandCatalog) -> dict[str, Any]:
@@ -104,7 +135,48 @@ class CreativeDirector:
             kind, version, episode_id=episode.episode_id, assert_owner=self.assert_owner
         )
 
+    def _new_contract(self, episode: Episode, kind: str) -> bool:
+        if episode.learning_source != "generated_learning_brief":
+            return False
+        # Pending legacy contracts retain their exact fingerprint and bounded budget.
+        with closing(self.database.connect()) as db:
+            return (
+                db.execute(
+                    "SELECT 1 FROM generation_requests WHERE episode_id=? AND kind=? "
+                    "AND prompt_version IN (?,?,?)",
+                    (
+                        episode.episode_id,
+                        kind,
+                        prompts.EPISODE_PROMPT,
+                        prompts.LYRICS_PROMPT,
+                        prompts.MUSIC_PROMPT,
+                    ),
+                ).fetchone()
+                is None
+            )
+
     def episode_spec(self, episode: Episode, *, variant: int) -> GeneratedDraft[EpisodeSpec]:
+        if self._new_contract(episode, "episode_spec"):
+            draft = self.provider.generate(
+                EpisodeIdeaDraft,
+                prompts.freedom_messages("episode_idea_v2", self._facts(episode, variant)),
+                context=self._context(episode, "episode_spec", "episode_idea_v2"),
+                validate=prompts.safe_draft,
+            )
+            idea = draft.output
+            spec = EpisodeSpecV3(
+                episode_id=episode.episode_id,
+                concept_id=episode.concept_id,
+                objective_id=episode.objective_id,
+                teaching_vocabulary=episode.target_vocabulary,
+                concept=EpisodeConcept(
+                    premise=idea.premise, hook=idea.hook, setting=idea.setting, cast=("tovi",)
+                ),
+                desired_structure="\n".join(idea.progression),
+                creative_draft=idea,
+            )
+            validate_episode_spec(episode, spec)
+            return compiled_draft(spec, draft)
         return self.provider.generate(
             EpisodeSpec,
             prompts.episode_messages(self._facts(episode, variant)),
@@ -126,6 +198,29 @@ class CreativeDirector:
             "episode_spec": spec.model_dump(mode="json"),
             "episode_spec_artifact_id": spec_artifact_id,
         }
+        if self._new_contract(episode, "lyrics"):
+
+            def compile_lyrics(idea: LyricsDraft) -> LyricsSpecV2:
+                result = LyricsSpecV2(
+                    episode_id=episode.episode_id,
+                    objective_id=episode.objective_id,
+                    episode_spec_artifact_id=spec_artifact_id,
+                    target_vocabulary=episode.target_vocabulary,
+                    lines=idea.lines,
+                )
+                validate_lyrics(episode, result, spec_artifact_id)
+                return result
+
+            def validate_draft(idea: LyricsDraft) -> None:
+                compile_lyrics(idea)
+
+            draft = self.provider.generate(
+                LyricsDraft,
+                prompts.freedom_messages("lyrics_idea_v2", facts),
+                context=self._context(episode, "lyrics", "lyrics_idea_v2"),
+                validate=validate_draft,
+            )
+            return compiled_draft(compile_lyrics(draft.output), draft)
         return self.provider.generate(
             LyricsSpec,
             prompts.lyrics_messages(facts),
@@ -147,6 +242,30 @@ class CreativeDirector:
             "lyrics": lyrics.model_dump(mode="json"),
             "lyrics_artifact_id": lyrics_artifact_id,
         }
+        if self._new_contract(episode, "music_spec"):
+            draft = self.provider.generate(
+                MusicDraft,
+                prompts.freedom_messages("music_idea_v2", facts),
+                context=self._context(episode, "music_spec", "music_idea_v2"),
+                validate=prompts.safe_draft,
+            )
+            idea = draft.output
+            music = MusicSpecV2(
+                episode_id=episode.episode_id,
+                objective_id=episode.objective_id,
+                lyrics_artifact_id=lyrics_artifact_id,
+                target_vocabulary=episode.target_vocabulary,
+                target_duration_seconds=episode.target_duration_seconds,
+                mood=idea.mood,
+                instrumentation=idea.instrumentation,
+                vocal_direction=idea.vocal_direction,
+                tempo_bpm=idea.tempo_bpm,
+                sections=(
+                    MusicSection(name="verse", target_seconds=episode.target_duration_seconds),
+                ),
+            )
+            validate_music(episode, music, lyrics_artifact_id)
+            return compiled_draft(music, draft)
         return self.provider.generate(
             MusicSpec,
             prompts.music_messages(facts),

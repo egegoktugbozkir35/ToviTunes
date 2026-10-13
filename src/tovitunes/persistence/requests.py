@@ -34,6 +34,23 @@ class RequestLedger:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def identity(self, request_id: str, provider_request_id: str) -> None:
+        """Persist accepted remote identity before polling or retrieval can be interrupted."""
+        with closing(self.database.connect()) as db, db:
+            cursor = db.execute(
+                "UPDATE generation_requests SET provider_request_id=?,updated_at=? "
+                "WHERE request_id=? AND status='remote_started' "
+                "AND (provider_request_id IS NULL OR provider_request_id=?)",
+                (
+                    provider_request_id,
+                    datetime.now(UTC).isoformat(),
+                    request_id,
+                    provider_request_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise InvalidRequestTransition("remote identity cannot replace a retained request")
+
     def prepare(
         self,
         episode_id: str,
@@ -94,6 +111,8 @@ class RequestLedger:
         *,
         provider_request_id: str | None = None,
         definitive_remote_failure: bool = False,
+        error_kind: str | None = None,
+        error_reason: str | None = None,
     ) -> GenerationRequest:
         allowed: dict[RequestStatus, set[RequestStatus]] = {
             "prepared": {"remote_started", "failed"},
@@ -121,8 +140,16 @@ class RequestLedger:
                 remote_id = provider_request_id or row["provider_request_id"]
                 connection.execute(
                     "UPDATE generation_requests SET status = ?, provider_request_id = ?, "
+                    "error_kind=COALESCE(?,error_kind),error_reason=COALESCE(?,error_reason),"
                     "updated_at = ? WHERE request_id = ?",
-                    (status, remote_id, datetime.now(UTC).isoformat(), request_id),
+                    (
+                        status,
+                        remote_id,
+                        error_kind,
+                        error_reason,
+                        datetime.now(UTC).isoformat(),
+                        request_id,
+                    ),
                 )
                 connection.commit()
             except Exception:

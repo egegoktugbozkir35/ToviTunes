@@ -1,11 +1,13 @@
 """ToviTunes render algorithms; application lifecycle belongs to Orchestrator."""
 
+import logging
 from contextlib import closing
 from typing import Any
 
 from tovitunes.creative.metadata import MetadataWriter
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
 from tovitunes.domain.episode import Episode
+from tovitunes.domain.production_v3 import AudioClock, compile_storyboard_v3
 from tovitunes.domain.storyboard import (
     LyricIntent,
     SceneIntent,
@@ -13,8 +15,10 @@ from tovitunes.domain.storyboard import (
     TimedStoryboardV2,
     build_storyboard,
 )
+from tovitunes.domain.visual_draft import EpisodeVisualPlanV2, validate_compiled_visual
 from tovitunes.domain.visual_plan import EpisodeVisualPlan
 from tovitunes.errors import ProductionStop
+from tovitunes.pipeline.duration_source import admit_duration_source
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import (
     accept_episode_source,
@@ -32,12 +36,54 @@ class RenderService(StageContext):
         episode: Episode,
         inputs: tuple[EpisodeSpec, LyricsSpec, MusicSpec, tuple[str, str, str]],
         request_id: str,
-        visual: EpisodeVisualPlan,
+        visual: EpisodeVisualPlan | EpisodeVisualPlanV2,
         plan_id: str,
         assets: dict[str, str],
         environment_id: str,
     ) -> None:
         spec, lyrics, music, ids = inputs
+        if isinstance(visual, EpisodeVisualPlanV2):
+            validate_compiled_visual(visual, episode, ids)
+            master = self._selected(episode, "audio_master")
+            clock_record = self._selected(episode, "audio_clock")
+            env_binding = self._selected(episode, "episode_environment")
+            if master is None or clock_record is None or env_binding is None:
+                raise ValueError("V3 storyboard lacks admitted source dependencies")
+            clock = admit_duration_source(
+                self.config,
+                episode,
+                request_id,
+                creative_music_spec(episode, spec, lyrics, music, ids),
+                master.identity.artifact_id,
+            )
+            if clock != AudioClock.model_validate(
+                self.store.read_json(clock_record.identity.artifact_id)
+            ):
+                raise ValueError("V3 audio clock differs from source measurements")
+            storyboard_v3 = compile_storyboard_v3(
+                episode,
+                visual,
+                plan_id,
+                self.store.get(plan_id).sha256,
+                clock,
+                clock_record.identity.artifact_id,
+                assets,
+                environment_id,
+            )
+            self._json(
+                episode,
+                "timed_storyboard",
+                storyboard_v3.model_dump(mode="json"),
+                (
+                    master.identity.artifact_id,
+                    clock_record.identity.artifact_id,
+                    plan_id,
+                    *assets.values(),
+                    env_binding.identity.artifact_id,
+                    environment_id,
+                ),
+            )
+            return
         with closing(self.database.connect()) as db:
             output = db.execute(
                 "SELECT blind_id FROM music_outputs WHERE request_id=?", (request_id,)
@@ -138,9 +184,17 @@ class RenderService(StageContext):
     def _render(self, episode: Episode) -> dict[str, Any]:
         if self.progress:
             self.progress("RENDER", "Encoding final video or validating retained render")
-        return ProductionRenderer(
-            self.config, local_preview=True, assert_owner=self.ownership.assert_owned
-        ).render(episode.external_key, visual_story=True)
+        try:
+            return ProductionRenderer(
+                self.config, local_preview=True, assert_owner=self.ownership.assert_owned
+            ).render(episode.external_key, visual_story=True)
+        except ValueError as exc:
+            logging.getLogger(__name__).exception("renderer validation failed")
+            raise ProductionStop(
+                "BLOCKED", "Renderer could not admit retained scene inputs or motion",
+                {"subsystem": "renderer", "error_kind": "renderer_validation",
+                 "retry_state": "recoverable"},
+            ) from exc
 
     def _media_qa(self, episode: Episode) -> dict[str, Any]:
         final = self._selected(episode, "final_render", "main_v4")

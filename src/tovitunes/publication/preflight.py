@@ -13,13 +13,15 @@ from tovitunes.artifacts.store import ArtifactRecord, AssetStore
 from tovitunes.catalog import load_brand
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.models import EpisodePublicationMetadata
+from tovitunes.domain.production_v3 import TimedStoryboardV3
 from tovitunes.domain.storyboard import TimedStoryboardV2, parse_storyboard
 from tovitunes.persistence.db import Database
 from tovitunes.publication.rights_policy import (
     evaluate_inherited_rights,
     is_direct_rights_root,
 )
-from tovitunes.render.models import RenderManifest
+from tovitunes.render.admission_v3 import load_v3_evidence
+from tovitunes.render.models import parse_manifest
 
 
 @dataclass(frozen=True)
@@ -99,10 +101,25 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
         if storyboard_id:
             try:
                 storyboard = parse_storyboard(store.read_json(storyboard_id))
-                if isinstance(storyboard, TimedStoryboardV2):
+                if isinstance(storyboard, (TimedStoryboardV2, TimedStoryboardV3)):
                     storyboard_v2 = storyboard
             except (KeyError, ValueError, OSError):
                 pass
+        if isinstance(storyboard_v2, TimedStoryboardV3) and storyboard_id:
+            try:
+                load_v3_evidence(
+                    config, store, database.get_episode(eid), storyboard_v2, storyboard_id
+                )
+                source_valid = True
+            except (KeyError, ValueError, OSError):
+                source_valid = False
+            add(
+                "production_source_evidence",
+                source_valid,
+                "technical",
+                "V3 source media, model receipts and deterministic dependencies must be valid",
+                storyboard_id,
+            )
         render_id = _selected(db, eid, "final_render")
         manifest_id = _selected(db, eid, "render_manifest")
         qa_id = _selected(db, eid, "media_qa")
@@ -280,7 +297,7 @@ def evaluate_release(config: RuntimeConfig, episode_key: str) -> ReleasePrefligh
                 pass
         if manifest_id and render_id:
             try:
-                manifest = RenderManifest.model_validate(store.read_json(manifest_id))
+                manifest = parse_manifest(store.read_json(manifest_id))
                 catalog = load_brand(config.brand_root)
                 add(
                     "brand_revision",

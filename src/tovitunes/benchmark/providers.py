@@ -376,12 +376,118 @@ class QwenComfyUIImageProvider:
             return {"status": "misconfigured", "provider": self.provider}
         return {"status": "available", "provider": self.provider}
 
+    def preflight(self) -> dict[str, Any]:
+        """Validate the deployed graph through read-only node schemas; never submit a prompt."""
+        try:
+            graph, digest = self._workflow()
+            graph["459:456"]["inputs"].update(width=self.width, height=self.height)
+            graph["459:458"]["inputs"].update(
+                steps=self.steps, cfg=self.cfg, sampler_name=self.sampler, scheduler=self.scheduler
+            )
+            with httpx.Client(transport=self._transport, timeout=10, trust_env=False) as client:
+                response = client.get(f"{self.base_url}/object_info")
+                response.raise_for_status()
+                schemas = response.json()
+            if not isinstance(schemas, dict):
+                raise ValueError("invalid node schema")
+            issues: list[dict[str, str]] = []
+            for node_id, node in graph.items():
+                schema = schemas.get(node["class_type"])
+                if not isinstance(schema, dict):
+                    issues.append({"node_id": node_id, "category": "missing_node"})
+                    continue
+                inputs = node["inputs"]
+                required = dict(schema.get("input", {}).get("required", {}))
+                for name, definition in list(required.items()):
+                    if definition[0] == "COMFY_DYNAMICCOMBO_V3":
+                        choices = definition[1].get("options", [])
+                        selected = next(
+                            (c for c in choices if c.get("key") == inputs.get(name)), None
+                        )
+                        if selected is None:
+                            issues.append(
+                                {"node_id": node_id, "input": name, "category": "unsupported_value"}
+                            )
+                        else:
+                            for nested, value in (
+                                selected.get("inputs", {}).get("required", {}).items()
+                            ):
+                                required[f"{name}.{nested}"] = value
+                for name, definition in required.items():
+                    if definition[0] == "COMFY_AUTOGROW_V3" and (
+                        definition[1].get("template", {}).get("min") == 0
+                    ):
+                        continue
+                    if name not in inputs:
+                        issues.append(
+                            {"node_id": node_id, "input": name, "category": "missing_input"}
+                        )
+                        continue
+                    value = inputs[name]
+                    if isinstance(value, list) and len(value) == 2:
+                        source = graph.get(value[0])
+                        source_schema = schemas.get(source["class_type"], {}) if source else {}
+                        outputs = source_schema.get("output", [])
+                        if not isinstance(value[1], int) or not 0 <= value[1] < len(outputs):
+                            issues.append(
+                                {"node_id": node_id, "input": name, "category": "invalid_link"}
+                            )
+                        elif isinstance(definition[0], str) and outputs[value[1]] != definition[0]:
+                            issues.append(
+                                {"node_id": node_id, "input": name, "category": "incompatible_link"}
+                            )
+                        continue
+                    choices = definition[0] if isinstance(definition[0], list) else None
+                    options = definition[1] if len(definition) > 1 else {}
+                    if definition[0] == "COMBO":
+                        choices = options.get("options", [])
+                    if choices is not None and value not in choices:
+                        issues.append(
+                            {
+                                "node_id": node_id,
+                                "input": name,
+                                "category": "missing_model"
+                                if name.endswith("_name")
+                                and name in {"unet_name", "clip_name", "vae_name"}
+                                else "unsupported_value",
+                            }
+                        )
+                    if isinstance(value, (int, float)) and (
+                        value < options.get("min", float("-inf"))
+                        or value > options.get("max", float("inf"))
+                    ):
+                        issues.append(
+                            {"node_id": node_id, "input": name, "category": "out_of_range"}
+                        )
+                if node_id == "461" and not schema.get("output_node"):
+                    issues.append({"node_id": node_id, "category": "invalid_output_node"})
+            return {
+                "status": "misconfigured" if issues else "verified",
+                "provider": self.provider,
+                "workflow_sha256": digest,
+                "issues": issues,
+                "generation": "not_verified_without_live_call",
+            }
+        except ProviderFailure:
+            return {
+                "status": "misconfigured",
+                "provider": self.provider,
+                "issues": [{"category": "invalid_workflow"}],
+            }
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
+            return {
+                "status": "unavailable",
+                "provider": self.provider,
+                "issues": [{"category": "node_schema_unavailable"}],
+            }
+
     def generate(
         self,
         spec: CanonicalImageSpec,
         reference_paths: tuple[Path, ...],
         *,
         on_remote_start: Callable[[], None] | None = None,
+        on_task_accepted: Callable[[str], None] | None = None,
     ) -> ProviderResult:
         if reference_paths:
             raise ProviderFailure(
@@ -392,7 +498,7 @@ class QwenComfyUIImageProvider:
         prompt_id: str | None = None
         started = self._clock()
         try:
-            with httpx.Client(transport=self._transport, timeout=30) as client:
+            with httpx.Client(transport=self._transport, timeout=30, trust_env=False) as client:
                 if on_remote_start is not None:
                     on_remote_start()
                 response = client.post(translated.endpoint, json=translated.body)
@@ -400,11 +506,17 @@ class QwenComfyUIImageProvider:
                     raise ProviderFailure(
                         f"ComfyUI rejected /prompt (HTTP {response.status_code})",
                         outcome="terminal_failure" if response.status_code < 500 else "ambiguous",
+                        diagnostics={
+                            "category": "workflow_rejected",
+                            "http_status": response.status_code,
+                        },
                     )
                 payload = response.json()
                 prompt_id = payload.get("prompt_id") if isinstance(payload, dict) else None
                 if not isinstance(prompt_id, str) or not prompt_id:
                     raise ProviderFailure("ComfyUI /prompt omitted prompt_id", outcome="ambiguous")
+                if on_task_accepted is not None:
+                    on_task_accepted(prompt_id)
                 while self._clock() - started < self.timeout_seconds:
                     history = client.get(f"{self.base_url}/history/{prompt_id}")
                     if history.status_code >= 500:
@@ -431,10 +543,32 @@ class QwenComfyUIImageProvider:
                             detail = _sanitize_provider_text(
                                 str(messages[-1]) if messages else "execution error", limit=180
                             )
+                            errors = [
+                                m[1]
+                                for m in messages
+                                if isinstance(m, list)
+                                and len(m) == 2
+                                and m[0] == "execution_error"
+                                and isinstance(m[1], dict)
+                            ]
+                            error = errors[-1] if errors else {}
+                            category = (
+                                "runtime_incompatible"
+                                if (
+                                    "CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH"
+                                    in str(error.get("exception_message", ""))
+                                )
+                                else "image_provider_failure"
+                            )
                             raise ProviderFailure(
                                 f"ComfyUI execution failed: {detail}",
                                 outcome="terminal_failure",
                                 provider_request_id=prompt_id,
+                                diagnostics={
+                                    "category": category,
+                                    "node_id": _safe_identifier(error.get("node_id")),
+                                    "exception_type": _safe_identifier(error.get("exception_type")),
+                                },
                             )
                         images = item.get("outputs", {}).get("461", {}).get("images", [])
                         if status.get("status_str") == "success" and images:
@@ -491,6 +625,9 @@ class QwenComfyUIImageProvider:
                 else "ComfyUI connection lost after submission",
                 outcome="terminal_failure" if prompt_id is None else "ambiguous",
                 provider_request_id=prompt_id,
+                diagnostics={
+                    "category": "endpoint_unreachable" if prompt_id is None else "ambiguous"
+                },
             ) from exc
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
             raise ProviderFailure(

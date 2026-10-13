@@ -251,6 +251,122 @@ def test_pose_normalization_anchor_and_approved_roles(evidence):
         pose_keyframe(cues[0], Image.new("RGBA", (50, 80)), "bad", 700)
 
 
+def test_wide_pose_fits_reserved_lane_without_occluding_lesson_object(evidence):
+    comp = composition(action="idle").model_copy(update={
+        "character_slot": "lower_right", "character_width": 0.54,
+    })
+    comp = comp.model_copy(update={"props": tuple(p.model_copy(update={
+        "center": (0.2, 0.92), "placement_mode": "ground", "width": 0.30,
+    }) for p in comp.props)})
+    planned = plan_motion(comp, 0, 6, "wide-pose-story", evidence[1], evidence[0], ())
+    base = animation().model_copy(update={
+        "start_position": (600, 1066), "end_position": (600, 1066), "motion_type": "bob",
+    })
+    poses = tuple(pose_keyframe(
+        cue, Image.new("RGBA", (900, 700), "blue"), f"approved-{i}", base.size[1],
+    ) for i, cue in enumerate(planned.character_pose_sequence))
+    with pytest.raises(ValueError, match="occludes Tovi"):
+        validate_motion(planned, evidence[0], (), attach_poses(base, poses, (1080, 1920)),
+                        (1080, 1920))
+    fitted = attach_poses(base, poses, (1080, 1920), maximum_width=583)
+    assert validate_motion(planned, evidence[0], (), fitted, (1080, 1920))[
+        "motion_envelope_passed"
+    ]
+    assert max(p.size[0] for p in fitted.pose_sequence) <= 583
+    assert len({p.size[1] for p in fitted.pose_sequence}) == 1
+    assert fitted.end_position[1] + fitted.size[1] == base.end_position[1] + base.size[1]
+    assert CharacterAnimation.model_validate_json(fitted.model_dump_json()) == fitted
+
+
+def test_three_story_props_enter_sequentially_within_motion_budget(evidence):
+    from tovitunes.render.story import plan_story, stage_composition
+
+    definitions = {f"shape_{i}": PropDefinition() for i in range(3)}
+    comp = composition(action="celebrate", count=3)
+    story = plan_story(comp, 6, definitions, set(definitions))
+    comp = stage_composition(comp, story)
+    planned = plan_motion(comp, 0, 6, "staggered-story", evidence[1], evidence[0], (), story=story)
+    entries = [next(e for e in p.events if e.motion == "pop_in") for p in planned.prop_tracks]
+    assert all(a.end <= b.start for a, b in zip(entries, entries[1:]))
+    assert prop_state(planned.prop_tracks[-1], planned, 0)[2] == 0.75
+    assert activity_diagnostics(planned)["max_simultaneous_major_motion"] <= 3
+    assert validate_motion(planned, evidence[0], (), animation(), (1080, 1920))[
+        "motion_envelope_passed"
+    ]
+
+
+def test_reused_primary_enters_performance_above_centered_tovi(evidence):
+    from tovitunes.render.story import plan_story, stage_composition
+
+    definitions = {f"shape_{i}": PropDefinition() for i in range(3)}
+    prior_comp = composition(action="celebrate", count=3)
+    prior_story = plan_story(prior_comp, 6, definitions, set(definitions))
+    prior = plan_motion(stage_composition(prior_comp, prior_story), 0, 6, "prior",
+                        evidence[1], evidence[0], (), story=prior_story)
+    comp = composition(action="sing", count=3)
+    story = plan_story(comp, 6, definitions, set(definitions))
+    comp = stage_composition(comp, story)
+    planned = plan_motion(comp, 0, 6, "performance", evidence[1], evidence[0], (),
+                          story=story, previous=prior,
+                          continuity_positions={"shape_0": (0.8, 0.66)})
+    primary = planned.prop_tracks[0]
+    assert primary.events[0].origin[1] <= primary.bbox[3]
+    centered = animation().model_copy(update={
+        "start_position": (340, 1066), "end_position": (340, 1066), "motion_type": "sing",
+    })
+    assert validate_motion(planned, evidence[0], (), centered, (1080, 1920))[
+        "motion_envelope_passed"
+    ]
+
+
+@pytest.mark.parametrize("duration", [1.2, 2.5, 6])
+def test_three_comparison_props_have_distinct_lanes_and_valid_motion_budget(evidence, duration):
+    from tovitunes.render.story import plan_story, stage_composition
+
+    definitions = {f"shape_{i}": PropDefinition() for i in range(3)}
+    comp = composition(action="question", count=3, duration=duration)
+    story = plan_story(comp, duration, definitions, set(definitions))
+    comp = stage_composition(comp, story)
+    assert len({p.center for p in comp.props}) == 3
+    planned = plan_motion(comp, 0, duration, "compare-three", evidence[1], evidence[0], (),
+                          story=story)
+    centered = animation().model_copy(update={
+        "start_position": (340, 1066), "end_position": (340, 1066), "motion_type": "question",
+    })
+    assert validate_motion(planned, evidence[0], (), centered, (1080, 1920))[
+        "motion_envelope_passed"
+    ]
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+def test_character_enters_from_its_own_reserved_lane(evidence, side):
+    from tovitunes.render.character import validate_layout
+
+    comp = composition(action="enter").model_copy(update={"character_slot": "lower_" + side})
+    comp = comp.model_copy(update={"props": tuple(p.model_copy(update={
+        "center": (0.8 if side == "left" else 0.2, 0.92), "placement_mode": "ground",
+    }) for p in comp.props)})
+    scene = TimedScene(
+        scene_id="arrival", kind="lyric", section="lesson", start=0, end=6,
+        tovi_action="enter", visual_focus="object", required_props=("shape_0",),
+        lesson_target="blue", lyric_text="shape", lyric_start=0, lyric_end=1,
+        beat_index_range=(0, 6), downbeat_index_range=(0, 2),
+    )
+    base = animation_plan(scene, Image.new("RGBA", (100, 140), "blue"), "base",
+                          evidence[1], (1080, 1920), "story", comp)
+    planned = plan_motion(comp, 0, 6, "arrival", evidence[1], evidence[0], ())
+    poses = tuple(
+        pose_keyframe(cue, Image.new("RGBA", (900, 700), "blue"), f"pose-{i}", base.size[1])
+        for i, cue in enumerate(planned.character_pose_sequence)
+    )
+    fitted = attach_poses(base, poses, (1080, 1920), maximum_width=583)
+    validate_layout(fitted, (1080, 1920))
+    assert (fitted.start_position[0] >= 1080) == (side == "right")
+    assert validate_motion(planned, evidence[0], (), fitted, (1080, 1920))[
+        "motion_envelope_passed"
+    ]
+
+
 @pytest.mark.parametrize(
     "behavior,z0,z1,p0,p1",
     [

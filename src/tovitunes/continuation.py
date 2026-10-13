@@ -8,16 +8,27 @@ from typing import Any
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.config import RuntimeConfig
 from tovitunes.creative.service import episode_by_key
-from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.creative.visual_recovery import recovery_state
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
+from tovitunes.domain.production_v3 import AudioClock, TimedStoryboardV3
 from tovitunes.domain.storyboard import parse_storyboard
+from tovitunes.domain.visual_draft import (
+    EpisodeVisualPlanV2,
+    parse_visual_plan,
+    validate_compiled_visual,
+)
+from tovitunes.domain.visual_plan import validate_visual_plan
 from tovitunes.persistence.db import Database
+from tovitunes.pipeline.duration_source import admit_duration_source, uses_duration_path
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import accept_episode_source, production_analysis_version
 from tovitunes.pipeline.targets import STAGES, ProductionTarget, stages_for
 from tovitunes.publication.models import PublicationState, publication_state
 from tovitunes.publication.preflight import evaluate_release
-from tovitunes.render.models import RenderManifest
+from tovitunes.render.admission_v3 import load_v3_evidence
+from tovitunes.render.models import parse_manifest
 from tovitunes.render.production import validate_manifest
+from tovitunes.render.visual_evidence import validate_visual_receipt
 
 _STAGE_ARTIFACTS = {
     "CREATIVE": ("episode_spec", "lyrics", "music_spec"),
@@ -112,15 +123,16 @@ def plan_continuation(
                     try:
                         expected_music = creative_music_spec(
                             episode_by_key(store.database, str(episode["external_key"])),
-                            EpisodeSpec.model_validate(store.read_json(ids[0])),
-                            LyricsSpec.model_validate(store.read_json(ids[1])),
-                            MusicSpec.model_validate(store.read_json(ids[2])),
+                            parse_episode_spec(store.read_json(ids[0])),
+                            parse_lyrics(store.read_json(ids[1])),
+                            parse_music_spec(store.read_json(ids[2])),
                             tuple(ids),
                         )
                     except (KeyError, ValueError, OSError):
                         report["status"] = "BLOCKED"
                         report["blocker"] = "Selected creative facts differ from episode identity"
                         by_name["CREATIVE"]["status"] = "BLOCKED"
+                binding = None
                 if "episode_music_bindings" in tables:
                     binding = db.execute(
                         "SELECT r.*,o.blind_id FROM episode_music_bindings b "
@@ -196,7 +208,99 @@ def plan_continuation(
                                         stage["status"] = "BLOCKED"
                                         stage["evidence"]["reason"] = str(exc)
                 visual = artifacts.get(("episode_visual_plan", "main"))
+                duration_path = uses_duration_path(db, eid)
                 if visual:
+                    try:
+                        current_visual = parse_visual_plan(store.read_json(visual["artifact_id"]))
+                        duration_path = isinstance(current_visual, EpisodeVisualPlanV2)
+                        if expected_music is None:
+                            raise ValueError("visual plan lacks retained creative inputs")
+                        current_episode = episode_by_key(
+                            store.database, str(episode["external_key"])
+                        )
+                        selected_ids = by_name["CREATIVE"]["evidence"]["artifact_ids"]
+                        creative_ids = (selected_ids[0], selected_ids[1], selected_ids[2])
+                        if isinstance(current_visual, EpisodeVisualPlanV2):
+                            validate_compiled_visual(current_visual, current_episode, creative_ids)
+                            validate_visual_receipt(store, current_visual)
+                        else:
+                            validate_visual_plan(
+                                current_visual,
+                                current_episode,
+                                parse_episode_spec(store.read_json(creative_ids[0])),
+                                parse_lyrics(store.read_json(creative_ids[1])),
+                                creative_ids,
+                            )
+                    except (ValueError, OSError, KeyError) as exc:
+                        by_name["VISUAL_PLAN"].update(
+                            status="BLOCKED", evidence={"reason": str(exc)}
+                        )
+                elif duration_path:
+                    try:
+                        recovery = recovery_state(db, eid)
+                        if recovery:
+                            by_name["VISUAL_PLAN"].update(
+                                status="READY" if recovery["authorized"] else "BLOCKED",
+                                evidence=recovery,
+                            )
+                    except (ValueError, OSError, KeyError) as exc:
+                        by_name["VISUAL_PLAN"].update(
+                            status="BLOCKED", evidence={"reason": str(exc)}
+                        )
+                    pending = db.execute(
+                        "SELECT * FROM generation_requests WHERE episode_id=? "
+                        "AND prompt_version='visual_creative_v2' ORDER BY rowid DESC LIMIT 1",
+                        (eid,),
+                    ).fetchone()
+                    if pending and pending["status"] in {"remote_started", "ambiguous"}:
+                        by_name["VISUAL_PLAN"].update(
+                            status="AMBIGUOUS",
+                            evidence={
+                                "request_id": pending["request_id"],
+                                "provider": pending["provider"],
+                                "model": pending["model"],
+                                "error_kind": "ambiguous",
+                            },
+                        )
+                if (
+                    duration_path
+                    and expected_music is not None
+                    and binding
+                    and by_name["MUSIC"]["status"] == "COMPLETE"
+                ):
+                    clock_row = artifacts.get(("audio_clock", "main"))
+                    stage = by_name["AUDIO_ANALYSIS"]
+                    stage.update(
+                        status="READY", evidence={"mode": "duration", "asr_required": False}
+                    )
+                    if clock_row:
+                        try:
+                            master = artifacts[("audio_master", "main")]
+                            measured_clock = admit_duration_source(
+                                config,
+                                episode_by_key(store.database, str(episode["external_key"])),
+                                binding["request_id"],
+                                expected_music,
+                                master["artifact_id"],
+                                connection=db,
+                            )
+                            if (
+                                AudioClock.model_validate(store.read_json(clock_row["artifact_id"]))
+                                != measured_clock
+                            ):
+                                raise ValueError(
+                                    "audio clock differs from original source evidence"
+                                )
+                            stage.update(
+                                status="COMPLETE",
+                                evidence={
+                                    "audio_clock_artifact_id": clock_row["artifact_id"],
+                                    "asr_required": False,
+                                },
+                            )
+                        except (ValueError, OSError, KeyError) as exc:
+                            stage.update(status="BLOCKED", evidence={"reason": str(exc)})
+                if visual and by_name["VISUAL_PLAN"]["status"] == "COMPLETE":
                     data = json.loads(
                         (config.data_root / visual["relative_path"]).read_text(encoding="utf-8")
                     )
@@ -220,12 +324,30 @@ def plan_continuation(
                                 by_name["VISUAL_ASSETS"]["status"] = "AMBIGUOUS"
                             elif image_request["status"] == "failed":
                                 by_name["VISUAL_ASSETS"]["status"] = "FAILED"
+                            if image_request["status"] in {"failed", "remote_started", "ambiguous"}:
+                                by_name["VISUAL_ASSETS"]["evidence"].update(
+                                    request_id=image_request["request_id"],
+                                    subsystem="illustration",
+                                    error_kind=image_request["error_kind"]
+                                    or "retained_image_failure",
+                                    retry_state="ambiguous"
+                                    if image_request["status"] != "failed"
+                                    else "requires_configuration"
+                                    if image_request["error_kind"]
+                                    in {"workflow_rejected", "runtime_incompatible"}
+                                    else "requires_recovery",
+                                )
                     env_request = (
                         db.execute(
                             "SELECT status,request_id FROM environment_requests "
                             "WHERE episode_id=? "
-                            "AND status NOT IN ('prepared','succeeded') ORDER BY rowid LIMIT "
-                            "1",
+                            "AND status NOT IN ('prepared','succeeded') "
+                            + (
+                                "AND request_id NOT IN (SELECT request_id FROM "
+                                "environment_source_reconciliations) "
+                                if "environment_source_reconciliations" in tables else ""
+                            )
+                            + "ORDER BY rowid LIMIT 1",
                             (eid,),
                         ).fetchone()
                         if "production_image_receipts" in tables
@@ -239,8 +361,34 @@ def plan_continuation(
                             evidence={
                                 "request_id": env_request["request_id"],
                                 "missing_assets": missing,
+                                "subsystem": "environment",
+                                "error_kind": "environment_provider_failure",
+                                "retry_state": "ambiguous"
+                                if env_request["status"] in {"remote_started", "ambiguous"}
+                                else "requires_recovery",
                             },
                         )
+                board_row = artifacts.get(("timed_storyboard", "main"))
+                if board_row and duration_path:
+                    try:
+                        board_v3 = parse_storyboard(store.read_json(board_row["artifact_id"]))
+                        if not isinstance(board_v3, TimedStoryboardV3):
+                            raise ValueError("duration path requires a V3 storyboard")
+                        load_v3_evidence(
+                            config,
+                            store,
+                            episode_by_key(store.database, str(episode["external_key"])),
+                            board_v3,
+                            board_row["artifact_id"],
+                        )
+                    except (ValueError, OSError, KeyError) as exc:
+                        by_name["STORYBOARD"].update(
+                            status="BLOCKED", evidence={"reason": str(exc)}
+                        )
+                        by_name["RENDER"]["status"] = "BLOCKED"
+                        by_name["MEDIA_QA"]["status"] = "BLOCKED"
+                        report["status"] = "BLOCKED"
+                        report["blocker"] = "Selected V3 storyboard evidence failed admission"
                 final = artifacts.get(("final_render", "main_v4")) or artifacts.get(
                     ("final_render", "main")
                 )
@@ -251,9 +399,7 @@ def plan_continuation(
                     try:
                         if manifest_row is None or storyboard_row is None:
                             raise ValueError("render dependencies missing")
-                        manifest = RenderManifest.model_validate(
-                            store.read_json(manifest_row["artifact_id"])
-                        )
+                        manifest = parse_manifest(store.read_json(manifest_row["artifact_id"]))
                         board = parse_storyboard(store.read_json(storyboard_row["artifact_id"]))
                         if (
                             manifest.episode_id != eid

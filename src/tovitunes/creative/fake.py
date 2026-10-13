@@ -125,7 +125,7 @@ class FakeNIMTransport:
             output = CreativeSubjectPool(candidates=tuple(legacy_candidates)).model_dump(
                 mode="json"
             )
-        elif kind == "EpisodePublicationMetadata":
+        elif kind in {"EpisodePublicationMetadata", "MetadataDraft"}:
             episode = facts["episode"]
             final = facts["final_render"]
             concept = episode["concept_id"]
@@ -140,6 +140,42 @@ class FakeNIMTransport:
                 "concept_id": concept,
                 "final_render_artifact_id": final["artifact_id"],
                 "final_render_sha256": final["sha256"],
+            }
+            if kind == "MetadataDraft":
+                output = {k: output[k] for k in ("youtube_title", "youtube_description", "tags")}
+        elif kind == "CreativeVisualDraft":
+            output = {
+                "scenes": [
+                    {
+                        "description": "Tovi discovers the topic through play",
+                        "tovi_action": "present",
+                        "objects": ["a yellow ball"],
+                        "setting": "a friendly meadow",
+                    }
+                ]
+            }
+        elif kind == "EpisodeIdeaDraft":
+            brief = facts.get("selected_learning_brief", {})
+            output = {
+                "premise": brief.get("premise", "Tovi discovers a familiar object"),
+                "hook": brief.get("hook", "A playful surprise appears"),
+                "setting": brief.get("setting", "a friendly meadow"),
+                "progression": ["Tovi discovers an object", "Tovi explores with a song"],
+            }
+        elif kind == "LyricsDraft":
+            lyric_subject = " and ".join(facts["episode"]["target_vocabulary"])
+            output = {
+                "lines": [
+                    {"section": "verse", "text": "We discover " + lyric_subject},
+                    {"section": "chorus", "text": "Sing and play with Tovi"},
+                ]
+            }
+        elif kind == "MusicDraft":
+            output = {
+                "mood": "cheerful and warm",
+                "instrumentation": ["gentle bells"],
+                "vocal_direction": "clear simple English",
+                "tempo_bpm": 112,
             }
         else:
             episode = Episode.model_validate(facts["episode"])

@@ -239,7 +239,7 @@ def test_restart_after_persisted_brief_before_episode_reservation_reuses_selecti
     )
     result = restarted.prepare(run_id=run_id)
     assert result["episode_key"].startswith("big-and-small-")
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "LyricsDraft", "MusicDraft"]
 
 
 def test_memory_precedes_creative_artifacts_and_expensive_media(editorial, monkeypatch):
@@ -253,7 +253,7 @@ def test_memory_precedes_creative_artifacts_and_expensive_media(editorial, monke
 
     monkeypatch.setattr(flow.provider, "generate", generate)
     flow.prepare(run_id=flow.reserve_next_run())
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "LyricsDraft", "MusicDraft"]
 
 
 def test_novel_domain_outside_policy_examples_is_allowed(editorial):

@@ -74,7 +74,7 @@ def test_end_to_end_generates_pinned_selected_creative_only(workflow):
     flow, fake = workflow
     result = flow.prepare(run_id=flow.reserve_next_run())
     assert result["episode_key"].startswith("big-and-small-")
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "LyricsDraft", "MusicDraft"]
     episode = flow.database.get_episode(result["episode_id"])
     assert episode.objective == "Compare a big balloon with a small balloon."
     assert episode.target_vocabulary == ("big", "small") and episode.language == "en"
@@ -90,7 +90,7 @@ def test_end_to_end_generates_pinned_selected_creative_only(workflow):
         and a["policy_version"] == episode.learning_policy_revision_id
         for a in approvals
     )
-    assert sum(a["policy_version"] == "creative_structural_v1" for a in approvals) == 3
+    assert sum(a["policy_version"] == "creative_structural_v2" for a in approvals) == 3
     assert kinds == {"episode_spec", "lyrics", "music_spec"}
     assert requests[0]["episode_id"] is None and requests[0]["run_id"] == result["run_id"]
     for kind in kinds:
@@ -164,8 +164,8 @@ def test_same_run_and_episode_resume_make_no_more_calls(workflow):
 @pytest.mark.parametrize(
     "stage,expected",
     [
-        ("LyricsSpec", ["LyricsSpec", "MusicSpec"]),
-        ("MusicSpec", ["MusicSpec"]),
+        ("LyricsDraft", ["LyricsDraft", "MusicDraft"]),
+        ("MusicDraft", ["MusicDraft"]),
     ],
 )
 def test_interrupted_after_selected_stage_resumes_only_missing_work(
@@ -203,10 +203,10 @@ def test_crash_after_remote_receipt_before_artifact_ingest_reuses_it(workflow, m
     run_id = flow.reserve_next_run()
     with pytest.raises(KeyboardInterrupt):
         flow.prepare(run_id=run_id)
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "LyricsDraft"]
     monkeypatch.setattr(flow.store, "ingest", original)
     flow.prepare(run_id=run_id)
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "LyricsSpec", "MusicSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "LyricsDraft", "MusicDraft"]
 
 
 def test_crash_after_ingest_before_selection_reuses_same_artifact(workflow, monkeypatch):
@@ -326,7 +326,7 @@ def test_next_fresh_run_excludes_previous_selected_concept(workflow):
     assert fake.calls.count("TopicPool") == 2
 
 
-def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monkeypatch):
+def test_missing_creative_premise_is_repaired_and_recorded(workflow, monkeypatch):
     flow, fake = workflow
     original = fake.chat
     injected = False
@@ -334,16 +334,16 @@ def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monke
     def chat(messages, *, record_identity):
         nonlocal injected
         result = original(messages, record_identity=record_identity)
-        if fake.calls[-1] == "EpisodeSpec" and not injected:
+        if fake.calls[-1] == "EpisodeIdeaDraft" and not injected:
             injected = True
             data = json.loads(result.content)
-            data["objective_id"] = "wrong-objective"
+            data.pop("premise")
             return replace(result, content=json.dumps(data))
         return result
 
     monkeypatch.setattr(fake, "chat", chat)
     result = flow.prepare(run_id=flow.reserve_next_run())
-    assert fake.calls.count("EpisodeSpec") == 2 and result["provider_calls"]["repair"] == 1
+    assert fake.calls.count("EpisodeIdeaDraft") == 2 and result["provider_calls"]["repair"] == 1
     with flow.database.connect() as db:
         saved = db.execute(
             "SELECT status,kind FROM generation_requests "
@@ -357,12 +357,12 @@ def test_real_episode_spec_domain_error_is_repaired_and_recorded(workflow, monke
 
 def test_invalid_episode_spec_repair_remains_failed_closed(workflow):
     flow, fake = workflow
-    fake.responses["EpisodeSpec"] = ["{}", "{}"]
+    fake.responses["EpisodeIdeaDraft"] = ["{}", "{}"]
     run_id = flow.reserve_next_run()
     for _ in range(2):
         with pytest.raises(StructuredOutputError):
             flow.prepare(run_id=run_id)
-    assert fake.calls == ["TopicPool", "EpisodeSpec", "EpisodeSpec"]
+    assert fake.calls == ["TopicPool", "EpisodeIdeaDraft", "EpisodeIdeaDraft"]
 
 
 def test_concept_revisions_do_not_reset_history_eligibility(workflow):

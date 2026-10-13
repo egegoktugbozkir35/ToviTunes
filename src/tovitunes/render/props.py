@@ -7,6 +7,7 @@ from typing import Any, cast
 from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFilter
 from PIL.PngImagePlugin import PngInfo
 
+from tovitunes.domain.production_v3 import VisualTimedScene
 from tovitunes.domain.storyboard import TimedScene
 from tovitunes.render import VERSION
 from tovitunes.render.composition import (
@@ -236,7 +237,7 @@ def prop_image(
 
 
 def scene_art(
-    scene: TimedScene,
+    scene: TimedScene | VisualTimedScene,
     palette: dict[str, str],
     canvas: tuple[int, int],
     storyboard_id: str,
@@ -348,7 +349,7 @@ def png_info(metadata: dict[str, Any]) -> PngInfo:
 
 
 def validate_props(
-    scene: TimedScene,
+    scene: TimedScene | VisualTimedScene,
     metadata: dict[str, Any],
     plan: CharacterAnimation,
     canvas: tuple[int, int],

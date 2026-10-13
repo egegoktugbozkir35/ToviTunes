@@ -1,11 +1,14 @@
 """Small renderer-facing contracts built from admitted production evidence."""
 
 from bisect import bisect_left, bisect_right
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tovitunes.domain.episode import Episode, PinnedCharacterPack
+
+if TYPE_CHECKING:
+    from tovitunes.domain.production_v3 import TimedStoryboardV3
 
 Prop = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 Action = Literal["enter", "idle", "point", "present", "question", "sing", "celebrate"]
@@ -375,7 +378,11 @@ class TimedStoryboardV2(TimedStoryboard):
         return self
 
 
-def parse_storyboard(value: object) -> TimedStoryboard:
+def parse_storyboard(value: object) -> "TimedStoryboard | TimedStoryboardV3":
+    if isinstance(value, dict) and value.get("schema_version") == 3:
+        from tovitunes.domain.production_v3 import TimedStoryboardV3
+
+        return TimedStoryboardV3.model_validate(value)
     if isinstance(value, dict) and value.get("schema_version") == 2:
         return TimedStoryboardV2.model_validate(value)
     return TimedStoryboard.model_validate(value)

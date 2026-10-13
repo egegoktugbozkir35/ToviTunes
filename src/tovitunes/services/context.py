@@ -16,6 +16,7 @@ from tovitunes.creative.provider import (
 from tovitunes.creative.service import CreativeService
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
 from tovitunes.domain.episode import Episode
 from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.music.providers import MusicProvider
@@ -106,8 +107,8 @@ class StageContext:
         ids = tuple(record.identity.artifact_id for record in records if record)
         assert len(ids) == 3
         creative_ids = (ids[0], ids[1], ids[2])
-        spec = EpisodeSpec.model_validate(self.store.read_json(ids[0]))
-        lyrics = LyricsSpec.model_validate(self.store.read_json(ids[1]))
-        music = MusicSpec.model_validate(self.store.read_json(ids[2]))
+        spec = parse_episode_spec(self.store.read_json(ids[0]))
+        lyrics = parse_lyrics(self.store.read_json(ids[1]))
+        music = parse_music_spec(self.store.read_json(ids[2]))
         creative_music_spec(episode, spec, lyrics, music, creative_ids)
         return spec, lyrics, music, creative_ids

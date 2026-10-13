@@ -42,7 +42,37 @@ def studio_job(config: RuntimeConfig, job: Job) -> dict[str, Any]:
     result = job.model_dump()
     if job.operation != "studio":
         return result
+    if job.status in {"queued", "running"}:
+        # Prior execution evidence stays durable for recovery, but is not a current result.
+        result["result"] = None
     database = Database(config.database_path)
+    if job.episode_key and (
+        job.progress_percent == 0
+        or job.status not in {"queued", "running", "complete", "succeeded"}
+        and not job.blocker
+    ):
+        from tovitunes.continuation import plan_continuation
+        from tovitunes.pipeline.targets import ProductionTarget, steps_for
+
+        plan = plan_continuation(
+            config, job.episode_key, target=job.target or ProductionTarget.RENDER
+        )
+        completed = sum(5 if s == "CREATIVE" else 1 for s in plan["reusable_stages"])
+        total = len(steps_for(job.target or ProductionTarget.RENDER))
+        result["completed_steps"] = max(job.completed_steps, completed)
+        result["progress_percent"] = max(job.progress_percent, min(100, 100 * completed // total))
+        if job.status not in {"queued", "running"} and (
+            not job.blocker or not job.blocker.get("request_id")
+        ):
+            from tovitunes.web.studio import safe_production_result
+
+            projection = safe_production_result(plan)
+            if projection.get("blocker"):
+                result["blocker"] = projection["blocker"]
+                result["error"] = projection["blocker"]["reason"]
+    if job.current_stage not in {None, "CREATIVE", "VISUAL_PLAN", "METADATA"}:
+        result["creative_diagnostics"] = {"attempts": [], "exhausted": False, "message": None}
+        return result
     run_id = (
         job.recovery_reference.run_id
         if job.recovery_reference is not None

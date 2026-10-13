@@ -12,10 +12,11 @@ from PIL import Image, ImageDraw
 
 from tovitunes.artifacts.store import ArtifactRecord, AssetStore, InputDependency
 from tovitunes.benchmark.models import CanonicalImageSpec
-from tovitunes.benchmark.providers import ImageProvider, ProviderFailure
+from tovitunes.benchmark.providers import ImageProvider, ProviderFailure, QwenComfyUIImageProvider
 from tovitunes.config import RuntimeConfig
 from tovitunes.domain.artifact import Provenance
 from tovitunes.domain.episode import Episode
+from tovitunes.domain.visual_draft import EpisodeVisualPlanV2
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
@@ -132,16 +133,29 @@ def persist_file(
 
 
 class ImageStageBlocked(RuntimeError):
-    def __init__(self, status: str, request_id: str) -> None:
+    def __init__(self, status: str, request_id: str, category: str | None = None) -> None:
         super().__init__(f"Image request {request_id}: {status}; no automatic resend")
         self.status = status
+        self.evidence = {
+            "request_id": request_id,
+            "subsystem": "illustration",
+            "error_kind": category
+            or ("ambiguous" if status == "AMBIGUOUS" else "retained_image_failure"),
+            "retry_state": "ambiguous"
+            if status == "AMBIGUOUS"
+            else "requires_configuration"
+            if category in {"workflow_rejected", "runtime_incompatible"}
+            else "recoverable"
+            if category == "image_processing_failure"
+            else "requires_recovery",
+        }
 
 
 def generate_assets(
     config: RuntimeConfig,
     store: AssetStore,
     episode: Episode,
-    visual: EpisodeVisualPlan,
+    visual: EpisodeVisualPlan | EpisodeVisualPlanV2,
     plan_id: str,
     working: Path,
     visual_direction: str,
@@ -150,6 +164,9 @@ def generate_assets(
     progress: Callable[[str, str], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
+    if not visual.required_assets:
+        assert_owner()
+        return {}
     provider = provider or _provider(config)
     if provider.provider != "qwen_comfyui":
         raise ValueError("production illustrations require the existing Qwen adapter")
@@ -260,6 +277,7 @@ def generate_assets(
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if prior["status"] in {"remote_started", "ambiguous"} else "FAILED",
                     request_id,
+                    prior["error_kind"],
                 )
             started = False
 
@@ -270,7 +288,16 @@ def generate_assets(
                 started = True
 
             try:
-                result = provider.generate(spec, (), on_remote_start=remote_start)
+                result = (
+                    provider.generate(
+                        spec,
+                        (),
+                        on_remote_start=remote_start,
+                        on_task_accepted=lambda task: ledger.identity(request_id, task),
+                    )
+                    if isinstance(provider, QwenComfyUIImageProvider)
+                    else provider.generate(spec, (), on_remote_start=remote_start)
+                )
                 if not started:
                     raise ValueError("image provider omitted remote-start tracking")
                 source_path = working / f"{slot}_source.png"
@@ -319,6 +346,18 @@ def generate_assets(
                 raise
             except Exception as exc:
                 outcome = exc.outcome if isinstance(exc, ProviderFailure) else "ambiguous"
+                category = (
+                    str(exc.diagnostics.get("category", "image_provider_failure"))
+                    if isinstance(exc, ProviderFailure)
+                    else "image_processing_failure"
+                )
+                if isinstance(exc, ProviderFailure):
+                    with closing(store.database.connect()) as db, db:
+                        db.execute(
+                            "UPDATE production_image_receipts SET provider_request_id=?,"
+                            "response_metadata_json=? WHERE request_id=?",
+                            (exc.provider_request_id, json.dumps(exc.diagnostics), request_id),
+                        )
                 ledger.transition(
                     request_id,
                     "ambiguous" if started and outcome != "terminal_failure" else "failed",
@@ -326,18 +365,24 @@ def generate_assets(
                     if isinstance(exc, ProviderFailure)
                     else None,
                     definitive_remote_failure=outcome == "terminal_failure",
+                    error_kind=category,
+                    error_reason="Image operation failed; see protected local provider evidence",
                 )
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if started and outcome != "terminal_failure" else "FAILED",
                     request_id,
+                    category,
                 ) from exc
         assert_owner()
         store.admit_preview(source_record.identity.artifact_id)
-        image = normalize(
-            _prepare_qwen_white_background(
-                store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png"
+        try:
+            image = normalize(
+                _prepare_qwen_white_background(
+                    store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png"
+                )
             )
-        )
+        except (ValueError, OSError) as exc:
+            raise ImageStageBlocked("BLOCKED", request_id, "image_processing_failure") from exc
         image.save(path)
         assert_owner()
         record = persist_file(

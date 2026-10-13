@@ -14,7 +14,7 @@ from tovitunes.config import RuntimeConfig
 from tovitunes.continuation import plan_continuation
 from tovitunes.creative.learning import LearningBrief
 from tovitunes.creative.service import episode_by_key
-from tovitunes.domain.creative import EpisodeSpec, LyricsSpec, MusicSpec
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
 from tovitunes.errors import FailureCategory
 from tovitunes.orchestrator import Orchestrator, ProductionReference
 from tovitunes.persistence.db import Database
@@ -56,9 +56,9 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
             try:
                 episode = episode_by_key(database, key)
                 ids = stages["CREATIVE"]["evidence"]["artifact_ids"]
-                spec = EpisodeSpec.model_validate(store.read_json(ids[0]))
-                lyrics = LyricsSpec.model_validate(store.read_json(ids[1]))
-                music = MusicSpec.model_validate(store.read_json(ids[2]))
+                spec = parse_episode_spec(store.read_json(ids[0]))
+                lyrics = parse_lyrics(store.read_json(ids[1]))
+                music = parse_music_spec(store.read_json(ids[2]))
                 creative_music_spec(episode, spec, lyrics, music, tuple(ids))
                 draft = {
                     "premise": spec.concept.premise,
@@ -133,11 +133,7 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 "video_url": f"/api/media/{release.render_artifact_id}" if render_ready else None,
                 "preview_url": preview_url,
                 "draft": draft,
-                "blocker": plan.get("blocker")
-                if isinstance(plan.get("blocker"), str)
-                else "Review or release checks require attention."
-                if plan.get("blocker")
-                else None,
+                "blocker": safe_production_result(plan).get("blocker", {}).get("reason"),
                 "can_render": plan_continuation(config, key, target=ProductionTarget.RENDER)[
                     "allowed"
                 ]
@@ -173,17 +169,69 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(blocker, dict):
             safe["blocker"] = {
                 k: blocker[k]
-                for k in ("request_id", "provider", "model", "kind", "recovery_action")
+                for k in (
+                    "request_id",
+                    "provider",
+                    "model",
+                    "kind",
+                    "recovery_action",
+                    "new_prompt_version",
+                    "old_attempt_ids",
+                    "subsystem",
+                    "retry_state",
+                )
                 if k in blocker
             }
             category = blocker.get("error_kind")
-            if category in {c.value for c in FailureCategory} | {"chain_exhausted"}:
+            if safe["blocker"].get("subsystem") not in {"illustration", "environment", "renderer"}:
+                safe["blocker"].pop("subsystem", None)
+            if safe["blocker"].get("retry_state") not in {
+                "ambiguous",
+                "requires_recovery",
+                "recoverable",
+                "requires_configuration",
+            }:
+                safe["blocker"].pop("retry_state", None)
+            if category in {c.value for c in FailureCategory} | {
+                "chain_exhausted",
+                "workflow_rejected",
+                "image_provider_failure",
+                "image_processing_failure",
+                "retained_image_failure",
+                "environment_provider_failure",
+                "runtime_incompatible",
+                "renderer_validation",
+            }:
                 safe["blocker"]["error_kind"] = category
         else:
             safe["blocker"] = {}
         # Stage failures can include third-party text. Only our fixed messages cross the API.
         safe["blocker"]["reason"] = (
-            "Configured creative model chain exhausted. See the per-model outcomes."
+            "Renderer validation stopped. Inspect the retained scene inputs and local layout "
+            "evidence, then Resume after repair."
+            if safe["blocker"].get("error_kind") == "renderer_validation"
+            else "ComfyUI's CUDA/cuDNN runtime is incompatible. Check the deployed runtime and "
+            "attention backend before authorizing another image attempt."
+            if safe["blocker"].get("error_kind") == "runtime_incompatible"
+            else "ComfyUI illustration generation failed. Inspect the retained image request "
+            "and local execution evidence before authorizing a new attempt."
+            if safe["blocker"].get("error_kind") == "image_provider_failure"
+            else "The returned image could not be admitted. Inspect its retained source "
+            "and media validation evidence before Resume."
+            if safe["blocker"].get("error_kind") == "image_processing_failure"
+            else "A ComfyUI environment request failed. Inspect its retained identity and local "
+            "evidence; uncertain requests cannot be automatically resent."
+            if safe["blocker"].get("error_kind") == "environment_provider_failure"
+            else "ComfyUI rejected the image workflow. Check the deployed nodes and model paths; "
+            "authorize a new attempt only after the retained failure is reconciled."
+            if safe["blocker"].get("error_kind") == "workflow_rejected"
+            else "A retained image request failed. Inspect its request identity and local "
+            "evidence; explicit recovery is required before a new attempt."
+            if safe["blocker"].get("error_kind") == "retained_image_failure"
+            else "Legacy visual planning failed. Authorize visual_creative_v2 using the local "
+            "production recover-visual-contract command, then Resume this episode."
+            if safe["blocker"].get("recovery_action") == "authorize_visual_v2"
+            else "Configured creative model chain exhausted. See the per-model outcomes."
             if safe["blocker"].get("error_kind") == "chain_exhausted"
             else "Creative model " + OUTCOMES[safe["blocker"]["error_kind"]] + "."
             if safe["blocker"].get("error_kind") in OUTCOMES
@@ -200,6 +248,41 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
             if result.get("status") == "PENDING_PROVIDER"
             else "Configured review or release policy requires attention."
             if result.get("status") == "NEEDS_REVIEW"
+            else {
+                "AUDIO_ANALYSIS": (
+                    "Retained audio or receipt validation failed. Check the original audio file, "
+                    "its source identity and measured technical quality before Resume."
+                ),
+                "VISUAL_PLAN": (
+                    "Visual proposal evidence failed validation. Check its retained response "
+                    "receipt; Resume preserves completed upstream work."
+                ),
+                "VISUAL_ASSETS": (
+                    "Required illustrations or backgrounds need attention. Check retained image "
+                    "files and provider receipts before Resume."
+                ),
+                "STORYBOARD": (
+                    "Storyboard timing or source dependencies failed admission. Check selected "
+                    "audio, visual assets and character resources before Resume."
+                ),
+                "RENDER": (
+                    "Render admission failed. Check selected media, the approved Tovi pack "
+                    "and FFmpeg availability before Resume."
+                ),
+                "MEDIA_QA": (
+                    "Final media QA failed. Review the retained QA report and video before Resume."
+                ),
+            }[result["current_stage"]]
+            if result.get("status") == "BLOCKED"
+            and result.get("current_stage")
+            in {
+                "AUDIO_ANALYSIS",
+                "VISUAL_PLAN",
+                "VISUAL_ASSETS",
+                "STORYBOARD",
+                "RENDER",
+                "MEDIA_QA",
+            }
             else "This stage could not complete. Check Settings and resume its retained work."
         )
     if isinstance(blocker, dict) and isinstance(blocker.get("release"), dict):

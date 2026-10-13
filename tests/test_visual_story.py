@@ -377,7 +377,14 @@ def test_source_dimensions_survive_technical_validation_failure(runtime):
             "SELECT status,response_metadata_json FROM environment_requests"
         ).fetchone()
     assert row["status"] == "terminal_failure"
-    assert json.loads(row["response_metadata_json"]) == {
+    metadata = json.loads(row["response_metadata_json"])
+    source_id = metadata.pop("source_artifact_id")
+    source_sha = metadata.pop("response_sha256")
+    store = AssetStore(runtime.data_root, Database(runtime.database_path), initialize=False)
+    assert store.get(source_id).sha256 == source_sha
+    assert store.inspect(source_id).valid
+    assert source_sha == sha256(picture((767, 1376))).hexdigest()
+    assert metadata == {
         "continuity_mode": "shared_text_world_contract",
         "reference_images_supported": True,
         "requested_image_size": "1K",

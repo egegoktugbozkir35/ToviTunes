@@ -174,11 +174,12 @@ def stage_composition(composition: SceneComposition, story: VisualStoryPlan) -> 
         )
         return composition.model_copy(update={"props": (prop,)})
     if story.story_action == "compare" and len(composition.props) >= 2:
+        points = ((0.15, 0.28), (0.85, 0.28), (0.50, 0.15))
         props = tuple(
             p.model_copy(
                 update={
-                    "slot": "middle_left" if i == 0 else "middle_right",
-                    "center": (0.15 if i == 0 else 0.85, 0.28),
+                    "slot": ("middle_left", "middle_right", "upper_center")[i],
+                    "center": points[i],
                     "width": 0.20,
                     "placement_mode": "display",
                     "motion": "static",

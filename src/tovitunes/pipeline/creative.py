@@ -23,6 +23,7 @@ from tovitunes.domain.creative import (
     MusicSpec,
     StoryBeat,
 )
+from tovitunes.domain.creative_drafts import parse_episode_spec, parse_lyrics, parse_music_spec
 from tovitunes.domain.episode import Episode
 from tovitunes.domain.review import ApprovalDecision
 
@@ -278,7 +279,7 @@ class CreativeDraftService:
         selected = self.store.selected("episode", episode_id, "episode_spec", "main")
         if selected is None:
             raise ValueError("approved episode spec must be selected before lyrics")
-        spec = EpisodeSpec.model_validate(self.store.read_json(selected.identity.artifact_id))
+        spec = parse_episode_spec(self.store.read_json(selected.identity.artifact_id))
         draft = self.generator.lyrics(episode, spec, selected.identity.artifact_id, variant=variant)
         lyrics = draft.output
         if (
@@ -296,7 +297,7 @@ class CreativeDraftService:
         selected = self.store.selected("episode", episode_id, "lyrics", "main")
         if selected is None:
             raise ValueError("approved lyrics must be selected before music spec")
-        lyrics = LyricsSpec.model_validate(self.store.read_json(selected.identity.artifact_id))
+        lyrics = parse_lyrics(self.store.read_json(selected.identity.artifact_id))
         draft = self.generator.music_spec(
             episode, lyrics, selected.identity.artifact_id, variant=variant
         )
@@ -380,17 +381,17 @@ class CreativeDraftService:
         episode = self.store.database.get_episode(record.identity.owner_id)
         data = self.store.read_json(artifact_id)
         if record.identity.kind == "episode_spec":
-            validate_episode_spec(episode, EpisodeSpec.model_validate(data))
+            validate_episode_spec(episode, parse_episode_spec(data))
         elif record.identity.kind == "lyrics":
             spec = self.store.selected("episode", episode.episode_id, "episode_spec", "main")
             if spec is None:
                 raise ValueError("episode spec must be selected")
-            validate_lyrics(episode, LyricsSpec.model_validate(data), spec.identity.artifact_id)
+            validate_lyrics(episode, parse_lyrics(data), spec.identity.artifact_id)
         elif record.identity.kind == "music_spec":
             lyrics = self.store.selected("episode", episode.episode_id, "lyrics", "main")
             if lyrics is None:
                 raise ValueError("lyrics must be selected")
-            validate_music(episode, MusicSpec.model_validate(data), lyrics.identity.artifact_id)
+            validate_music(episode, parse_music_spec(data), lyrics.identity.artifact_id)
         else:
             raise ValueError("artifact is not a creative draft")
         with closing(self.store.database.connect()) as connection:
@@ -405,6 +406,15 @@ class CreativeDraftService:
             artifact_id,
             "approved",
             actor="machine:creative_policy",
-            policy_version="creative_structural_v1",
-            reason="Conforms to pinned curriculum, brand structure and schema only.",
+            policy_version=(
+                "creative_structural_v2"
+                if isinstance(data, dict)
+                and data.get("schema_version")
+                == (3 if record.identity.kind == "episode_spec" else 2)
+                else "creative_structural_v1"
+            ),
+            reason=(
+                "Validated creative structure, source identity and safety; "
+                "editorial review remains."
+            ),
         )

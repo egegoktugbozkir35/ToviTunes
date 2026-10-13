@@ -299,7 +299,8 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
 
 
 def _validate_image(
-    data: bytes, expected_source_dimensions: tuple[int, int] | None = None
+    data: bytes, expected_source_dimensions: tuple[int, int] | None = None,
+    *, allow_near_opaque_alpha: bool = False,
 ) -> Image.Image:
     with Image.open(io.BytesIO(data)) as opened:
         opened.load()
@@ -315,8 +316,18 @@ def _validate_image(
             raise ValueError("provider image is too small for a 1080x1920 plate")
         if abs(image.width / image.height - 9 / 16) > 0.025:
             raise ValueError("provider image is not portrait 9:16")
-        if "A" in image.getbands() and image.getchannel("A").getextrema() != (255, 255):
-            raise ValueError("environment plate contains transparency")
+        if "A" in image.getbands():
+            alpha = ImageStat.Stat(image.getchannel("A"))
+            if (
+                alpha.mean[0] < 250 if allow_near_opaque_alpha
+                else alpha.extrema[0][0] != 255
+            ):
+                raise ValueError("environment plate contains transparency")
+            # Qwen's RGBA VAE has local opacity noise: require >=98% mean
+            # frame opacity before flattening. Pixel minima misclassify noise.
+            # Flatten only this bounded variation; the provider source stays byte-identical.
+            background = Image.new("RGBA", image.size, "white")
+            image = Image.alpha_composite(background, image.convert("RGBA"))
         rgb = image.convert("RGB")
         if max(ImageStat.Stat(rgb.resize((32, 32))).stddev) < 8:
             raise ValueError("environment plate is blank or nearly uniform")
@@ -499,6 +510,9 @@ def generate_set(
                     counts["prepared"] += 1
                     status = "prepared"
                 else:
+                    from tovitunes.render.environment_recovery import reconciled_row
+
+                    row = reconciled_row(db, store, row)
                     request_id, status = row["request_id"], row["status"]
                     if (
                         row["fingerprint"] != fingerprint
@@ -547,12 +561,28 @@ def generate_set(
                 counts["remote_started"] += 1
                 started = True
 
+            def task_accepted(task_id: str) -> None:
+                with closing(db.connect()) as conn, conn:
+                    changed = conn.execute(
+                        "UPDATE environment_requests SET provider_request_id=?,updated_at=? "
+                        "WHERE request_id=? AND status='remote_started' "
+                        "AND (provider_request_id IS NULL OR provider_request_id=?)",
+                        (task_id, _now(), request_id, task_id),
+                    )
+                    if changed.rowcount != 1:
+                        raise ValueError("environment remote identity already differs")
+
             try:
-                result = provider.generate(
-                    spec,
-                    (store.path_for(master_reference_id),) if master_reference_id else (),
-                    on_remote_start=remote_start,
-                )
+                if isinstance(provider, QwenComfyUIImageProvider):
+                    result = provider.generate(
+                        spec, (), on_remote_start=remote_start, on_task_accepted=task_accepted
+                    )
+                else:
+                    result = provider.generate(
+                        spec,
+                        (store.path_for(master_reference_id),) if master_reference_id else (),
+                        on_remote_start=remote_start,
+                    )
                 received_result = result
                 response_metadata = _response_metadata(result)
                 response_metadata["continuity_mode"] = (
@@ -566,9 +596,6 @@ def generate_set(
                 with Image.open(io.BytesIO(result.image_bytes)) as source_image:
                     source_dimensions = (source_image.width, source_image.height)
                 response_metadata["requested_image_size"] = image_size
-                image = _validate_image(result.image_bytes, expected_source_dimensions)
-                response_metadata["normalized_dimensions"] = list(image.size)
-                response_metadata["technical_validation"] = "passed"
                 response_metadata["response_sha256"] = sha256(result.image_bytes).hexdigest()
                 source_record = None
                 source_suffix = SOURCE_SUFFIXES.get(result.mime_type)
@@ -598,6 +625,12 @@ def generate_set(
                         expected_media_type=result.mime_type,
                     )
                     response_metadata["source_artifact_id"] = source_record.identity.artifact_id
+                image = _validate_image(
+                    result.image_bytes, expected_source_dimensions,
+                    allow_near_opaque_alpha=isinstance(provider, QwenComfyUIImageProvider),
+                )
+                response_metadata["normalized_dimensions"] = list(image.size)
+                response_metadata["technical_validation"] = "passed"
                 path = stage / f"{role}.png"
                 image.save(path, format="PNG")
                 normalized_dependencies = []
