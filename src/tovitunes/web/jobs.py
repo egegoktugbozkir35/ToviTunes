@@ -167,6 +167,9 @@ class JobManager:
                 recovery_reference=previous.recovery_reference if previous else None,
                 steps=list(steps_for(target)) if target else [],
                 total_steps=len(steps_for(target)) if target else 0,
+                progress_percent=previous.progress_percent if previous else 0,
+                completed_steps=previous.completed_steps if previous else 0,
+                current_stage=previous.current_stage if previous else None,
             )
             self._jobs[job.job_id] = job
             self._active = job.job_id
@@ -187,6 +190,7 @@ class JobManager:
         try:
             result = runner()
         except Exception as exc:
+            logging.getLogger(__name__).exception("production job %s failed", job_id)
             with self._lock:
                 job.status, job.progress = "failed", "Failed"
                 job.error = safe_error(exc)
@@ -245,6 +249,8 @@ class JobManager:
             job.current_stage = progress.stage
             job.current_substage = progress.detail
             job.progress_percent = progress.percent
+            if progress.stage in job.steps:
+                job.completed_steps = max(job.completed_steps, job.steps.index(progress.stage))
             job.episode_key = progress.episode_key or job.episode_key
             self._save(job)
 

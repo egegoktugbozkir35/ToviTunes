@@ -177,17 +177,58 @@ def safe_production_result(result: dict[str, Any]) -> dict[str, Any]:
                     "recovery_action",
                     "new_prompt_version",
                     "old_attempt_ids",
+                    "subsystem",
+                    "retry_state",
                 )
                 if k in blocker
             }
             category = blocker.get("error_kind")
-            if category in {c.value for c in FailureCategory} | {"chain_exhausted"}:
+            if safe["blocker"].get("subsystem") not in {"illustration", "environment", "renderer"}:
+                safe["blocker"].pop("subsystem", None)
+            if safe["blocker"].get("retry_state") not in {
+                "ambiguous",
+                "requires_recovery",
+                "recoverable",
+                "requires_configuration",
+            }:
+                safe["blocker"].pop("retry_state", None)
+            if category in {c.value for c in FailureCategory} | {
+                "chain_exhausted",
+                "workflow_rejected",
+                "image_provider_failure",
+                "image_processing_failure",
+                "retained_image_failure",
+                "environment_provider_failure",
+                "runtime_incompatible",
+                "renderer_validation",
+            }:
                 safe["blocker"]["error_kind"] = category
         else:
             safe["blocker"] = {}
         # Stage failures can include third-party text. Only our fixed messages cross the API.
         safe["blocker"]["reason"] = (
-            "Legacy visual planning failed. Authorize visual_creative_v2 using the local "
+            "Renderer validation stopped. Inspect the retained scene inputs and local layout "
+            "evidence, then Resume after repair."
+            if safe["blocker"].get("error_kind") == "renderer_validation"
+            else "ComfyUI's CUDA/cuDNN runtime is incompatible. Check the deployed runtime and "
+            "attention backend before authorizing another image attempt."
+            if safe["blocker"].get("error_kind") == "runtime_incompatible"
+            else "ComfyUI illustration generation failed. Inspect the retained image request "
+            "and local execution evidence before authorizing a new attempt."
+            if safe["blocker"].get("error_kind") == "image_provider_failure"
+            else "The returned image could not be admitted. Inspect its retained source "
+            "and media validation evidence before Resume."
+            if safe["blocker"].get("error_kind") == "image_processing_failure"
+            else "A ComfyUI environment request failed. Inspect its retained identity and local "
+            "evidence; uncertain requests cannot be automatically resent."
+            if safe["blocker"].get("error_kind") == "environment_provider_failure"
+            else "ComfyUI rejected the image workflow. Check the deployed nodes and model paths; "
+            "authorize a new attempt only after the retained failure is reconciled."
+            if safe["blocker"].get("error_kind") == "workflow_rejected"
+            else "A retained image request failed. Inspect its request identity and local "
+            "evidence; explicit recovery is required before a new attempt."
+            if safe["blocker"].get("error_kind") == "retained_image_failure"
+            else "Legacy visual planning failed. Authorize visual_creative_v2 using the local "
             "production recover-visual-contract command, then Resume this episode."
             if safe["blocker"].get("recovery_action") == "authorize_visual_v2"
             else "Configured creative model chain exhausted. See the per-model outcomes."

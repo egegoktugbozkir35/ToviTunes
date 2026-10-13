@@ -671,7 +671,10 @@ class ProductionRenderer:
                     with Image.open(pose_path) as pose_sprite:
                         poses.append(pose_keyframe(cue, pose_sprite, pose_id, animation.size[1]))
                     sprite_paths[pose_id] = str(pose_path)
-                animation = attach_poses(animation, tuple(poses), self.canvas)
+                animation = attach_poses(
+                    animation, tuple(poses), self.canvas,
+                    maximum_width=round(self.canvas[0] * composition.character_width),
+                )
                 motion_qa = validate_motion(
                     motion, inputs.alignment, inputs.target_vocabulary, animation, self.canvas
                 )

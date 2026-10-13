@@ -47,8 +47,32 @@ def pose_position(
 
 
 def attach_poses(
-    animation: CharacterAnimation, poses: tuple[PoseKeyframe, ...], canvas: tuple[int, int]
+    animation: CharacterAnimation, poses: tuple[PoseKeyframe, ...], canvas: tuple[int, int],
+    *, maximum_width: int | None = None,
 ) -> CharacterAnimation:
+    if maximum_width is not None and max(p.size[0] for p in poses) > maximum_width:
+        # One perceived height must fit every approved pose in the reserved lane.
+        # Clamping only the anchor can shift a wide pose into the lesson objects.
+        factor = (maximum_width - 1) / max(p.size[0] for p in poses)
+        poses = tuple(p.model_copy(update={
+            "scale": p.scale * factor,
+            "size": (round((p.crop_bbox[2] - p.crop_bbox[0]) * p.scale * factor),
+                     round((p.crop_bbox[3] - p.crop_bbox[1]) * p.scale * factor)),
+        }) for p in poses)
+        old_w, old_h = animation.size
+        size = (
+            round((animation.crop_bbox[2] - animation.crop_bbox[0]) * animation.scale * factor),
+            round((animation.crop_bbox[3] - animation.crop_bbox[1]) * animation.scale * factor),
+        )
+        end = (animation.end_position[0] + (old_w - size[0]) / 2,
+               animation.end_position[1] + old_h - size[1])
+        start = (canvas[0] if animation.start_position[0] >= canvas[0] else -size[0],
+                 animation.start_position[1] + old_h - size[1]) \
+            if animation.motion_type == "enter" else end
+        animation = animation.model_copy(update={
+            "scale": animation.scale * factor, "size": size,
+            "end_position": end, "start_position": start,
+        })
     animation = CharacterAnimation.model_validate(
         {
             **animation.model_dump(),
@@ -115,7 +139,10 @@ def animation_plan(
     center = SLOTS[composition.character_slot]
     end = (w * center[0] - size[0] / 2, h * composition.ground_plane_y - size[1])
     action = composition.resolved_action
-    start = (-size[0], end[1] + h * 0.02) if action == "enter" else end
+    start = (
+        (w if center[0] > 0.5 else -size[0], end[1] + h * 0.02)
+        if action == "enter" else end
+    )
     b0, b1 = scene.beat_index_range
     d0, d1 = scene.downbeat_index_range
     motion: Motion = "bob" if action == "idle" else action  # type: ignore[assignment]
@@ -250,5 +277,7 @@ def validate_layout(plan: CharacterAnimation, canvas: tuple[int, int]) -> None:
         and y + sh <= h * 0.96
     ):
         raise ValueError("Tovi resting bounds exceed safe margins")
-    if plan.motion_type == "enter" and plan.start_position[0] + sw > 0:
+    if plan.motion_type == "enter" and not (
+        plan.start_position[0] + sw <= 0 or plan.start_position[0] >= w
+    ):
         raise ValueError("enter must start at the intentional offscreen edge")

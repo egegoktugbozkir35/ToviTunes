@@ -249,10 +249,22 @@ def connect_offline(config, episode, ids, fake, monkeypatch, red=None, socket_co
     def image_http(request):
         image_events.append(request.url.path)
         if request.url.path == "/prompt":
+            if image_behavior.get("terminal"):
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "type": "prompt_outputs_failed_validation",
+                            "message": "private provider details must not cross the API",
+                        }
+                    },
+                )
             if image_behavior["crash"] == len([x for x in image_events if x == "/prompt"]):
                 raise SystemExit("simulated hard exit before response")
             return httpx.Response(200, json={"prompt_id": f"image-{len(image_events)}"})
         if request.url.path.startswith("/history/"):
+            if image_behavior.get("interrupt_after_accept"):
+                raise SystemExit("interrupted after ComfyUI accepted the task")
             return httpx.Response(
                 200,
                 json={
@@ -273,6 +285,8 @@ def connect_offline(config, episode, ids, fake, monkeypatch, red=None, socket_co
         image = Image.new("RGB", (width, height), "white")
         draw = ImageDraw.Draw(image)
         draw.ellipse((width * 0.2, height * 0.2, width * 0.8, height * 0.8), fill="#246BDF")
+        if height > width and image_behavior.get("environment_alpha") is not None:
+            image.putalpha(image_behavior["environment_alpha"])
         data = io.BytesIO()
         image.save(data, format="PNG")
         return httpx.Response(200, content=data.getvalue())

@@ -97,6 +97,10 @@ def load_v3_evidence(
                 "SELECT * FROM environment_requests WHERE request_id=?",
                 (plate.local_request_id,),
             ).fetchone()
+        if receipt is not None:
+            from tovitunes.render.environment_recovery import reconciled_row
+
+            receipt = reconciled_row(store.database, store, receipt)
         if (
             source.sha256 != plate.source_sha256
             or source.identity.owner_id != episode.episode_id

@@ -211,7 +211,9 @@ class VisualService(StageContext):
                 unresolved = db.execute(
                     "SELECT status,request_id FROM environment_requests "
                     "WHERE episode_id=? "
-                    "AND status NOT IN ('prepared','succeeded') ORDER BY rowid LIMIT 1",
+                    "AND status NOT IN ('prepared','succeeded') "
+                    "AND request_id NOT IN (SELECT request_id FROM "
+                    "environment_source_reconciliations) ORDER BY rowid LIMIT 1",
                     (episode.episode_id,),
                 ).fetchone()
             if unresolved:
@@ -220,7 +222,14 @@ class VisualService(StageContext):
                     if unresolved["status"] in {"remote_started", "ambiguous"}
                     else "FAILED",
                     "Environment interaction requires explicit recovery; no automatic resend",
-                    {"request_id": unresolved["request_id"]},
+                    {
+                        "request_id": unresolved["request_id"],
+                        "subsystem": "environment",
+                        "error_kind": "environment_provider_failure",
+                        "retry_state": "ambiguous"
+                        if unresolved["status"] in {"remote_started", "ambiguous"}
+                        else "requires_recovery",
+                    },
                 )
             shared = None
             if visual.reuse_shared_environment:
@@ -245,9 +254,23 @@ class VisualService(StageContext):
                         assert_owner=self.ownership.assert_owned,
                     )
                 except ProviderFailure as exc:
+                    with closing(self.database.connect()) as db:
+                        failed = db.execute(
+                            "SELECT request_id FROM environment_requests WHERE episode_id=? "
+                            "ORDER BY rowid DESC LIMIT 1",
+                            (episode.episode_id,),
+                        ).fetchone()
                     raise ProductionStop(
                         "AMBIGUOUS" if exc.outcome == "ambiguous" else "FAILED",
                         "Qwen environment generation stopped; inspect the durable request",
+                        {
+                            "request_id": failed[0] if failed else None,
+                            "subsystem": "environment",
+                            "error_kind": "environment_provider_failure",
+                            "retry_state": "ambiguous"
+                            if exc.outcome == "ambiguous"
+                            else "requires_recovery",
+                        },
                     ) from exc
                 aid = str(result["manifest_artifact_id"])
             self.ownership.assert_owned()

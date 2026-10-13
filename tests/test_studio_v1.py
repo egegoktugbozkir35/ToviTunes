@@ -344,6 +344,52 @@ def test_launcher_reuses_healthy_service_and_never_owns_it(context, name):
     supervisor.close()
 
 
+def test_comfy_desktop_discovery_maps_installed_shared_models(context, tmp_path, monkeypatch):
+    import yaml
+
+    local = tmp_path / "Local"
+    root = local / "Comfy-Desktop/ComfyUI-Installs/ComfyUI/ComfyUI"
+    root.mkdir(parents=True)
+    (root / "main.py").touch()
+    python = root / ".venv/Scripts/python.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    shared = local / "Comfy-Desktop/ComfyUI-Shared/models"
+    shared.mkdir(parents=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setenv("TOVITUNES_COMFYUI_HOME", str(root))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    calls = []
+    ready = iter([False, True])
+
+    class Process:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout):
+            return 0
+
+    supervisor = LocalServiceSupervisor(
+        context[0],
+        probe=lambda _: next(ready),
+        spawn=lambda *a, **k: calls.append((a, k)) or Process(),
+    )
+    command, _ = supervisor.discover("comfyui")
+    assert "--extra-model-paths-config" in command
+    model_path = Path(command[-1])
+    assert not model_path.exists()  # Inspection itself is read-only.
+    supervisor.start("comfyui")
+    mapping = yaml.safe_load(model_path.read_text())["tovitunes_comfy_desktop"]
+    assert Path(mapping["base_path"]) / mapping["diffusion_models"] == shared / "diffusion_models"
+    assert mapping["text_encoders"] == "models/text_encoders"
+    assert mapping["vae"] == "models/vae"
+    assert calls[0][0][0] == command
+    supervisor.close()
+
+
 @pytest.mark.parametrize("name", ["ace_step", "comfyui"])
 def test_launcher_starts_missing_service_and_cleans_up_only_owned(context, name, monkeypatch):
     config = context[0]

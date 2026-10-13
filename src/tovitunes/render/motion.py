@@ -390,6 +390,11 @@ def plan_motion(
                 # Keep the side objects in their new outer lanes while they move into
                 # the performance arc; their prior inner x positions graze singing Tovi.
                 prior = (target[0], prior[1])
+            elif story.story_action == "performance" and prior is not None and prop.primary:
+                # A reused ground/display prop must enter the upper performance
+                # lane before traversing Tovi's centered pose, rather than cutting
+                # diagonally through the character from the prior scene's lane.
+                prior = (prior[0], min(prior[1], target[1]))
             visible_last_scene = previous is not None and any(
                 p.prop_key == prop.type for p in previous.prop_tracks
             )
@@ -409,10 +414,17 @@ def plan_motion(
                 )
         elif new and not composition.micro_scene:
             entry: PropMotion = "roll_in" if prop.motion == "roll_in" else "pop_in"
+            entry_duration = min(duration, 0.95 if entry == "roll_in" else 0.4)
+            entry_start = 0.0
+            if story is not None and entry == "pop_in" and (
+                len(composition.props) > 2 or action == "enter" and len(composition.props) > 1
+            ):
+                entry_duration = min(entry_duration, duration / len(composition.props))
+                entry_start = i * entry_duration
             events.append(
                 MotionEvent(
-                    start=0,
-                    end=min(duration, 0.95 if entry == "roll_in" else 0.4),
+                    start=entry_start,
+                    end=entry_start + entry_duration,
                     motion=entry,
                     timing_source="scene_entry",
                 )
@@ -480,7 +492,7 @@ def plan_motion(
             kind="leaf",
             plane="foreground",
             center=(0.96, 0.978),
-            width=0.16,
+            width=0.12,  # Keep the edge accent below the right-side arrival foot envelope.
             drift=-0.009,
             period=10,
             phase=phase,
@@ -514,6 +526,19 @@ def plan_motion(
         )
         offset = previous.clock_offset + scene_start - previous.scene_start
         tracks = [p.model_copy(update={"events": ()}) for p in previous.prop_tracks]
+    if story is not None and story.story_action == "compare" and len(tracks) == 3:
+        arrival_end = max((e.end for p in tracks for e in p.events
+                           if e.timing_source == "scene_entry"), default=0.0)
+        delayed = [roles[0]]
+        for cue_pose in roles[1:]:
+            at = max(cue_pose.time, arrival_end + 0.01, delayed[-1].time + 0.31)
+            if at < duration:
+                delayed.append(cue_pose.model_copy(update={
+                    "time": at,
+                    "timing_source": "scene_fraction" if at != cue_pose.time
+                    else cue_pose.timing_source,
+                }))
+        roles = delayed
     activities: list[ActivityEvent] = []
     if not composition.micro_scene:
         if camera.behavior != "static":
@@ -572,7 +597,7 @@ def plan_motion(
                 motion_group=f"prop:{keyword.prop_key}",
             )
         )
-    return SceneMotionPlan(
+    planned = SceneMotionPlan(
         renderer_version=VISUAL_STORY_VERSION if story else VERSION,
         camera_policy_version="story_camera_v1" if story else "gentle_camera_v1",
         motion_grammar_version="visual_story_motion_v1" if story else "preschool_motion_v1",
@@ -605,6 +630,17 @@ def plan_motion(
         settle_start=settle,
         outro_phases=phases,
     )
+    if activity_diagnostics(planned)["max_simultaneous_major_motion"] > 3:
+        # Optional camera movement yields to admitted keyword timing and object
+        # actions. Keep the same bounded overscan without adding another motion.
+        planned = planned.model_copy(update={
+            "camera_track": camera.model_copy(update={
+                "behavior": "static", "zoom_end": camera.zoom_start,
+                "pan_end": camera.pan_start,
+            }),
+            "activity_events": tuple(a for a in activities if a.channel != "camera"),
+        })
+    return planned
 
 
 def prop_state(
@@ -613,6 +649,8 @@ def prop_state(
     """Center x, bottom y, uniform scale, degrees; base stays on ground except explicit bounce."""
     x0, _, x1, y1 = track.bbox
     x, bottom, scale, angle = (x0 + x1) / 2, y1, 1.0, 0.0
+    if any(e.motion == "pop_in" and t < e.start for e in track.events):
+        scale = 0.75  # Hold the initial pop size until this object's scheduled arrival.
     for event in track.events:
         if event.start <= t <= event.end:
             u = (t - event.start) / (event.end - event.start)

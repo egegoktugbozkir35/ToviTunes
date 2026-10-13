@@ -324,12 +324,30 @@ def plan_continuation(
                                 by_name["VISUAL_ASSETS"]["status"] = "AMBIGUOUS"
                             elif image_request["status"] == "failed":
                                 by_name["VISUAL_ASSETS"]["status"] = "FAILED"
+                            if image_request["status"] in {"failed", "remote_started", "ambiguous"}:
+                                by_name["VISUAL_ASSETS"]["evidence"].update(
+                                    request_id=image_request["request_id"],
+                                    subsystem="illustration",
+                                    error_kind=image_request["error_kind"]
+                                    or "retained_image_failure",
+                                    retry_state="ambiguous"
+                                    if image_request["status"] != "failed"
+                                    else "requires_configuration"
+                                    if image_request["error_kind"]
+                                    in {"workflow_rejected", "runtime_incompatible"}
+                                    else "requires_recovery",
+                                )
                     env_request = (
                         db.execute(
                             "SELECT status,request_id FROM environment_requests "
                             "WHERE episode_id=? "
-                            "AND status NOT IN ('prepared','succeeded') ORDER BY rowid LIMIT "
-                            "1",
+                            "AND status NOT IN ('prepared','succeeded') "
+                            + (
+                                "AND request_id NOT IN (SELECT request_id FROM "
+                                "environment_source_reconciliations) "
+                                if "environment_source_reconciliations" in tables else ""
+                            )
+                            + "ORDER BY rowid LIMIT 1",
                             (eid,),
                         ).fetchone()
                         if "production_image_receipts" in tables
@@ -343,6 +361,11 @@ def plan_continuation(
                             evidence={
                                 "request_id": env_request["request_id"],
                                 "missing_assets": missing,
+                                "subsystem": "environment",
+                                "error_kind": "environment_provider_failure",
+                                "retry_state": "ambiguous"
+                                if env_request["status"] in {"remote_started", "ambiguous"}
+                                else "requires_recovery",
                             },
                         )
                 board_row = artifacts.get(("timed_storyboard", "main"))

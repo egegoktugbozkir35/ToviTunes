@@ -87,6 +87,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     creative_metadata.add_argument("--episode-key", required=True)
     production = subcommands.add_parser("production")
     production_commands = production.add_subparsers(dest="production_command", required=True)
+    production_commands.add_parser("preflight")
+    recover_environment = production_commands.add_parser("reconcile-environment-source")
+    recover_environment.add_argument("--request-id", required=True)
+    recover_environment.add_argument("--source-path", type=Path, required=True)
+    recover_environment.add_argument("--actor", required=True)
+    recover_environment.add_argument("--reason", required=True)
+    retry_image = production_commands.add_parser("retry-image-request")
+    retry_image.add_argument("--request-id", required=True)
+    retry_image.add_argument("--confirm-definitive-failure", action="store_true")
+    retry_image.add_argument("--actor", required=True)
+    retry_image.add_argument("--reason", required=True)
     recover_visual = production_commands.add_parser("recover-visual-contract")
     recover_visual.add_argument("--episode-key", required=True)
     recover_visual.add_argument("--confirm-new-contract", action="store_true")
@@ -277,6 +288,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_parser.add_argument("--rubric", type=Path)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if args.command == "production" and args.production_command == "reconcile-environment-source":
+        from tovitunes.render.environment_recovery import reconcile_environment_source
+
+        try:
+            recovered = reconcile_environment_source(
+                config, args.request_id, args.source_path, actor=args.actor, reason=args.reason,
+            )
+        except (ValueError, KeyError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(recovered, sort_keys=True))
+        return 0
+    if args.command == "production" and args.production_command == "retry-image-request":
+        from tovitunes.render.image_recovery import authorize_image_retry
+
+        try:
+            retry = authorize_image_retry(
+                config, args.request_id, confirmed=args.confirm_definitive_failure,
+                actor=args.actor, reason=args.reason,
+            )
+        except (ValueError, KeyError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(retry, sort_keys=True))
+        return 0
+    if args.command == "production" and args.production_command == "preflight":
+        from tovitunes.preflight import production_preflight
+
+        preflight = production_preflight(config)
+        print(json.dumps(preflight, sort_keys=True))
+        return 0 if preflight["prerequisites_passed"] else 1
     if args.command == "lesson-objects":
         from tovitunes.render.lesson_objects import (
             contact_sheet,

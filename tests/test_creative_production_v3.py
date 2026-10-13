@@ -265,6 +265,251 @@ def retain_music(new):
     return request, inputs
 
 
+def test_definitive_image_retry_preserves_old_request_and_renders(new_case):
+    from tovitunes.persistence.requests import RequestLedger
+    from tovitunes.render.image_recovery import authorize_image_retry
+
+    new = new_case
+    new["image_behavior"]["terminal"] = True
+    failed = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert failed["status"] == "FAILED"
+    request_id = failed["blocker"]["request_id"]
+    with closing(new["store"].database.connect()) as db:
+        before = tuple(
+            db.execute(
+                "SELECT * FROM generation_requests WHERE request_id=?", (request_id,)
+            ).fetchone()
+        )
+    grant = authorize_image_retry(
+        new["config"],
+        request_id,
+        confirmed=True,
+        actor="offline-operator",
+        reason="definitive rejected prompt",
+    )
+    assert (
+        authorize_image_retry(
+            new["config"],
+            request_id,
+            confirmed=True,
+            actor="offline-operator",
+            reason="same evidence",
+        )
+        == grant
+    )
+    new["image_behavior"].pop("terminal")
+    completed = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert completed["target_complete"], completed
+    with closing(new["store"].database.connect()) as db:
+        assert before == tuple(
+            db.execute(
+                "SELECT * FROM generation_requests WHERE request_id=?", (request_id,)
+            ).fetchone()
+        )
+        assert (
+            db.execute(
+                "SELECT parent_request_id FROM generation_requests WHERE request_id=?",
+                (grant["new_request_id"],),
+            ).fetchone()[0]
+            == request_id
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("DELETE FROM image_retry_authorizations")
+    ledger = RequestLedger(new["store"].database)
+    uncertain = ledger.prepare(
+        new["episode"].episode_id,
+        "visual_asset",
+        "uncertain-slot",
+        "qwen_comfyui",
+        "qwen-image-2.1-q8",
+        "f" * 64,
+    )
+    ledger.transition(uncertain.request_id, "remote_started")
+    with pytest.raises(ValueError, match="definitively failed"):
+        authorize_image_retry(
+            new["config"],
+            uncertain.request_id,
+            confirmed=True,
+            actor="offline-operator",
+            reason="must not resend",
+        )
+
+
+def test_accepted_image_task_survives_restart_without_resubmission(new_case):
+    new = new_case
+    new["image_behavior"]["interrupt_after_accept"] = True
+    with pytest.raises(SystemExit):
+        new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    with closing(new["store"].database.connect()) as db:
+        request = db.execute(
+            "SELECT * FROM generation_requests WHERE kind='visual_asset' AND episode_id=?",
+            (new["episode"].episode_id,),
+        ).fetchone()
+    assert request["status"] == "remote_started" and request["provider_request_id"]
+    calls = new["image_events"].count("/prompt")
+    new["image_behavior"].pop("interrupt_after_accept")
+    stopped = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert stopped["status"] == "AMBIGUOUS"
+    assert new["image_events"].count("/prompt") == calls
+
+
+def test_failed_image_studio_projection_retains_progress_and_hides_provider_text(new_case):
+    from tovitunes.web.diagnostics import studio_job
+
+    new = new_case
+    new["image_behavior"]["terminal"] = True
+    failure = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    safe = safe_production_result(failure)
+    job = Job(
+        job_id="offline-image-failure",
+        operation="studio",
+        episode_key=new["episode"].external_key,
+        target=ProductionTarget.RENDER,
+        status="failed",
+        current_stage="VISUAL_ASSETS",
+        submitted_at="2026-01-01",
+        result=safe,
+        blocker=safe["blocker"],
+    )
+    projected = studio_job(new["config"], job)
+    assert projected["progress_percent"] >= 60
+    assert projected["completed_steps"] >= 8
+    assert projected["blocker"]["request_id"] == failure["blocker"]["request_id"]
+    assert projected["creative_diagnostics"]["attempts"] == []
+    assert "private provider details" not in json.dumps(projected)
+    running = job.model_copy(update={"status": "running", "blocker": None})
+    projected = studio_job(new["config"], running)
+    assert projected["result"] is None and projected["blocker"] is None
+    assert projected["progress_percent"] >= 60
+    assert running.result == safe  # Historical evidence is retained.
+
+
+def test_media_diagnostic_projection_uses_only_allowlisted_subsystems_and_retry_states():
+    result = safe_production_result(
+        {
+            "status": "FAILED",
+            "current_stage": "VISUAL_ASSETS",
+            "blocker": {
+                "error_kind": "image_provider_failure",
+                "reason": "Bearer private-provider-body",
+                "subsystem": "Bearer secret",
+                "retry_state": "https://signed-url?token=private",
+            },
+        }
+    )
+    assert "subsystem" not in result["blocker"]
+    assert "retry_state" not in result["blocker"]
+    assert all(secret not in json.dumps(result) for secret in ["Bearer", "signed-url", "private"])
+
+
+def test_structured_renderer_failure_projection_does_not_replan_media(new_case, monkeypatch):
+    from tovitunes.web.diagnostics import studio_job
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("public diagnostic projection must not replay admitted media")
+
+    monkeypatch.setattr("tovitunes.continuation.plan_continuation", unexpected)
+    blocker = safe_production_result({
+        "status": "BLOCKED", "current_stage": "RENDER",
+        "blocker": {"subsystem": "renderer", "error_kind": "renderer_validation",
+                    "retry_state": "recoverable", "reason": "Bearer private error"},
+    })["blocker"]
+    job = Job(
+        job_id="renderer-failure", operation="studio", target=ProductionTarget.RENDER,
+        episode_key=new_case["episode"].external_key, submitted_at="2026-01-01",
+        status="blocked", current_stage="RENDER", progress_percent=76, completed_steps=10,
+        blocker=blocker,
+    )
+    result = studio_job(new_case["config"], job)
+    assert result["progress_percent"] == 76 and result["blocker"] == blocker
+    assert result["creative_diagnostics"]["attempts"] == []
+    assert "Bearer" not in json.dumps(result)
+
+
+def test_environment_returned_source_reconciliation_preserves_failure_and_renders(
+    new_case, monkeypatch, tmp_path
+):
+    from tovitunes.render import environment_sets
+    from tovitunes.render.environment_recovery import reconcile_environment_source
+
+    new = new_case
+    new["image_behavior"]["environment_alpha"] = 254
+    validate = environment_sets._validate_image
+
+    def old_validator(data, dimensions, **kwargs):
+        return validate(data, dimensions)  # Reproduce the deployed pre-repair strict gate.
+
+    monkeypatch.setattr(environment_sets, "_validate_image", old_validator)
+    with pytest.raises(ValueError, match="transparency"):
+        new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    with closing(new["store"].database.connect()) as db:
+        failed = db.execute(
+            "SELECT * FROM environment_requests WHERE episode_id=? AND status='terminal_failure'",
+            (new["episode"].episode_id,),
+        ).fetchone()
+        before = tuple(failed)
+        source_id = db.execute(
+            "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
+            "AND kind='environment_source_plate' AND slot_key=? ORDER BY rowid DESC LIMIT 1",
+            (new["episode"].episode_id, failed["role"]),
+        ).fetchone()[0]
+    monkeypatch.setattr(environment_sets, "_validate_image", validate)
+    path = new["store"].path_for(source_id)
+    bad = tmp_path / "wrong.png"
+    bad.write_bytes(path.read_bytes() + b"wrong")
+    with pytest.raises(ValueError, match="hash or size"):
+        reconcile_environment_source(
+            new["config"], failed["request_id"], bad, actor="offline-operator", reason="repair"
+        )
+    recovered = reconcile_environment_source(
+        new["config"], failed["request_id"], path, actor="offline-operator",
+        reason="Qwen near-opaque alpha normalization repaired",
+    )
+    assert recovered["provider_effects"] == 0
+    result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["target_complete"], result
+    assert new["environment_events"].count("/prompt") == 4
+    with closing(new["store"].database.connect()) as db:
+        assert tuple(db.execute(
+            "SELECT * FROM environment_requests WHERE request_id=?", (failed["request_id"],)
+        ).fetchone()) == before
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute("DELETE FROM environment_source_reconciliations")
+    assert reconcile_environment_source(
+        new["config"], failed["request_id"], path, actor="offline-operator", reason="same repair"
+    ) == recovered
+
+
+def test_qwen_environment_alpha_normalization_is_bounded():
+    import io
+
+    from PIL import Image
+
+    from tovitunes.render.environment_sets import _validate_image
+
+    image = Image.new("RGBA", (768, 1376), (255, 255, 255, 254))
+    image.paste((0, 80, 120, 254), (100, 100, 600, 1000))
+    image.putpixel((0, 0), (255, 255, 255, 215))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    assert _validate_image(
+        buffer.getvalue(), (768, 1376), allow_near_opaque_alpha=True
+    ).mode == "RGB"
+    with pytest.raises(ValueError, match="transparency"):
+        _validate_image(buffer.getvalue(), (768, 1376))
+    image.putalpha(249)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    with pytest.raises(ValueError, match="transparency"):
+        _validate_image(buffer.getvalue(), (768, 1376), allow_near_opaque_alpha=True)
+    image.putalpha(255)
+    image.paste((255, 255, 255, 0), (0, 0, 768, 200))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    with pytest.raises(ValueError, match="transparency"):
+        _validate_image(buffer.getvalue(), (768, 1376), allow_near_opaque_alpha=True)
+
+
 def test_pipeline_repairs_unsupported_adapter_tempo_before_success(new_case):
     new = new_case
     new["fake"].responses["MusicDraft"] = [

@@ -19,7 +19,7 @@ from tovitunes.errors import CreativeChainExhausted, ProductionStop, ProviderErr
 from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.music.providers import MusicProvider
 from tovitunes.persistence.db import Database
-from tovitunes.pipeline.targets import ProductionTarget, stages_for
+from tovitunes.pipeline.targets import ProductionTarget, stages_for, steps_for
 from tovitunes.progress import PipelineProgress, ProgressReporter, report_progress
 from tovitunes.publication.service import PublicationService
 from tovitunes.render.episode_assets import ImageStageBlocked, generate_assets
@@ -201,6 +201,16 @@ class Orchestrator:
                             "generation_attempts": creative_result.get("generation_attempts", []),
                         }
                     stage = plan["next_stage"] or plan["current_stage"]
+                    self._milestone_percent = int(
+                        100
+                        * sum(
+                            5 if s == "CREATIVE" else 1
+                            for s in plan["reusable_stages"]
+                            if s in stages_for(target)
+                        )
+                        / len(steps_for(target))
+                    )
+                    self._progress(stage, "Inspecting retained " + stage.lower(), key)
                     if not plan["allowed"]:
                         raise ProductionStop(
                             plan["status"],
@@ -212,11 +222,6 @@ class Orchestrator:
                             },
                         )
                     stage = plan["next_stage"]
-                    self._milestone_percent = int(
-                        100
-                        * len(set(plan["reusable_stages"]) & set(stages_for(target)))
-                        / len(stages_for(target))
-                    )
                     self._progress(stage, "Running " + stage.lower(), key)
                     if stage == "CREATIVE":
                         with service("context")._creative() as creative:
@@ -338,7 +343,7 @@ class Orchestrator:
                     "run_id": run_id,
                     "blocker": {
                         "reason": str(exc),
-                        **(exc.evidence if isinstance(exc, ProductionStop) else {}),
+                        **exc.evidence,
                     },
                 }
             except ProviderError as exc:

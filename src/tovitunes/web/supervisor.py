@@ -15,6 +15,7 @@ from typing import Any, BinaryIO
 from urllib.parse import urlsplit
 
 import httpx
+import yaml
 
 from tovitunes.config import LocalServiceLaunchConfig, RuntimeConfig
 
@@ -153,14 +154,29 @@ class LocalServiceSupervisor:
                 ]
                 python = next((p for p in candidates if p.is_file()), None)
                 if python and (root / "main.py").is_file():
-                    return [
+                    command = [
                         str(python),
                         str(root / "main.py"),
                         "--listen",
                         "127.0.0.1",
                         "--port",
                         port,
-                    ], root
+                    ]
+                    if os.environ.get("LOCALAPPDATA"):
+                        shared = Path(os.environ["LOCALAPPDATA"]) / "Comfy-Desktop/ComfyUI-Shared"
+                        if root.is_relative_to(Path(os.environ["LOCALAPPDATA"]) / "Comfy-Desktop"):
+                            command.extend(["--use-split-cross-attention", "--cpu-vae"])
+                            if (shared / "models").is_dir():
+                                command.extend(
+                                    [
+                                        "--extra-model-paths-config",
+                                        str(
+                                            self.config.data_root
+                                            / "logs/services/comfy-model-paths.yaml"
+                                        ),
+                                    ]
+                                )
+                    return command, root
         elif name.startswith("ollama"):
             executable = shutil.which("ollama")
             if executable:
@@ -192,6 +208,23 @@ class LocalServiceSupervisor:
                     self._logs.pop(name).close()
                 root = self.config.data_root / "logs/services"
                 root.mkdir(parents=True, exist_ok=True)
+                generated_mapping = str(root / "comfy-model-paths.yaml")
+                if generated_mapping in command[0] and os.environ.get("LOCALAPPDATA"):
+                    shared = Path(os.environ["LOCALAPPDATA"]) / "Comfy-Desktop/ComfyUI-Shared"
+                    mapping = {
+                        "tovitunes_comfy_desktop": {
+                            "base_path": str(shared),
+                            "is_default": True,
+                            "diffusion_models": "models/diffusion_models",
+                            "unet": "models/diffusion_models",
+                            "text_encoders": "models/text_encoders",
+                            "clip": "models/text_encoders",
+                            "vae": "models/vae",
+                        }
+                    }
+                    (root / "comfy-model-paths.yaml").write_text(
+                        yaml.safe_dump(mapping), encoding="utf-8"
+                    )
                 stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
                 log = (root / f"{name}-{stamp}.log").open("ab")
                 self._logs[name] = log

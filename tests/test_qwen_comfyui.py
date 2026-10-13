@@ -98,7 +98,14 @@ def test_prompt_history_view_and_submission_boundary() -> None:
     assert events.count("/prompt") == 1
 
 
-def test_execution_error_is_terminal_and_timeout_is_ambiguous() -> None:
+@pytest.mark.parametrize(
+    "message,category",
+    [
+        ("bad node", "image_provider_failure"),
+        ("CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH", "runtime_incompatible"),
+    ],
+)
+def test_execution_error_is_terminal_and_timeout_is_ambiguous(message, category) -> None:
     spec = _spec("red_ball", "brand-test", white_background=True)
 
     def error(request: httpx.Request) -> httpx.Response:
@@ -111,7 +118,7 @@ def test_execution_error_is_terminal_and_timeout_is_ambiguous() -> None:
                     "status": {
                         "status_str": "error",
                         "completed": False,
-                        "messages": [["execution_error", {"exception_message": "bad node"}]],
+                        "messages": [["execution_error", {"exception_message": message}]],
                     }
                 }
             },
@@ -121,6 +128,7 @@ def test_execution_error_is_terminal_and_timeout_is_ambiguous() -> None:
         QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(error)).generate(spec, ())
     assert failed.value.outcome == "terminal_failure"
     assert failed.value.provider_request_id == "failed-1"
+    assert failed.value.diagnostics["category"] == category
 
     calls = []
     ticks = iter([0.0, 0.0, 2.0])
@@ -238,3 +246,40 @@ def test_comfyui_health_distinguishes_missing_workflow_and_service(tmp_path: Pat
     provider = QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(available))
     assert provider.health()["status"] == "available"
     assert calls[-1] == "/system_stats"
+
+
+def test_deployed_node_schema_preflight_is_read_only_and_detects_missing_models() -> None:
+    schemas = json.loads(Path("tests/fixtures/comfyui_object_info_0392.json").read_text())
+    calls = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json=schemas)
+
+    provider = QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(handle))
+    result = provider.preflight()
+    assert result["status"] == "verified", result
+    assert result["generation"] == "not_verified_without_live_call"
+    schemas["UnetLoaderGGUF"]["input"]["required"]["unet_name"][0] = []
+    schemas["CLIPLoader"]["input"]["required"]["clip_name"][0] = []
+    schemas["VAELoader"]["input"]["required"]["vae_name"][0] = ["pixel_space"]
+    issues = provider.preflight()["issues"]
+    assert len([i for i in issues if i["category"] == "missing_model"]) == 3
+    schemas.pop("TextEncodeQwenImage21")
+    assert any(i["category"] == "missing_node" for i in provider.preflight()["issues"])
+    assert all(method == "GET" and path == "/object_info" for method, path in calls)
+
+
+def test_accepted_prompt_identity_is_retained_before_history_interruption() -> None:
+    identities = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/prompt":
+            return httpx.Response(200, json={"prompt_id": "accepted-before-restart"})
+        assert identities == ["accepted-before-restart"]
+        raise SystemExit("process interrupted after remote acceptance")
+
+    provider = QwenComfyUIImageProvider(WORKFLOW, transport=httpx.MockTransport(handle))
+    with pytest.raises(SystemExit):
+        provider.generate(_spec("red_ball", "brand-test"), (), on_task_accepted=identities.append)
+    assert identities == ["accepted-before-restart"]

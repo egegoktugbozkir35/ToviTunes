@@ -1,5 +1,6 @@
 """ToviTunes render algorithms; application lifecycle belongs to Orchestrator."""
 
+import logging
 from contextlib import closing
 from typing import Any
 
@@ -183,9 +184,17 @@ class RenderService(StageContext):
     def _render(self, episode: Episode) -> dict[str, Any]:
         if self.progress:
             self.progress("RENDER", "Encoding final video or validating retained render")
-        return ProductionRenderer(
-            self.config, local_preview=True, assert_owner=self.ownership.assert_owned
-        ).render(episode.external_key, visual_story=True)
+        try:
+            return ProductionRenderer(
+                self.config, local_preview=True, assert_owner=self.ownership.assert_owned
+            ).render(episode.external_key, visual_story=True)
+        except ValueError as exc:
+            logging.getLogger(__name__).exception("renderer validation failed")
+            raise ProductionStop(
+                "BLOCKED", "Renderer could not admit retained scene inputs or motion",
+                {"subsystem": "renderer", "error_kind": "renderer_validation",
+                 "retry_state": "recoverable"},
+            ) from exc
 
     def _media_qa(self, episode: Episode) -> dict[str, Any]:
         final = self._selected(episode, "final_render", "main_v4")
