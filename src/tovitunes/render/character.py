@@ -47,32 +47,77 @@ def pose_position(
 
 
 def attach_poses(
-    animation: CharacterAnimation, poses: tuple[PoseKeyframe, ...], canvas: tuple[int, int],
-    *, maximum_width: int | None = None,
+    animation: CharacterAnimation,
+    poses: tuple[PoseKeyframe, ...],
+    canvas: tuple[int, int],
+    *,
+    maximum_width: int | None = None,
+    consistent_height: bool = False,
 ) -> CharacterAnimation:
     if maximum_width is not None and max(p.size[0] for p in poses) > maximum_width:
         # One perceived height must fit every approved pose in the reserved lane.
         # Clamping only the anchor can shift a wide pose into the lesson objects.
         factor = (maximum_width - 1) / max(p.size[0] for p in poses)
-        poses = tuple(p.model_copy(update={
-            "scale": p.scale * factor,
-            "size": (round((p.crop_bbox[2] - p.crop_bbox[0]) * p.scale * factor),
-                     round((p.crop_bbox[3] - p.crop_bbox[1]) * p.scale * factor)),
-        }) for p in poses)
+        if consistent_height:
+            # Rounded base fit can differ from the pose height by one pixel after
+            # multiplying their independent scales. Normalize both from one height.
+            height = math.floor(animation.size[1] * factor)
+            poses = tuple(
+                p.model_copy(
+                    update={
+                        "scale": height / (p.crop_bbox[3] - p.crop_bbox[1]),
+                        "size": (
+                            round(
+                                (p.crop_bbox[2] - p.crop_bbox[0])
+                                * height
+                                / (p.crop_bbox[3] - p.crop_bbox[1])
+                            ),
+                            height,
+                        ),
+                    }
+                )
+                for p in poses
+            )
+            factor = height / animation.size[1]
+        poses = (
+            poses
+            if consistent_height
+            else tuple(
+                p.model_copy(
+                    update={
+                        "scale": p.scale * factor,
+                        "size": (
+                            round((p.crop_bbox[2] - p.crop_bbox[0]) * p.scale * factor),
+                            round((p.crop_bbox[3] - p.crop_bbox[1]) * p.scale * factor),
+                        ),
+                    }
+                )
+                for p in poses
+            )
+        )
         old_w, old_h = animation.size
         size = (
             round((animation.crop_bbox[2] - animation.crop_bbox[0]) * animation.scale * factor),
             round((animation.crop_bbox[3] - animation.crop_bbox[1]) * animation.scale * factor),
         )
+        if consistent_height:
+            scale = height / (animation.crop_bbox[3] - animation.crop_bbox[1])
+            size = (round((animation.crop_bbox[2] - animation.crop_bbox[0]) * scale), height)
+        else:
+            scale = animation.scale * factor
         end = (animation.end_position[0] + (old_w - size[0]) / 2,
                animation.end_position[1] + old_h - size[1])
         start = (canvas[0] if animation.start_position[0] >= canvas[0] else -size[0],
                  animation.start_position[1] + old_h - size[1]) \
             if animation.motion_type == "enter" else end
-        animation = animation.model_copy(update={
-            "scale": animation.scale * factor, "size": size,
-            "end_position": end, "start_position": start,
-        })
+        animation = animation.model_copy(
+            update={
+                "scale": scale,
+                "size": size,
+                "end_position": end,
+                "start_position": start,
+            }
+        )
     animation = CharacterAnimation.model_validate(
         {
             **animation.model_dump(),

@@ -11,7 +11,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 from tovitunes.render.character import pose_position, position
 from tovitunes.render.environment import ambient_sprite, halo_sprite
@@ -159,6 +159,18 @@ def build_dynamic_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
             reviewed_asset_path=Path(asset_path) if asset_path else None,
             style_version=payload.get("prop_style_version", "preschool_soft_v1"),
         )
+        if payload["metadata"].get("contact_shadows") and track.grounded:
+            shadow = Image.new("RGBA", (size, max(8, round(size * 0.10))))
+            draw = ImageDraw.Draw(shadow)
+            draw.ellipse((size * 0.16, 1, size * 0.84, shadow.height - 2), fill=(57, 78, 42, 55))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, size * 0.015)))
+            contact = clip_for(shadow).with_position(
+                lambda t, p=track, s=size, sh=shadow.height: (
+                    w * prop_state(p, motion, t)[0] - s / 2,
+                    h * prop_state(p, motion, t)[1] - sh / 2,
+                )
+            )
+            layers.append(contact)
         clip = clip_for(asset).resized(lambda t, p=track: prop_state(p, motion, t)[2])
         if any(e.motion in {"wiggle", "roll_in"} for e in track.events):
             clip = clip.rotated(lambda t, p=track: prop_state(p, motion, t)[3], expand=True)
