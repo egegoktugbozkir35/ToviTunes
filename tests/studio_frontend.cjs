@@ -59,6 +59,14 @@ const response = payload => ({ok:true, headers:{get:()=>"application/json"}, jso
   assert.ok(buttons.every(button => !button.disabled));
   assert.equal(node("#sidebar-status").textContent, "Studio API reachable");
 
+  requests = [];
+  respond = () => new Promise(resolve => { release = resolve; });
+  const library = run("refreshVideos()");
+  assert.equal(library, run("refreshVideos()"));
+  release(response([]));
+  await library;
+  assert.deepEqual(requests, ["/api/studio/library"], "coalesce library navigation refreshes");
+
   run(`state.videos = [{episode_key:"saved", title:"Saved title", category:"renders",
     render_ready:true, draft_ready:true, technical_qa:"passed", publication:{outcome:"not_published"},
     video_url:"/api/media/valid-artifact"}]; renderVideos();`);

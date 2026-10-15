@@ -1,6 +1,6 @@
 "use strict";
 // Visual shell and helpers adapted from ollama-mpt-youtube, commit 1b82232.
-const state = {page: "generate", jobs: [], videos: [], system: null, busy: false, expanded: new Set(), outcomes: new Set(), lastJobSignature: "", submitting: false, jobsFresh: false, jobsRequest: null, systemRequest: null};
+const state = {page: "generate", jobs: [], videos: [], system: null, busy: false, expanded: new Set(), outcomes: new Set(), lastJobSignature: "", submitting: false, jobsFresh: false, jobsRequest: null, videosRequest: null, systemRequest: null};
 const $ = query => document.querySelector(query);
 const els = {toast: $("#toast")};
 let toastTimer = null;
@@ -174,7 +174,13 @@ function renderDashboard() {
   $("#dashboard-activity").innerHTML = state.videos.length ? state.videos.slice(0, 8).map(item => `<div class="activity-row"><div><strong>${escapeHtml(item.title)}</strong><small>${item.historical ? "Historical production" : "ToviTunes"}</small></div><span>${escapeHtml(formatDate(item.created_at))}</span><span class="badge">${escapeHtml(titleCase(item.category))}</span><button class="text-button" data-navigate="videos">View →</button></div>`).join("") : `<div class="empty-state"><span class="empty-glyph">□</span><strong>Your studio is ready for its first lesson</strong><p>Generate a draft to start your saved library.</p></div>`;
 }
 
-async function refreshVideos() { state.videos = await api("/api/studio/library"); renderVideos(); renderDashboard(); }
+function refreshVideos() {
+  if (state.videosRequest) return state.videosRequest;
+  state.videosRequest = (async () => {
+    state.videos = await api("/api/studio/library"); renderVideos(); renderDashboard();
+  })().finally(() => { state.videosRequest = null; });
+  return state.videosRequest;
+}
 function setReadiness(element, text, ready, failed = false) { element.innerHTML = `<span class="mini-dot ${ready ? "ready" : failed ? "error" : ""}"></span>${escapeHtml(text)}`; }
 async function loadSystem() {
   const data = state.system = await api("/api/system");
