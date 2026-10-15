@@ -1,0 +1,222 @@
+{
+  "production_snapshot_equal": true,
+  "production_tables": 52,
+  "production_rows": 3289,
+  "production_artifact_files": 292,
+  "configuration_sha256": "051a7e6ca6f5d649b3eb203af47e2e8330d9274f49296499509375814631ed61",
+  "original_music_wavs_unchanged": true,
+  "episodes": {
+    "yellow": {
+      "all_original_selections_preserved_in_copy": true,
+      "original_selection_count": 238,
+      "generation_requests_unchanged": true,
+      "publication_attempts_unchanged": true,
+      "delivered_mp4_matches_manifest": true,
+      "original_mp4_sha256": "54a78e6e61706d79c69e57bc02e46e0d25977aae67d9b611fa57356753ab53fb",
+      "previous_v1_sha256": "db3ace45492399e0d0f86c993e06c3656dec6451ea6e1c00c9b661ce63fa2ca6",
+      "refined_mp4_sha256": "ff87dbc7a3f09d8a2d19a475d514e226b8f6c3f183baeb6e6e486231c8f070bc",
+      "final_render_id": "f7368d34-2feb-451e-8a56-8444bc1596f0",
+      "render_manifest_id": "bb6e4d23-2852-4091-8705-7aeec2076bf1",
+      "audio_master_artifact_id": "bc915bc1-c1fa-4405-a376-c16deef78d84",
+      "audio_master_sha256": "2caace3c7033c8643167167772cf2ae222faa31e57c401b4f099eff2a57173cc",
+      "renderer_version": "tovitunes_visual_quality_v1_r2",
+      "provider_calls": 0,
+      "publication": "blocked",
+      "qa": {
+        "passed": true,
+        "dimensions": [
+          1080,
+          1920
+        ],
+        "fps": 30.0,
+        "duration": 37.0,
+        "decodes_successfully": true,
+        "errors": []
+      },
+      "framing": {
+        "original": {
+          "dead_space_warnings": 3,
+          "camera_behaviors": [
+            "slow_pull_out",
+            "focus_push",
+            "focus_push",
+            "gentle_pan_left",
+            "slow_pull_out",
+            "slow_push_in"
+          ],
+          "max_motion": 3
+        },
+        "previous_v1": {
+          "advisories": 3,
+          "scenes": 6,
+          "max_major_motion": 3,
+          "vertical_occupancy": [
+            0.4006,
+            0.3125,
+            0.6082,
+            0.3125,
+            0.7772,
+            0.7772
+          ]
+        },
+        "refined": {
+          "advisories": 0,
+          "scenes": 6,
+          "max_major_motion": 2,
+          "vertical_occupancy": [
+            0.3922,
+            0.3829,
+            0.4875,
+            0.3829,
+            0.6572,
+            0.6572
+          ]
+        },
+        "previous_tovi_height_px": [
+          598,
+          600,
+          598,
+          600,
+          541,
+          542
+        ],
+        "refined_tovi_height_px": [
+          695,
+          695,
+          695,
+          695,
+          695,
+          695
+        ]
+      }
+    },
+    "animals": {
+      "all_original_selections_preserved_in_copy": true,
+      "original_selection_count": 238,
+      "generation_requests_unchanged": true,
+      "publication_attempts_unchanged": true,
+      "delivered_mp4_matches_manifest": true,
+      "original_mp4_sha256": "b26e0d494b5c6c605e99a0757e199d30558ee9d4cfbfe0ea435b2de416bcdc3a",
+      "previous_v1_sha256": "e2bb686fe8e810e1efe41c92c03c1a54903e3f06ecbb22e1b4314ceb4c786fc9",
+      "refined_mp4_sha256": "cb550952aa1a12b32c08a9d7b01c432383a6a8024da8ede84744461df7131bb6",
+      "final_render_id": "c83b7a55-b9d0-4944-b8c7-1d97ff872a8e",
+      "render_manifest_id": "f288e970-0eb6-4b7c-9f34-d81cb1c8a9ce",
+      "audio_master_artifact_id": "29330040-8a2f-47e9-abb4-fe399d44e64d",
+      "audio_master_sha256": "9a0f2a4affb6fed7a66db2ab8e7749e8ac8056e12443b41a9eb79c9b3b41a19e",
+      "renderer_version": "tovitunes_visual_quality_v1_r2",
+      "provider_calls": 0,
+      "publication": "blocked",
+      "qa": {
+        "passed": true,
+        "dimensions": [
+          1080,
+          1920
+        ],
+        "fps": 30.0,
+        "duration": 37.0,
+        "decodes_successfully": true,
+        "errors": []
+      },
+      "framing": {
+        "original": {
+          "dead_space_warnings": 5,
+          "camera_behaviors": [
+            "slow_push_in",
+            "gentle_pan_left",
+            "focus_push",
+            "gentle_pan_left",
+            "gentle_pan_right",
+            "gentle_pan_left",
+            "gentle_pan_right",
+            "gentle_pan_left",
+            "slow_push_in",
+            "slow_push_in"
+          ],
+          "max_motion": 3
+        },
+        "previous_v1": {
+          "advisories": 10,
+          "scenes": 10,
+          "max_major_motion": 3,
+          "vertical_occupancy": [
+            0.2823,
+            0.3125,
+            0.4006,
+            0.3125,
+            0.4006,
+            0.3125,
+            0.4006,
+            0.3125,
+            0.3527,
+            0.3527
+          ]
+        },
+        "refined": {
+          "advisories": 0,
+          "scenes": 10,
+          "max_major_motion": 3,
+          "vertical_occupancy": [
+            0.3824,
+            0.3829,
+            0.3911,
+            0.3845,
+            0.3922,
+            0.3829,
+            0.3943,
+            0.3834,
+            0.6297,
+            0.5839
+          ]
+        },
+        "previous_tovi_height_px": [
+          542,
+          600,
+          598,
+          600,
+          600,
+          600,
+          600,
+          600,
+          527,
+          503
+        ],
+        "refined_tovi_height_px": [
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695
+        ]
+      }
+    }
+  },
+  "validation": {
+    "focused": {
+      "passed": 304,
+      "warnings": 1,
+      "duration_seconds": 916.25
+    },
+    "full_offline": {
+      "passed": 1087,
+      "warnings": 1,
+      "duration_seconds": 1476.22
+    },
+    "ruff": "passed",
+    "strict_mypy": {
+      "passed": true,
+      "source_files": 121
+    },
+    "character_pack_lock": {
+      "valid": true,
+      "assets": 48
+    },
+    "historical_manifests": "all six parsed",
+    "final_video_media_qa": "both passed",
+    "independent_full_decode": "both passed"
+  }
+}

@@ -13,6 +13,43 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from PIL import Image
+
+
+def visible_alpha_bounds(image: Image.Image) -> tuple[int, int, int, int]:
+    """Measure the opaque silhouette, ignoring faint shadows and tiny edge outliers.
+
+    Measurement only: callers still render the complete, unchanged source image.
+    Alpha 64 rejects faint matte/shadow pixels; 0.2% cumulative mass per edge
+    prevents an isolated opaque pixel from defining a foot or apparent size.
+    """
+    alpha = image.getchannel("A").point(lambda value: value if value >= 64 else 0)
+    bounds = alpha.getbbox()
+    if bounds is None:
+        raise ValueError("image has no readable alpha silhouette")
+    core = alpha.crop(bounds)
+    axes = []
+    for vertical in (False, True):
+        length = core.height if vertical else core.width
+        masses = []
+        for i in range(length):
+            strip = core.crop((0, i, core.width, i + 1) if vertical
+                              else (i, 0, i + 1, core.height))
+            masses.append(sum(v * count for v, count in enumerate(strip.histogram())))
+        tail = sum(masses) * 0.002
+        start, end = 0, length
+        accumulated = 0
+        while start < end - 1 and accumulated + masses[start] < tail:
+            accumulated += masses[start]
+            start += 1
+        accumulated = 0
+        while end > start + 1 and accumulated + masses[end - 1] < tail:
+            end -= 1
+            accumulated += masses[end]
+        axes.append((start, end))
+    return (bounds[0] + axes[0][0], bounds[1] + axes[1][0],
+            bounds[0] + axes[0][1], bounds[1] + axes[1][1])
+
 
 @dataclass
 class LayoutBox:

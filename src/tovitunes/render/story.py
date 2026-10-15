@@ -256,6 +256,8 @@ def stage_visual_quality(
     composition: SceneComposition,
     display_keys: set[str],
     previous: SceneComposition | None = None,
+    *,
+    visible_bounds: dict[str, tuple[float, float, float, float]] | None = None,
 ) -> SceneComposition:
     """Small staging alternative using admitted object metadata and approved character lanes."""
     if composition.micro_scene and previous:
@@ -269,26 +271,32 @@ def stage_visual_quality(
                                        if p.placement_mode == "display"}
     all_ground = bool(props) and all(p.type not in display_keys and p.grounded for p in props)
     group = count == 3 and all_ground
-    character_slot = "lower_center" if group or not props else "lower_left"
+    character_slot = "lower_left" if props else "lower_center"
     placements = []
     tangible_index = 0
     for i, p in enumerate(props):
         display = p.type in display_keys or not p.grounded
         if group:
-            # Two friends flank Tovi; the third occupies a smaller rear ground plane.
-            x, bottom, width = ((0.16, 0.86, 0.23), (0.84, 0.86, 0.23), (0.84, 0.62, 0.20))[i]
+            # One supported foreground row, with Tovi visibly presenting the group.
+            x, bottom, width = ((0.81, 0.87, 0.29), (0.50, 0.87, 0.28),
+                                (0.19, 0.87, 0.28))[i]
         elif count == 1:
-            x, bottom, width = 0.78, 0.86, 0.34
+            x, bottom, width = 0.785, 0.76, 0.34
         elif all_ground:
-            x, bottom, width = 0.78, (0.86, 0.60)[i], (0.34, 0.25)[i]
+            x, bottom, width = 0.785, (0.76, 0.52)[i], (0.34, 0.27)[i]
         elif not display:
-            x, bottom, width = 0.78, (0.86, 0.60)[tangible_index], (0.34, 0.25)[tangible_index]
+            x, bottom, width = 0.785, (0.76, 0.52)[tangible_index], (0.34, 0.27)[tangible_index]
             tangible_index += 1
         else:
-            x, bottom, width = 0.78, (0.72, 0.48, 0.24)[i], (0.32, 0.30, 0.28)[i]
+            x, bottom, width = 0.785, (0.72, 0.48, 0.24)[i], (0.34, 0.30, 0.28)[i]
         center_y = bottom - width * 9 / 32 if display else bottom
         if count == 1 and display:
             center_y = 0.36
+        if not display and visible_bounds and p.type in visible_bounds:
+            # Reserve/check the complete source square. Place its readable feet on
+            # the intended support without cropping artwork or deleting faint detail.
+            bottom += (1 - visible_bounds[p.type][3]) * width * 9 / 16
+            center_y = bottom
         placement = p.model_copy(
             update={
                 "center": (x, center_y),
@@ -313,11 +321,15 @@ def stage_visual_quality(
         update={
             "props": tuple(placements),
             "character_slot": character_slot,
-            "character_width": 0.39 if group else 0.42,
+            "character_width": 0.54 if props else 0.68,
             "character_height": 0.48,
-            "character_facing": "right" if props and not group else "none",
+            "ground_plane_y": 0.65 if group else 0.74,
+            "character_facing": "right" if props else "none",
             # A farewell wave in a gathered group should not traverse a friend.
-            "resolved_action": "present" if group and composition.resolved_action == "enter"
+            "resolved_action": "present" if (
+                composition.resolved_action == "question"
+                or composition.resolved_action == "enter" and (group or previous is not None)
+            )
             else composition.resolved_action,
             "composition_style": "surface_group"
             if group

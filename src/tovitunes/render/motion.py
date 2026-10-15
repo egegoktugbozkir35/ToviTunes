@@ -15,7 +15,11 @@ from pydantic import Field, model_validator
 from tovitunes.domain.production_v3 import AudioClock
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, ProductionModel
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
-from tovitunes.render.composition import VISUAL_QUALITY_VERSION, SceneComposition
+from tovitunes.render.composition import (
+    LEGACY_VISUAL_QUALITY_VERSION,
+    VISUAL_QUALITY_VERSION,
+    SceneComposition,
+)
 from tovitunes.render.models import CharacterAnimation, SpriteRole
 from tovitunes.render.story import VisualStoryPlan
 
@@ -301,6 +305,26 @@ def plan_motion(
             t, source = cue((i + 1) / (len(sequence) + 1))
             if t > roles[-1].time + 0.3 and role != roles[-1].sprite_role:
                 roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
+    if visual_quality and composition.props and not composition.micro_scene and duration > 1.8:
+        # Discover, acknowledge, then hold the presentation. These are honest approved
+        # poses; fractions are scene timing, never invented speech or music cues.
+        if composition.sprite_role != "sprite/hello":
+            roles = [PoseCue(time=0, sprite_role="sprite/neutral_full_body",
+                             timing_source="initial")]
+        else:
+            roles = roles[:1]
+        progression: tuple[tuple[float, SpriteRole], ...] = (
+            (0.24, "sprite/pointing"),
+            (0.42 if action == "sing" else 0.82,
+             "sprite/singing" if action == "sing" else "sprite/neutral_full_body"),
+        )
+        if action == "celebrate":
+            progression = ((0.24, "sprite/pointing"), (0.60, "sprite/hopping"),
+                           (0.90, "sprite/neutral_full_body"))
+        for fraction, role in progression:
+            t, source = cue(fraction)
+            if t > roles[-1].time + 0.3:
+                roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
     phases = tuple((p.name, p.start, p.end) for p in composition.outro_phases)
     settle = phases[-1][1] if phases else None
     if settle is not None:
@@ -466,7 +490,7 @@ def plan_motion(
                 )
             )
         if not composition.micro_scene and duration > 2.5 and (not visual_quality or prop.primary):
-            fraction = (i + 1) / (len(composition.props) + 1)
+            fraction = 0.38 if visual_quality else (i + 1) / (len(composition.props) + 1)
             t, source = cue(fraction)
             if phases:
                 t = phases[1][1] + (phases[1][2] - phases[1][1]) * fraction
@@ -648,12 +672,12 @@ def plan_motion(
         else VISUAL_STORY_VERSION
         if story
         else VERSION,
-        camera_policy_version="focal_hold_v1"
+        camera_policy_version="focal_hold_v1_r2"
         if visual_quality
         else "story_camera_v1"
         if story
         else "gentle_camera_v1",
-        motion_grammar_version="surface_focus_v1"
+        motion_grammar_version="surface_focus_v1_r2"
         if visual_quality
         else "visual_story_motion_v1"
         if story
@@ -888,7 +912,7 @@ def validate_motion(
             ):
                 raise ValueError("rolling object loses ground contact")
             if (
-                plan.renderer_version == VISUAL_QUALITY_VERSION
+                plan.renderer_version in {LEGACY_VISUAL_QUALITY_VERSION, VISUAL_QUALITY_VERSION}
                 and prop.grounded
                 and not any(
                     e.motion in {"fall_in", "bounce_settle", "gentle_bounce"}

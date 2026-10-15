@@ -1,5 +1,7 @@
 # Visual Quality V1 review
 
+**Current revision:** see [the framing refinement and three-way comparisons](VISUAL_QUALITY_V1_REFINEMENT.md). The account below preserves the first V1 iteration and its historical preview identities. That iteration was not accepted as the production default; its sparse-framing regression is addressed in the refinement.
+
 This opt-in V3 preview strategy corrects unsupported animal placement, enlarges teaching objects and adds quieter focal motion. It preserves the accepted production renderer and all retained sources. Both real previews passed full-resolution media QA; visual improvement is demonstrated in the comparisons below. It does not resolve every art or framing concern.
 
 Baseline: `f78dcdf1ebb19865552748023b8c9a91bf4829ba`, the draft, unmerged PR #44 feature branch. Review branch: `codex/visual-quality-v1`; stacked PR targets `refactor/creative-production-v3`. No merge, live image request, music request or YouTube operation was performed.

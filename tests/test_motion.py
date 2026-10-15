@@ -121,6 +121,44 @@ def animation():
     )
 
 
+def test_refined_presence_and_subject_reactions_keep_complete_motion_envelopes(evidence):
+    from tovitunes.render.story import plan_story, stage_visual_quality
+
+    alignment, beats = evidence
+    sprite = Image.new("RGBA", (84, 100), (40, 140, 230, 255))
+    heights = []
+    for count, displays, action in ((1, set(), "present"), (2, set(), "question"),
+                                     (3, set(), "sing"), (1, {"shape_0"}, "point")):
+        definitions = {f"shape_{i}": PropDefinition() for i in range(count)}
+        raw = resolve_composition(CompositionRequest("generic", 0, 6, action,
+                                                    tuple(definitions)),
+                                  prop_definitions=definitions)
+        comp = stage_visual_quality(raw, displays)
+        plan = plan_motion(comp, 0, 6, "story", beats, alignment, ("blue",),
+                           visual_quality=True, story=plan_story(comp, 6, definitions, set()))
+        scene = TimedScene(scene_id="lyric_001", kind="lyric", start=0, end=6,
+                           visual_focus="readable subject", section="lesson",
+                           lyric_start=0, lyric_end=5.5, lyric_text="Blue! kite blue blue",
+                           lesson_target="blue",
+                           tovi_action=action, required_props=tuple(definitions),
+                           beat_index_range=(0, 12), downbeat_index_range=(0, 3))
+        height = int(1080 * comp.character_width / 0.84) - 1
+        char = animation_plan(scene, sprite, "approved", beats, (1080, 1920), "story", comp,
+                              height_limit=0.48, perceived_height=height)
+        char = attach_poses(char, tuple(pose_keyframe(c, sprite, "approved", height)
+                                       for c in plan.character_pose_sequence), (1080, 1920),
+                            maximum_width=round(1080 * comp.character_width),
+                            consistent_height=True)
+        heights.append(char.size[1])
+        assert char.size[1] > 690  # Previous 0.42 lane permitted only 540px for this pose.
+        assert comp.character_facing == "right"
+        assert comp.props[0].center[0] > 0.32
+        assert plan.character_pose_sequence[1].sprite_role == "sprite/pointing"
+        qa = validate_motion(plan, alignment, ("blue",), char, (1080, 1920))
+        assert qa["max_simultaneous_major_motion"] <= 3
+    assert len(set(heights)) == 1
+
+
 def test_plan_deterministic_and_json_roundtrip(evidence):
     first, second = motion(evidence), motion(evidence)
     assert "visual_story_plan_artifact_id" not in first.model_dump(mode="json")

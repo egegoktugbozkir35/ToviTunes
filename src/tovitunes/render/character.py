@@ -149,6 +149,7 @@ def animation_plan(
     composition: SceneComposition | None = None,
     *,
     height_limit: float = 0.40,
+    perceived_height: int | None = None,
 ) -> CharacterAnimation:
     if scene.tovi_action not in ACTION_ROLES:
         raise ValueError("unsupported Tovi action")
@@ -180,6 +181,12 @@ def animation_plan(
         mode="contain",
     )
     scale = min(box.out_w / cw, box.out_h / ch)
+    if perceived_height is not None:
+        # Opt-in staging reserves the full approved pose family, so a later wave
+        # or singing pose cannot shrink Tovi relative to the preceding scene.
+        if not 0 < perceived_height <= round(h * height_limit):
+            raise ValueError("perceived character height exceeds reserved envelope")
+        scale = perceived_height / ch
     size = (round(cw * scale), round(ch * scale))
     center = SLOTS[composition.character_slot]
     end = (w * center[0] - size[0] / 2, h * composition.ground_plane_y - size[1])

@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from tovitunes.render.character import pose_position, position
 from tovitunes.render.environment import ambient_sprite, halo_sprite
+from tovitunes.render.layout import visible_alpha_bounds
 from tovitunes.render.models import CharacterAnimation
 from tovitunes.render.motion import SceneMotionPlan, camera_state, prop_state, smooth
 from tovitunes.render.props import prop_image
@@ -160,14 +161,21 @@ def build_dynamic_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
             style_version=payload.get("prop_style_version", "preschool_soft_v1"),
         )
         if payload["metadata"].get("contact_shadows") and track.grounded:
+            # Historical V1 keeps its canvas anchor. Refined previews measure the
+            # complete rendered image's readable feet; source pixels remain intact.
+            core = visible_alpha_bounds(asset) if motion.renderer_version.endswith("v1_r2") else (
+                0, 0, size, size
+            )
+            foot_gap = size - core[3]
+            foot_x = (core[0] + core[2]) / 2 - size / 2
             shadow = Image.new("RGBA", (size, max(8, round(size * 0.10))))
             draw = ImageDraw.Draw(shadow)
             draw.ellipse((size * 0.16, 1, size * 0.84, shadow.height - 2), fill=(57, 78, 42, 55))
             shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, size * 0.015)))
             contact = clip_for(shadow).with_position(
-                lambda t, p=track, s=size, sh=shadow.height: (
-                    w * prop_state(p, motion, t)[0] - s / 2,
-                    h * prop_state(p, motion, t)[1] - sh / 2,
+                lambda t, p=track, s=size, sh=shadow.height, gap=foot_gap, dx=foot_x: (
+                    w * prop_state(p, motion, t)[0] - s / 2 + dx * prop_state(p, motion, t)[2],
+                    h * prop_state(p, motion, t)[1] - gap * prop_state(p, motion, t)[2] - sh / 2,
                 )
             )
             layers.append(contact)

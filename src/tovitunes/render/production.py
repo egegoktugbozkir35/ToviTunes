@@ -64,6 +64,7 @@ from tovitunes.render.ffmpeg import (
     probe,
     run_process,
 )
+from tovitunes.render.layout import visible_alpha_bounds
 from tovitunes.render.models import RenderManifest, RenderManifestV2, SceneRender
 from tovitunes.render.motion import SceneMotionPlan, plan_motion, prop_state, validate_motion
 from tovitunes.render.props import png_info, scene_art, validate_props
@@ -531,6 +532,25 @@ class ProductionRenderer:
             prepared: dict[str, tuple[SceneComposition, VisualStoryPlan]] = {}
             story_record: ArtifactRecord | None = None
             continuity_positions: dict[str, tuple[float, float]] = {}
+            visible_bounds: dict[str, tuple[float, float, float, float]] = {}
+            pose_aspect = 1.0
+            if self.visual_quality:
+                for key, path in lesson_asset_paths.items():
+                    with Image.open(path) as asset_image:
+                        b = visible_alpha_bounds(asset_image)
+                        visible_bounds[key] = (
+                            b[0] / asset_image.width, b[1] / asset_image.height,
+                            b[2] / asset_image.width, b[3] / asset_image.height,
+                        )
+                aspects = []
+                for approved_role in set(ACTION_ROLES.values()):
+                    pose_path = store.path_for(inputs.pack.asset_artifact_ids[approved_role])
+                    with Image.open(pose_path) as p:
+                        box = p.getchannel("A").getbbox()
+                        if box is None:
+                            raise ValueError("approved pose has no visible alpha")
+                        aspects.append((box[2] - box[0]) / (box[3] - box[1]))
+                pose_aspect = max(aspects)
             if environment_selection is not None:
                 environment, environment_id = environment_selection
                 prior: SceneComposition | None = None
@@ -611,7 +631,9 @@ class ProductionRenderer:
                                 for intent in intents
                             )
                         }
-                        staged = stage_visual_quality(staged, display_keys, prior)
+                        staged = stage_visual_quality(
+                            staged, display_keys, prior, visible_bounds=visible_bounds
+                        )
                         planned_story = planned_story.model_copy(
                             update={"version": VISUAL_QUALITY_VERSION,
                                     "character_intent": staged.resolved_action}
@@ -735,6 +757,11 @@ class ProductionRenderer:
                         sid,
                         composition,
                         height_limit=0.48 if environment_selection else 0.38,
+                        perceived_height=(
+                            int(min(self.canvas[1] * 0.48,
+                                    self.canvas[0] * composition.character_width / pose_aspect)) - 1
+                            if self.visual_quality else None
+                        ),
                     )
                 if environment_selection:
                     animation = animation.model_copy(update={"renderer_version": renderer_version})
@@ -859,6 +886,31 @@ class ProductionRenderer:
                         "pose_changes": max(0, len(motion.character_pose_sequence) - 1),
                         "keyword_events": len(motion.keyword_emphasis_events),
                     }
+                    if self.visual_quality:
+                        visible_props = []
+                        for track in motion.prop_tracks:
+                            bx0, by0, bx1, by1 = track.bbox
+                            v = visible_bounds[track.prop_key]
+                            visible_props.append((
+                                bx0 + v[0] * (bx1 - bx0), by0 + v[1] * (by1 - by0),
+                                bx0 + v[2] * (bx1 - bx0), by0 + v[3] * (by1 - by0),
+                            ))
+                        story_diagnostics["visible_prop_bboxes"] = visible_props
+                        # Keep the historical occupancy above, with its unchanged threshold.
+                        # Additional decoded-silhouette diagnostics do not replace that metric.
+                        with Image.open(sprite_path) as sprite_image:
+                            b = visible_alpha_bounds(sprite_image)
+                        crop = animation.crop_bbox
+                        visible_character = (
+                            (x + (b[0] - crop[0]) * animation.scale) / w,
+                            (y + (b[1] - crop[1]) * animation.scale) / h,
+                            (x + (b[2] - crop[0]) * animation.scale) / w,
+                            (y + (b[3] - crop[1]) * animation.scale) / h,
+                        )
+                        story_diagnostics["visible_character_bbox"] = visible_character
+                        story_diagnostics["visible_silhouette_occupancy"] = occupancy(
+                            visible_character, tuple(visible_props)
+                        )
                 deterministic.append(
                     {
                         "scene_id": scene.scene_id,
@@ -950,14 +1002,14 @@ class ProductionRenderer:
             manifest = manifest_type(
                 **{**timing_fields, "renderer_version": renderer_version},
                 camera_policy_version=(
-                    "focal_hold_v1"
+                    "focal_hold_v1_r2"
                     if self.visual_quality
                     else "story_camera_v1"
                     if environment_selection
                     else "gentle_camera_v1"
                 ),
                 motion_grammar_version=(
-                    "surface_focus_v1"
+                    "surface_focus_v1_r2"
                     if self.visual_quality
                     else "visual_story_motion_v1"
                     if environment_selection
