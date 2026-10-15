@@ -434,7 +434,7 @@ def test_studio_system_exit_recovers_reserved_run_without_restart(production, mo
             job_id = response.json()["job_id"]
             # Wait for the actual worker Future, not a status projection or a restart.
             with pytest.raises(SystemExit):
-                futures[-1].result(timeout=10)
+                futures[-1].result(timeout=60)
             job = manager.get(job_id)
             assert job.status == "interrupted" and job.progress == "Interrupted"
             assert job.finished_at and manager._active is None
@@ -469,14 +469,14 @@ def test_studio_system_exit_recovers_reserved_run_without_restart(production, mo
             # Recovery is accepted immediately even while the failed stage is still installed.
             assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
             with pytest.raises(SystemExit):
-                futures[-1].result(timeout=10)
+                futures[-1].result(timeout=60)
             interrupted = manager.get(job_id)
             assert interrupted.status == "interrupted" and interrupted.execution == 2
             assert interrupted.recovery_reference == reference and interrupted.result is None
             assert snapshot(database) == retained and calls == [CHAIN[0]]
             monkeypatch.setattr(CreativeService, "_reserve_brief", original)
             assert client.post(f"/api/studio/jobs/{job_id}/recover").status_code == 202
-            futures[-1].result(timeout=10)
+            futures[-1].result(timeout=60)
             recovered = manager.get(job_id)
             assert app.state.jobs is manager  # The original application/manager stayed alive.
             assert recovered.status == "complete" and recovered.execution == 3

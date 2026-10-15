@@ -46,7 +46,10 @@ def test_frontend_refresh_and_review_behavior():
 
 
 def wait(manager, job_id):
-    for _ in range(500):
+    # Windows CI can spend several seconds on durable fixture I/O. This observes
+    # completion, not a production latency guarantee; keep the wait bounded.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
         job = manager.get(job_id)
         if job.status not in {"queued", "running"}:
             return job
@@ -102,6 +105,9 @@ def test_render_real_mp4_reuses_draft_and_publish_does_not_rerender(case, monkey
     app = web_app.create_app(
         case["config"], supervisor=LocalServiceSupervisor(case["config"], probe=lambda _: False)
     )
+    # The case denies all socket connects. Windows asyncio needs its internal
+    # loopback socketpair; restore the existing local-only test network guard.
+    monkeypatch.setattr("socket.socket.connect", case["socket_connect"])
     with TestClient(app, base_url="http://127.0.0.1:8766") as client:
         media = client.get(item["video_url"], headers={"Range": "bytes=0-15"})
         assert media.status_code == 206 and media.content[4:8] == b"ftyp"
