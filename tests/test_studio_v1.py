@@ -1,6 +1,8 @@
 """Studio targets, durable recovery and one-click supervision, entirely offline."""
 
 import json
+import shutil
+import subprocess
 import threading
 import time
 from contextlib import closing
@@ -33,6 +35,14 @@ from tovitunes.web.supervisor import LocalServiceSupervisor
 
 case = test_short_production.case
 pytest_plugins = ("test_web_youtube_v1",)
+
+
+def test_frontend_refresh_and_review_behavior():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node required for lightweight frontend behavioral checks")
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run([node, "tests/studio_frontend.cjs"], cwd=root, check=True, timeout=30)
 
 
 def wait(manager, job_id):
@@ -87,6 +97,15 @@ def test_render_real_mp4_reuses_draft_and_publish_does_not_rerender(case, monkey
     assert (
         next(i for i in library(case["config"]) if i["episode_key"] == key)["category"] == "renders"
     )
+    item = next(i for i in library(case["config"]) if i["episode_key"] == key)
+    assert item["technical_qa"] == "passed" and item["media_status"] == "available"
+    app = web_app.create_app(
+        case["config"], supervisor=LocalServiceSupervisor(case["config"], probe=lambda _: False)
+    )
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        media = client.get(item["video_url"], headers={"Range": "bytes=0-15"})
+        assert media.status_code == 206 and media.content[4:8] == b"ftyp"
+    app.state.jobs.close()
     with closing(case["store"].database.connect()) as db:
         selections = [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")]
         assert not db.execute("SELECT 1 FROM publication_attempts").fetchone()
@@ -213,7 +232,7 @@ def test_progress_is_monotonic_target_specific_and_live(target):
     manager.close()
 
 
-def test_job_restart_reconstructs_interrupted_task(context):
+def test_job_restart_reconstructs_interrupted_task(context, monkeypatch):
     database = context[1]
     job = Job(
         job_id="persisted",
@@ -230,6 +249,15 @@ def test_job_restart_reconstructs_interrupted_task(context):
     restored = manager.get(job.job_id)
     assert restored.episode_key == job.episode_key and restored.target == job.target
     assert restored.status == "interrupted" and restored.recovery_action == "resume"
+    monkeypatch.setattr(
+        "tovitunes.continuation.plan_continuation",
+        lambda *a, **k: {"reusable_stages": [], "status": "AMBIGUOUS",
+                        "current_stage": "VISUAL_ASSETS", "blocker": {
+                            "request_id": "retained-request", "retry_state": "ambiguous"}},
+    )
+    projected = studio_job(context[0], restored)
+    assert projected["recovery_action"] is None
+    assert projected["blocker"]["request_id"] == "retained-request"
     manager.close()
 
 
@@ -620,3 +648,64 @@ def test_system_reports_channel_mismatch_without_repeated_remote_calls(context, 
             assert client.get("/api/system").json()["services"]["youtube"]["status"] == "mismatch"
         assert calls == [config.expected_youtube_channel_id]
     app.state.jobs.close()
+
+
+def test_partial_readiness_distinguishes_configuration_from_generation(context, monkeypatch):
+    config = context[0]
+    monkeypatch.setenv(config.creative_llm.api_key_env, "private-test-key")
+    supervisor = LocalServiceSupervisor(config, probe=lambda _: True)
+    monkeypatch.setattr(
+        "tovitunes.preflight.production_preflight",
+        lambda _: pytest.fail("full production check must be explicit and bounded"),
+    )
+    app = web_app.create_app(config, supervisor=supervisor)
+    with TestClient(app, base_url="http://127.0.0.1:8766") as client:
+        for _ in range(2):
+            report = client.get("/api/system").json()
+            assert report["readiness_scope"] == "partial_configuration_and_health"
+            assert report["generation_verified"] is False
+            assert report["services"]["creative_director"]["status"] == "configured"
+            assert report["services"]["ace_step"]["verification"] == "endpoint_reachable"
+            assert report["services"]["comfyui"]["verification"] == "endpoint_reachable"
+            assert "private-test-key" not in json.dumps(report)
+        monkeypatch.delenv(config.creative_llm.api_key_env)
+        report = client.get("/api/system").json()
+        assert report["services"]["creative_director"]["status"] == "configuration issue"
+    app.state.jobs.close()
+
+
+def test_missing_selected_video_never_has_a_playback_link(ready):
+    (config, _, episode, store), render, _, _ = ready
+    assert evaluate_release(config, episode.external_key).render_ready
+    store.path_for(render.identity.artifact_id).unlink()
+    item = next(i for i in library(config) if i["episode_key"] == episode.external_key)
+    assert item["video_url"] is None and item["media_status"] == "unavailable"
+    assert not item["render_ready"]
+
+
+def test_resumed_execution_does_not_reset_retained_milestones():
+    manager = JobManager()
+
+    def first():
+        manager.update_progress(
+            PipelineProgress(stage="VISUAL_ASSETS", detail="RUNNING", percent=60,
+                             episode_key="retained-episode")
+        )
+        return {"status": "BLOCKED", "episode_key": "retained-episode"}
+
+    job = manager.submit("studio", None, first, target=ProductionTarget.RENDER)
+    retained = wait(manager, job.job_id)
+
+    def resumed():
+        manager.update_progress(PipelineProgress(stage="CREATIVE", detail="RUNNING", percent=0))
+        current = manager.get(job.job_id)
+        assert current.progress_percent == 60
+        assert current.completed_steps == retained.completed_steps
+        return {"status": "COMPLETE", "episode_key": "retained-episode"}
+
+    manager.submit("studio", "retained-episode", resumed,
+                   target=ProductionTarget.RENDER, resume_job_id=job.job_id)
+    completed = wait(manager, job.job_id)
+    assert completed.status == "complete" and completed.execution == 2
+    assert completed.episode_key == "retained-episode"
+    manager.close()

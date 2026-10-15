@@ -78,6 +78,17 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 draft = None
         release = evaluate_release(config, key)
         render_ready = plan["render_ready"]
+        video_url = None
+        if render_ready and release.render_artifact_id:
+            try:
+                record = store.get(release.render_artifact_id)
+                # Continuation already verified selected media. Human publication review
+                # must not prevent watching a local render in order to perform that review.
+                if record.mime_type == "video/mp4":
+                    video_url = f"/api/media/{record.identity.artifact_id}"
+            except (KeyError, ValueError, OSError):
+                pass
+        qa = next((c for c in release.checks if c.name == "media_qa_passed"), None)
         history = PublicationService(config).history(row["episode_id"])
         successful = next((p for p in history if p.get("youtube_video_id")), None)
         at_target = plan["target_complete"]
@@ -114,11 +125,14 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 (row["episode_id"],),
             ).fetchall()
         for preview in previews:
-            if preview["mime_type"] in {"image/png", "image/jpeg", "image/webp"} and (
-                store.inspect(preview["artifact_id"]).valid
-            ):
-                preview_url = f"/api/media/{preview['artifact_id']}"
-                break
+            try:
+                if preview["mime_type"] in {"image/png", "image/jpeg", "image/webp"} and (
+                    store.inspect(preview["artifact_id"]).valid
+                ):
+                    preview_url = f"/api/media/{preview['artifact_id']}"
+                    break
+            except (KeyError, ValueError, OSError):
+                continue
         result.append(
             {
                 "episode_key": key,
@@ -130,7 +144,9 @@ def library(config: RuntimeConfig) -> list[dict[str, Any]]:
                 "publication": publication,
                 "historical": bool(plan.get("historical")),
                 "final_render_artifact_id": release.render_artifact_id if render_ready else None,
-                "video_url": f"/api/media/{release.render_artifact_id}" if render_ready else None,
+                "video_url": video_url,
+                "media_status": "available" if video_url else "unavailable",
+                "technical_qa": "passed" if qa and qa.passed else "failed" if qa else "unavailable",
                 "preview_url": preview_url,
                 "draft": draft,
                 "blocker": safe_production_result(plan).get("blocker", {}).get("reason"),

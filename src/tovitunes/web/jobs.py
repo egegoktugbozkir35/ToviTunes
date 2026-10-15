@@ -248,7 +248,7 @@ class JobManager:
             job.progress = progress.detail
             job.current_stage = progress.stage
             job.current_substage = progress.detail
-            job.progress_percent = progress.percent
+            job.progress_percent = max(job.progress_percent, progress.percent)
             if progress.stage in job.steps:
                 job.completed_steps = max(job.completed_steps, job.steps.index(progress.stage))
             job.episode_key = progress.episode_key or job.episode_key

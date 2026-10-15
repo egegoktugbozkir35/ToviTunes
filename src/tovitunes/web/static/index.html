@@ -91,8 +91,9 @@
                   <span class="eyebrow">Queue monitor</span>
                   <h2 id="job-heading">Current job</h2>
                 </div>
-                <span class="live-indicator"><i></i> Live</span>
+                <span class="live-indicator"><i></i> Job status</span>
               </div>
+              <p class="availability-note" id="job-connection" role="status" hidden>Job refresh unavailable. Showing the last retained status; submissions are paused until reconnection.</p>
               <div class="empty-state" id="current-job">
                 <span class="empty-glyph" aria-hidden="true">◇</span>
                 <strong>No active job</strong>
@@ -104,7 +105,7 @@
             <section class="panel readiness-panel" aria-labelledby="readiness-heading">
               <div class="panel-heading compact">
                 <div>
-                  <span class="eyebrow">Preflight signals</span>
+                  <span class="eyebrow">Partial configuration checks</span>
                   <h2 id="readiness-heading">System readiness</h2>
                 </div>
               </div>
@@ -134,6 +135,7 @@
         <section class="panel videos-panel">
           <div class="panel-heading video-heading">
             <div><span class="eyebrow">Persisted production</span><h2>Videos</h2></div>
+            <button class="button" id="videos-refresh" type="button">Refresh Videos</button>
             <label class="filter-control">State
               <select id="video-filter">
                 <option value="">All states</option>
@@ -146,7 +148,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Video</th><th>Content</th><th>State</th><th>Publication</th><th>Updated</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Video</th><th>Content</th><th>State</th><th>Publication</th><th>Created</th><th>Actions</th></tr></thead>
               <tbody id="videos-body"></tbody>
             </table>
           </div>
@@ -161,7 +163,9 @@
       <section class="view" id="view-settings" data-page="settings" hidden>
         <div class="settings-grid">
           <section class="panel settings-form">
-            <div class="panel-heading"><div><span class="eyebrow">Local services</span><h2>Studio readiness</h2></div><button class="button" id="system-refresh" type="button">Refresh</button></div>
+            <div class="panel-heading"><div><span class="eyebrow">Local services</span><h2>Studio readiness</h2></div><button class="button" id="system-refresh" type="button">Refresh partial checks</button></div>
+            <p class="availability-note" id="readiness-checked" role="status">No readiness check completed yet.</p>
+            <p class="availability-note">These checks cover configuration, local prerequisite presence and endpoint health. Full production preflight and successful provider generation are unverified. Publication connection is independent of render readiness.</p>
             <div id="service-list" class="service-list"></div>
             <div class="settings-section"><h2>YouTube connection</h2><p class="availability-note">Connect the channel configured for this studio. Publication verifies its identity.</p><button class="button solid" id="youtube-connect" type="button">Connect YouTube</button></div>
           </section>

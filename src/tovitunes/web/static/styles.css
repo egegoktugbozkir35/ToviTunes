@@ -284,3 +284,7 @@ td small { color: var(--faint); }
 .video-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; float: left; margin-right: 12px; }
 .video-actions { flex-wrap: wrap; } .detail-block a, .activity-row a { color: var(--cyan); }
 .button:disabled { opacity: .45; cursor: not-allowed; }
+.service-row header { flex-wrap: wrap; }
+.service-row .status-pill { white-space: normal; }
+.job-meta, .system-list dd { overflow-wrap: anywhere; }
+.badge.blocked { color: var(--amber-bright); }
