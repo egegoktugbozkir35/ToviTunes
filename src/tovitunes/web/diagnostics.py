@@ -70,6 +70,12 @@ def studio_job(config: RuntimeConfig, job: Job) -> dict[str, Any]:
             if projection.get("blocker"):
                 result["blocker"] = projection["blocker"]
                 result["error"] = projection["blocker"]["reason"]
+            if plan["status"] == "AMBIGUOUS":
+                result["recovery_action"] = (
+                    "resume_music_task"
+                    if (plan.get("blocker") or {}).get("recovery_action") == "resume_music_task"
+                    else None
+                )
     if job.current_stage not in {None, "CREATIVE", "VISUAL_PLAN", "METADATA"}:
         result["creative_diagnostics"] = {"attempts": [], "exhausted": False, "message": None}
         return result

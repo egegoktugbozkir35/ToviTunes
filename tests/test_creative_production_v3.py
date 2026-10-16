@@ -740,7 +740,9 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(
                     "/api/studio/jobs/retained-studio-job/recover", json={"target": "publish"}
                 )
                 assert response.status_code == 202
-                app.state.jobs._executor.submit(lambda: None).result(timeout=60)
+                # This recovery includes a real offline fixture render. Observe
+                # completion without imposing a one-minute rendering SLA.
+                app.state.jobs._executor.submit(lambda: None).result(timeout=180)
                 job = app.state.jobs.get("retained-studio-job")
                 assert job.status == "complete", job
                 assert job.target == ProductionTarget.RENDER
