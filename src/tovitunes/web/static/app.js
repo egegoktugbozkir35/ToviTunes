@@ -130,7 +130,10 @@ function renderJobs() {
 
 async function loadJobs() {
   const wasBusy = state.busy;
-  state.jobs = await api("/api/jobs");
+  // Resume updates submitted_at on the same durable task. Keep that execution
+  // at the top after it completes, even when its production was created earlier.
+  state.jobs = (await api("/api/jobs")).sort((left, right) =>
+    String(right.submitted_at || "").localeCompare(String(left.submitted_at || "")));
   state.jobsFresh = true;
   $("#job-connection").hidden = true;
   $("#sidebar-status").textContent = "Studio API reachable";

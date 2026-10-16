@@ -59,6 +59,15 @@ const response = payload => ({ok:true, headers:{get:()=>"application/json"}, jso
   assert.ok(buttons.every(button => !button.disabled));
   assert.equal(node("#sidebar-status").textContent, "Studio API reachable");
 
+  respond = () => Promise.resolve(response([
+    {job_id:"newer-production", status:"failed", submitted_at:"2026-01-02", episode_key:"other"},
+    {job_id:"retained", status:"complete", target:"render", submitted_at:"2026-01-03",
+      episode_key:"original-episode", execution:2},
+  ]));
+  await run("refreshJobs()");
+  assert.match(node("#current-job").innerHTML, /Episode original-episode/);
+  assert.match(node("#current-job").innerHTML, /Task complete/);
+
   requests = [];
   respond = () => new Promise(resolve => { release = resolve; });
   const library = run("refreshVideos()");
