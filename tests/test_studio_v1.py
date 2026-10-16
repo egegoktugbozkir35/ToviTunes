@@ -209,6 +209,12 @@ def test_progress_is_monotonic_target_specific_and_live(target):
             job = manager.list()[0]
             seen.append(job.progress_percent)
             assert job.current_stage == stage and job.current_substage == status
+            if status == "TOPIC_COMPLETE":
+                assert job.completed_steps == 1
+            if status == "LYRICS_COMPLETE":
+                assert job.completed_steps == 4
+            if status == "MUSIC_SPEC_COMPLETE":
+                assert job.completed_steps == 5
         for index, stage in enumerate(stages_for(target)):
             manager.update_progress(
                 PipelineProgress(

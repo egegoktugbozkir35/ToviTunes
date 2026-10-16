@@ -249,8 +249,18 @@ class JobManager:
             job.current_stage = progress.stage
             job.current_substage = progress.detail
             job.progress_percent = max(job.progress_percent, progress.percent)
-            if progress.stage in job.steps:
-                job.completed_steps = max(job.completed_steps, job.steps.index(progress.stage))
+            step = progress.stage
+            complete = progress.detail == "COMPLETE"
+            if step == "CREATIVE":
+                step, _, outcome = progress.detail.rpartition("_")
+                complete = outcome == "COMPLETE"
+            if step in job.steps:
+                observed = job.steps.index(step) + int(complete)
+                job.completed_steps = max(job.completed_steps, observed)
+                if complete:
+                    job.progress_percent = max(
+                        job.progress_percent, 100 * job.completed_steps // len(job.steps)
+                    )
             job.episode_key = progress.episode_key or job.episode_key
             self._save(job)
 
