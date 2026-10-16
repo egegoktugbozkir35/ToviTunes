@@ -22,7 +22,7 @@ from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
 from tovitunes.render.lesson_objects import _prepare_qwen_white_background, _provider, normalize
 
-IMAGE_PROMPT = "episode_illustration_v1"
+IMAGE_PROMPT = "episode_illustration_v2"
 
 
 def swatch(color: str, size: int = 1024) -> Image.Image:
@@ -71,7 +71,13 @@ def image_spec(
             f"Objective: {episode.objective}. Entity: {requirement.semantic_label}. "
             f"Dominant target color where specified: {requirement.target_color}."
         ),
-        common_brief=visual_direction + " Rounded preschool 2D illustration with clear silhouette.",
+        common_brief=visual_direction + (
+            " Rounded preschool 2D illustration with a complete readable silhouette. "
+            "Match Tovi's soft tonal contours, gentle dimensional shading, warm even light "
+            "and bright controlled saturation. Use a consistent front three-quarter view "
+            "and natural proportions. Avoid photorealism, plastic 3D, hard black outlines "
+            "and dramatic cast lighting."
+        ),
         pack_revision_id=episode.character_packs[0].revision_id,
         brand_revision_id=episode.brand_revision_id,
         references=(),
@@ -81,7 +87,10 @@ def image_spec(
             "No text, logo, watermark, character, person or franchise likeness.",
             "A simple face only as explicitly described; no added character personality."
             if requirement.allow_face
-            else "No face, eyes, limbs or character personality.",
+            else (
+                "Preserve natural anatomy inherent in the described entity. "
+                "No added faces on inanimate props or invented anthropomorphic personality."
+            ),
         ),
         aspect_ratio="1:1",
         composition_brief="Square, centered complete object with generous removable white padding.",

@@ -218,6 +218,10 @@ def _spec(
             "substantial depth, clean readable shapes at phone size. Keep the lower and middle "
             "stage open and quiet for separately composited character and lesson objects. "
             "Put detail behind the focus plane. Safe padding for gentle camera moves."
+            " One continuous landscape and one coherent horizon; never a contact sheet, "
+            "montage, stacked views, split panels, borders or repeated scenery strips. "
+            "Use soft tonal edges, consistent perspective and gentle shading matching "
+            "the separately composited preschool illustrations."
         ),
         composition_brief=(
             "Portrait 9:16 environmental set plate only. No characters or lesson props."
