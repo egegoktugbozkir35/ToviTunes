@@ -1,6 +1,7 @@
 """Approved pose mapping, uniform layout and measured-beat position functions."""
 
 import math
+from typing import Literal
 
 from PIL import Image
 
@@ -10,6 +11,7 @@ from tovitunes.render.composition import (
     ACTION_METADATA,
     LONG_CHARACTER_SCENE_SECONDS,
     SLOTS,
+    VISUAL_QUALITY_VERSION,
     CompositionRequest,
     SceneComposition,
     resolve_composition,
@@ -22,7 +24,8 @@ ACTION_ROLES: dict[str, SpriteRole] = {a: m.sprite_role for a, m in ACTION_METAD
 
 
 def pose_keyframe(
-    cue: PoseCue, image: Image.Image, artifact_id: str, perceived_height: int
+    cue: PoseCue, image: Image.Image, artifact_id: str, perceived_height: int,
+    *, transition: Literal["cut", "short_crossfade"] = "short_crossfade",
 ) -> PoseKeyframe:
     if image.mode != "RGBA" or (bbox := image.getchannel("A").getbbox()) is None:
         raise ValueError("pose requires approved visible alpha sprite")
@@ -34,7 +37,7 @@ def pose_keyframe(
         crop_bbox=bbox,
         scale=scale,
         size=(round((bbox[2] - bbox[0]) * scale), perceived_height),
-        transition="cut" if cue.time == 0 else "short_crossfade",
+        transition="cut" if cue.time == 0 else transition,
     )
 
 
@@ -236,11 +239,48 @@ def animation_plan(
 
 
 def position(plan: CharacterAnimation, t: float) -> tuple[float, float]:
+    if plan.renderer_version == VISUAL_QUALITY_VERSION:
+        return _performance_position(plan, t)
     x, y = _position(plan, t)
     if plan.emphasis:
         # Zero at both boundaries; <1% of frame height and no color/background change.
         u = min(1.0, max(0.0, t / plan.duration_seconds))
         y -= plan.amplitude * 0.55 * math.sin(math.pi * u) ** 2
+    return x, y
+
+
+def _performance_position(plan: CharacterAnimation, local_t: float) -> tuple[float, float]:
+    """Move the whole approved drawing only; readable lesson poses keep their feet still."""
+    t = local_t + plan.motion_time_offset
+    x, y = plan.end_position
+    if plan.motion_type == "enter" and t < plan.enter_seconds:
+        u = min(1.0, max(0.0, t / plan.enter_seconds))
+        ease = u * u * (3 - 2 * u)
+        return tuple(a + (b - a) * ease for a, b in zip(
+            plan.start_position, plan.end_position
+        ))  # type: ignore[return-value]
+    for i, pose in enumerate(plan.pose_sequence):
+        end = (plan.pose_sequence[i + 1].time if i + 1 < len(plan.pose_sequence)
+               else plan.motion_duration_seconds)
+        if pose.sprite_role == "sprite/hopping":
+            # A single supported hop, with a tiny whole-body anticipation and a
+            # zero-velocity landing. Never squash/stretch or hop on every beat.
+            if pose.time - 0.16 <= t < pose.time:
+                return x, y + 2 * math.sin(math.pi * (t - pose.time + 0.16) / 0.16) ** 2
+            span = min(0.72, end - pose.time)
+            if pose.time <= t <= pose.time + span:
+                return x, y - plan.amplitude * 0.75 * math.sin(
+                    math.pi * (t - pose.time) / span
+                ) ** 2
+        if pose.sprite_role == "sprite/singing" and pose.time <= t < end:
+            # Beat evidence is optional. No inferred phonemes or word timings.
+            pulse = max((math.sin(math.pi * (t - b) / 0.48) ** 2
+                         for b in plan.beat_seconds if 0 <= t - b <= 0.48), default=0.0)
+            if not plan.beat_seconds:
+                # A free gentle bob when only duration is admitted, not an invented beat.
+                pulse = math.sin(math.pi * (t - pose.time) / 1.8) ** 2
+            ramp = min(1.0, (t - pose.time) / 0.25, (end - t) / 0.25)
+            return x, y - plan.amplitude * 0.24 * pulse * max(0.0, ramp)
     return x, y
 
 

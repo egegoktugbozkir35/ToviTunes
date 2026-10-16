@@ -20,7 +20,8 @@ PROP_STYLE_VERSION = LEGACY_PROP_STYLE_VERSION
 LESSON_OBJECT_STYLE_VERSION = "lesson_object_assets_v2"
 EPISODE_ASSET_STYLE_VERSION = "episode_visual_assets_v1"
 LEGACY_VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1"
-VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1_r2"
+FRAMING_VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1_r2"
+VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1_r3"
 Direction = Literal["left", "right", "none"]
 
 SLOTS: dict[str, tuple[float, float]] = {

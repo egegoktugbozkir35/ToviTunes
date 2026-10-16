@@ -289,6 +289,114 @@ def test_pose_normalization_anchor_and_approved_roles(evidence):
         pose_keyframe(cues[0], Image.new("RGBA", (50, 80)), "bad", 700)
 
 
+@pytest.mark.parametrize("pair", [
+    ("sprite/neutral_full_body", "sprite/pointing"),
+    ("sprite/pointing", "sprite/singing"),
+    ("sprite/hello", "sprite/hopping"),
+    ("sprite/singing", "sprite/hopping"),
+])
+def test_pose_cuts_render_one_silhouette_and_historical_fades_still_blend(
+    evidence, tmp_path, pair
+):
+    from tovitunes.render.motion import PoseCue
+
+    background = tmp_path / "white.png"
+    Image.new("RGB", (270, 480), "white").save(background)
+    paths, images = {}, []
+    for i, color in enumerate(("red", "blue")):
+        sprite = Image.new("RGBA", (80, 100))
+        ImageDraw.Draw(sprite).polygon(
+            ((0, 0), (79, 99), (0, 99)) if i == 0 else ((79, 0), (79, 99), (0, 99)),
+            fill=color,
+        )
+        path = tmp_path / f"pose-{i}.png"
+        sprite.save(path)
+        paths[str(i)] = str(path)
+        images.append(sprite)
+    plan = motion(evidence).model_copy(update={
+        "camera_track": CameraTrack(duration=2, zoom_start=1, zoom_end=1),
+        "prop_tracks": (), "ambient_tracks": (), "keyword_emphasis_events": (),
+        "scene_entry_effect": "none",
+    })
+    for transition in ("cut", "short_crossfade"):
+        poses = tuple(pose_keyframe(
+            PoseCue(time=i, sprite_role=role, timing_source="initial"), images[i], str(i), 100,
+            transition=transition,
+        ) for i, role in enumerate(pair))
+        if transition == "short_crossfade":
+            # Historical files can omit both fields. Their defaults keep the old blend.
+            raw = poses[1].model_dump(exclude={"transition", "transition_seconds"})
+            historical = PoseKeyframe.model_validate(raw)
+            assert historical.transition == "short_crossfade"
+            assert historical.transition_seconds == 0.12
+            poses = (poses[0], historical)
+        char = animation().model_copy(update={
+            "crop_bbox": (0, 0, 80, 100), "size": (80, 100), "scale": 1,
+            "start_position": (60, 240), "end_position": (60, 240), "amplitude": 0,
+            "pose_sequence": poses,
+        })
+        payload = {"start": 0, "end": 2, "canvas": (270, 480),
+                   "background_path": str(background), "sprite_paths": paths,
+                   "animation": char.model_dump(mode="json"),
+                   "motion": plan.model_dump(mode="json"), "metadata": {"props": []}}
+        with ExitStack() as stack:
+            clip = build_scene(payload, stack)
+            before, after = clip.get_frame(0.99), clip.get_frame(1.2)
+            for t in (1.0, 1.01, 1.06, 1.10, 1.119):
+                frame = clip.get_frame(t)
+                if transition == "cut":
+                    assert (frame == after).all()
+                elif t == 1.06:
+                    assert (frame != before).any() and (frame != after).any()
+
+
+def test_supported_performance_is_deterministic_quiet_and_continuous(evidence):
+    from tovitunes.render.composition import VISUAL_QUALITY_VERSION
+    from tovitunes.render.story import plan_story, stage_visual_quality
+
+    definitions = {"shape_0": PropDefinition()}
+    comp = stage_visual_quality(composition(action="present"), set())
+    story = plan_story(comp, 6, definitions, set())
+    prior = motion(evidence, comp, visual_quality=True, story=story)
+    continued = story.model_copy(update={"continuity_source": prior.scene_id})
+    following = comp.model_copy(update={"scene_id": "next"})
+    args = dict(previous=prior, previous_artifact_id="prior-motion", visual_quality=True,
+                story=continued)
+
+    def next_motion(comp, **kwargs):
+        return plan_motion(comp, 6, 6, "story", evidence[1], evidence[0], (), **kwargs)
+
+    first = next_motion(following, **args)
+    assert first == next_motion(following, **args)
+    assert (first.character_pose_sequence[0].sprite_role
+            == prior.character_pose_sequence[-1].sprite_role)
+    assert first.scene_entry_effect == "none"
+    assert camera_state(first.camera_track, 0) == camera_state(prior.camera_track, prior.duration)
+    assert first.inherited_motion_artifact_id == "prior-motion"
+    assert all(e.timing_source != "scene_entry" for p in first.prop_tracks for e in p.events)
+    singing = next_motion(following, visual_quality=True, story=story.model_copy(
+        update={"character_intent": "Tovi and the kitten sing a duet"}
+    ))
+    assert singing.character_pose_sequence[-1].sprite_role == "sprite/singing"
+    farewell = next_motion(following.model_copy(update={"sprite_role": "sprite/hello"}), **args)
+    assert "sprite/pointing" not in [p.sprite_role for p in farewell.character_pose_sequence[1:]]
+    char = animation().model_copy(update={"renderer_version": VISUAL_QUALITY_VERSION})
+    assert all(position(char, t / 30) == char.end_position for t in range(180))
+    hopping = pose_keyframe(singing.character_pose_sequence[0].model_copy(
+        update={"time": 1, "sprite_role": "sprite/hopping"}
+    ), Image.new("RGBA", (40, 70), "blue"), "approved", 700, transition="cut")
+    char = char.model_copy(update={"pose_sequence": (hopping,), "beat_seconds": (1, 2, 3)})
+    assert position(char, 0.92)[1] > char.end_position[1]  # tiny anticipation
+    assert position(char, 1.36)[1] < char.end_position[1]
+    assert position(char, 1.72) == char.end_position
+    assert position(char, 2.36) == char.end_position  # no repeated beat hops
+    singing_pose = hopping.model_copy(update={"sprite_role": "sprite/singing"})
+    char = char.model_copy(update={"pose_sequence": (singing_pose,), "beat_seconds": ()})
+    assert position(char, 1) == char.end_position
+    assert 0 < char.end_position[1] - position(char, 1.9)[1] <= char.amplitude * 0.24 + 1e-9
+    assert position(char, 6) == char.end_position
+
+
 def test_wide_pose_fits_reserved_lane_without_occluding_lesson_object(evidence):
     comp = composition(action="idle").model_copy(update={
         "character_slot": "lower_right", "character_width": 0.54,

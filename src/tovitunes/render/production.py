@@ -636,8 +636,18 @@ class ProductionRenderer:
                         )
                         planned_story = planned_story.model_copy(
                             update={"version": VISUAL_QUALITY_VERSION,
-                                    "character_intent": staged.resolved_action}
+                                    "character_intent": " ".join(s.description for s in intents)}
                         )
+                        if prior and (
+                            prior.character_slot == staged.character_slot
+                            and prior.ground_plane_y == staged.ground_plane_y
+                            and prior.character_width == staged.character_width
+                            and prepared[prior.scene_id][1].environment_plate_role
+                            == planned_story.environment_plate_role
+                        ):
+                            planned_story = planned_story.model_copy(
+                                update={"continuity_source": prior.scene_id}
+                            )
                     prepared[item.scene_id] = (staged, planned_story)
                     prior = staged
                     introduced.update(p.type for p in staged.props)
@@ -772,7 +782,10 @@ class ProductionRenderer:
                     pose_id = inputs.pack.asset_artifact_ids[cue.sprite_role]
                     pose_path = store.path_for(pose_id)
                     with Image.open(pose_path) as pose_sprite:
-                        poses.append(pose_keyframe(cue, pose_sprite, pose_id, animation.size[1]))
+                        poses.append(pose_keyframe(
+                            cue, pose_sprite, pose_id, animation.size[1],
+                            transition="cut" if self.visual_quality else "short_crossfade",
+                        ))
                     sprite_paths[pose_id] = str(pose_path)
                 animation = attach_poses(
                     animation,
@@ -832,7 +845,13 @@ class ProductionRenderer:
                     samples = {
                         position(animation, (scene.end - scene.start) * i / 60) for i in range(61)
                     }
-                    if len(samples) < 2:
+                    pose_activity = self.visual_quality and len({
+                        p.sprite_role for p in animation.pose_sequence
+                    }) > 1
+                    lesson_hold = self.visual_quality and bool(composition.props) and any(
+                        e.channel == "lesson" for e in motion.activity_events
+                    )
+                    if len(samples) < 2 and not (pose_activity or lesson_hold):
                         raise ValueError("long character scene has no movement")
                 story_diagnostics: dict[str, Any] = {}
                 if story is not None:
@@ -1009,7 +1028,7 @@ class ProductionRenderer:
                     else "gentle_camera_v1"
                 ),
                 motion_grammar_version=(
-                    "surface_focus_v1_r2"
+                    "supported_performance_v1_r3"
                     if self.visual_quality
                     else "visual_story_motion_v1"
                     if environment_selection

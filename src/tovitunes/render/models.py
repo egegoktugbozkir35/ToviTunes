@@ -179,6 +179,7 @@ class RenderManifestV2(ProductionModel):
     renderer_version: Literal[
         "tovitunes_creative_render_v1", "tovitunes_visual_quality_v1",
         "tovitunes_visual_quality_v1_r2",
+        "tovitunes_visual_quality_v1_r3",
     ] = (
         "tovitunes_creative_render_v1"
     )

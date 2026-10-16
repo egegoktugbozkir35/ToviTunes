@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFilter
 
 from tovitunes.render.character import pose_position, position
+from tovitunes.render.composition import FRAMING_VISUAL_QUALITY_VERSION, VISUAL_QUALITY_VERSION
 from tovitunes.render.environment import ambient_sprite, halo_sprite
 from tovitunes.render.layout import visible_alpha_bounds
 from tovitunes.render.models import CharacterAnimation
@@ -163,7 +164,9 @@ def build_dynamic_scene(payload: dict[str, Any], stack: ExitStack) -> Any:
         if payload["metadata"].get("contact_shadows") and track.grounded:
             # Historical V1 keeps its canvas anchor. Refined previews measure the
             # complete rendered image's readable feet; source pixels remain intact.
-            core = visible_alpha_bounds(asset) if motion.renderer_version.endswith("v1_r2") else (
+            core = visible_alpha_bounds(asset) if motion.renderer_version in {
+                FRAMING_VISUAL_QUALITY_VERSION, VISUAL_QUALITY_VERSION
+            } else (
                 0, 0, size, size
             )
             foot_gap = size - core[3]
