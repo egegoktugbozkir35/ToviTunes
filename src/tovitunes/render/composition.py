@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import Field
+
 from tovitunes.domain.storyboard import ProductionModel
 from tovitunes.render.models import SpriteRole
 
@@ -17,6 +19,9 @@ LEGACY_PROP_STYLE_VERSION = "preschool_soft_v1"
 PROP_STYLE_VERSION = LEGACY_PROP_STYLE_VERSION
 LESSON_OBJECT_STYLE_VERSION = "lesson_object_assets_v2"
 EPISODE_ASSET_STYLE_VERSION = "episode_visual_assets_v1"
+LEGACY_VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1"
+FRAMING_VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1_r2"
+VISUAL_QUALITY_VERSION = "tovitunes_visual_quality_v1_r3"
 Direction = Literal["left", "right", "none"]
 
 SLOTS: dict[str, tuple[float, float]] = {
@@ -102,13 +107,16 @@ class PropPlacement(ProductionModel):
     motion: Literal["static", "roll_in"] = "static"
     primary: bool
     lesson_color: str
+    surface_y: float | None = Field(
+        default=None, ge=0.04, le=0.96, exclude_if=lambda value: value is None
+    )
 
     def bbox(self, canvas: tuple[int, int], ground: float) -> list[int]:
         w, h = canvas
         size = round(w * self.width)
         x = round(w * self.center[0] - size / 2)
         y = (
-            round(h * ground) - size
+            round(h * (self.surface_y if self.surface_y is not None else ground)) - size
             if self.placement_mode == "ground"
             else round(h * self.center[1] - size / 2)
         )

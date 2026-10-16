@@ -49,6 +49,7 @@ from tovitunes.render.composition import (
     LEGACY_PROP_STYLE_VERSION,
     LESSON_OBJECT_STYLE_VERSION,
     PROP_DEFINITIONS,
+    VISUAL_QUALITY_VERSION,
     CompositionRequest,
     PropDefinition,
     SceneComposition,
@@ -63,6 +64,7 @@ from tovitunes.render.ffmpeg import (
     probe,
     run_process,
 )
+from tovitunes.render.layout import visible_alpha_bounds
 from tovitunes.render.models import RenderManifest, RenderManifestV2, SceneRender
 from tovitunes.render.motion import SceneMotionPlan, plan_motion, prop_state, validate_motion
 from tovitunes.render.props import png_info, scene_art, validate_props
@@ -70,9 +72,11 @@ from tovitunes.render.qa import media_qa
 from tovitunes.render.story import (
     EpisodeVisualStoryPlan,
     VisualStoryPlan,
+    display_intent,
     occupancy,
     plan_story,
     stage_composition,
+    stage_visual_quality,
 )
 
 V4_VERSION = VISUAL_STORY_VERSION
@@ -311,15 +315,38 @@ class ProductionRenderer:
         canvas: tuple[int, int] = (1080, 1920),
         local_preview: bool = False,
         assert_owner: Callable[[], None] | None = None,
+        visual_quality: bool = False,
+        environment_role_overrides: dict[str, str] | None = None,
     ) -> None:
         self.config, self.canvas = config, canvas
         self.local_preview = local_preview
         self.assert_owner = assert_owner
+        self.visual_quality = visual_quality
+        if visual_quality and not local_preview:
+            raise ValueError("visual quality strategy requires local-preview admission")
+        self.environment_role_overrides = environment_role_overrides or {}
+        if self.environment_role_overrides and not (visual_quality and local_preview):
+            raise ValueError(
+                "environment role overrides require an explicit visual-quality preview"
+            )
+
+        if self.environment_role_overrides:
+            from tovitunes.render.environment_sets import ROLES
+
+            if not all(
+                k in ROLES and v in ROLES
+                for k, v in self.environment_role_overrides.items()
+            ):
+                raise ValueError("environment role override uses an unsupported role")
 
     def render(self, episode_key: str, *, visual_story: bool = False) -> dict[str, Any]:
         initial = load_inputs(
             self.config, episode_key, local_preview=self.local_preview
         )  # Complete preflight before artifact writes.
+        if self.visual_quality and not (
+            visual_story and isinstance(initial.storyboard, TimedStoryboardV3)
+        ):
+            raise ValueError("visual quality strategy requires a V3 visual-story storyboard")
         environment_selection = None
         if visual_story:
             from tovitunes.render.environment_sets import selected_set
@@ -356,7 +383,9 @@ class ProductionRenderer:
     ) -> dict[str, Any]:
         storyboard = inputs.storyboard
         renderer_version = (
-            "tovitunes_creative_render_v1"
+            VISUAL_QUALITY_VERSION
+            if self.visual_quality
+            else "tovitunes_creative_render_v1"
             if isinstance(storyboard, TimedStoryboardV3)
             else V4_VERSION
             if environment_selection
@@ -440,9 +469,30 @@ class ProductionRenderer:
             def ensure(kind: str, slot: str, path: Path, deps: tuple[str, ...]) -> ArtifactRecord:
                 assert_owner()
                 if environment_selection is not None:
-                    slot += "_v4"
+                    slot += "_vq1" if self.visual_quality else "_v4"
                 digest = sha256(path.read_bytes()).hexdigest()
                 record = store.find_version("episode", owner, kind, slot, digest)
+                if self.visual_quality:
+                    # Identical output bytes may have a different background/story input.
+                    # Select a version by content AND dependencies, never reinterpret old pins.
+                    record = None
+                    with closing(store.database.connect()) as db:
+                        candidates = db.execute(
+                            "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
+                            "AND kind=? AND slot_key=? AND sha256=? ORDER BY rowid DESC",
+                            (owner, kind, slot, digest),
+                        ).fetchall()
+                        for candidate in candidates:
+                            pins = db.execute(
+                                "SELECT input_artifact_id,input_sha256 FROM artifact_dependencies "
+                                "WHERE consumer_artifact_id=? ORDER BY rowid",
+                                (candidate[0],),
+                            ).fetchall()
+                            if tuple((p[0], p[1]) for p in pins) == tuple(
+                                (d, store.get(d).sha256) for d in deps
+                            ):
+                                record = store.get(candidate[0])
+                                break
                 actions[f"{kind}:{slot}"] = "reuse" if record else "create"
                 if record:
                     self._check_dependencies(store, record, deps)
@@ -482,6 +532,25 @@ class ProductionRenderer:
             prepared: dict[str, tuple[SceneComposition, VisualStoryPlan]] = {}
             story_record: ArtifactRecord | None = None
             continuity_positions: dict[str, tuple[float, float]] = {}
+            visible_bounds: dict[str, tuple[float, float, float, float]] = {}
+            pose_aspect = 1.0
+            if self.visual_quality:
+                for key, path in lesson_asset_paths.items():
+                    with Image.open(path) as asset_image:
+                        b = visible_alpha_bounds(asset_image)
+                        visible_bounds[key] = (
+                            b[0] / asset_image.width, b[1] / asset_image.height,
+                            b[2] / asset_image.width, b[3] / asset_image.height,
+                        )
+                aspects = []
+                for approved_role in set(ACTION_ROLES.values()):
+                    pose_path = store.path_for(inputs.pack.asset_artifact_ids[approved_role])
+                    with Image.open(pose_path) as p:
+                        box = p.getchannel("A").getbbox()
+                        if box is None:
+                            raise ValueError("approved pose has no visible alpha")
+                        aspects.append((box[2] - box[0]) / (box[3] - box[1]))
+                pose_aspect = max(aspects)
             if environment_selection is not None:
                 environment, environment_id = environment_selection
                 prior: SceneComposition | None = None
@@ -524,7 +593,9 @@ class ProductionRenderer:
                     if isinstance(item, VisualTimedScene):
                         planned_story = planned_story.model_copy(
                             update={
-                                "environment_plate_role": item.environment_role,
+                                "environment_plate_role": self.environment_role_overrides.get(
+                                    item.environment_role, item.environment_role
+                                ),
                                 "keyword_reactions": False,
                             }
                         )
@@ -544,10 +615,44 @@ class ProductionRenderer:
                             update={"environment_plate_role": role}
                         )
                     staged = stage_composition(raw, planned_story)
+                    if self.visual_quality:
+                        assert isinstance(episode_visual, EpisodeVisualPlanV2)
+                        assert isinstance(item, VisualTimedScene)
+                        intents = tuple(
+                            s for s in episode_visual.scenes if s.scene_id in item.source_scene_ids
+                        )
+                        display_keys = {
+                            a.asset_key
+                            for a in episode_visual.required_assets
+                            if a.asset_key in item.required_props
+                            and any(
+                                a.asset_key in intent.required_assets
+                                and display_intent(a, intent.description)
+                                for intent in intents
+                            )
+                        }
+                        staged = stage_visual_quality(
+                            staged, display_keys, prior, visible_bounds=visible_bounds
+                        )
+                        planned_story = planned_story.model_copy(
+                            update={"version": VISUAL_QUALITY_VERSION,
+                                    "character_intent": " ".join(s.description for s in intents)}
+                        )
+                        if prior and (
+                            prior.character_slot == staged.character_slot
+                            and prior.ground_plane_y == staged.ground_plane_y
+                            and prior.character_width == staged.character_width
+                            and prepared[prior.scene_id][1].environment_plate_role
+                            == planned_story.environment_plate_role
+                        ):
+                            planned_story = planned_story.model_copy(
+                                update={"continuity_source": prior.scene_id}
+                            )
                     prepared[item.scene_id] = (staged, planned_story)
                     prior = staged
                     introduced.update(p.type for p in staged.props)
                 episode_story = EpisodeVisualStoryPlan(
+                    version=VISUAL_QUALITY_VERSION if self.visual_quality else "visual_story_v1",
                     storyboard_artifact_id=sid,
                     environment_set_artifact_id=environment_id,
                     scenes=tuple(value[1] for value in prepared.values()),
@@ -600,6 +705,7 @@ class ProductionRenderer:
                     canvas=self.canvas,
                     story=story,
                     continuity_positions=continuity_positions,
+                    visual_quality=self.visual_quality,
                 )
                 if isinstance(storyboard, TimedStoryboardV3):
                     motion = motion.model_copy(
@@ -637,6 +743,8 @@ class ProductionRenderer:
                     metadata["environmental_theme"] = environment.theme
                     metadata["environment_layers"] = ["selected_provider_plate"]
                     metadata["renderer_version"] = renderer_version
+                    if self.visual_quality:
+                        metadata["contact_shadows"] = True
                     background_deps = (
                         sid,
                         environment_id,
@@ -659,6 +767,11 @@ class ProductionRenderer:
                         sid,
                         composition,
                         height_limit=0.48 if environment_selection else 0.38,
+                        perceived_height=(
+                            int(min(self.canvas[1] * 0.48,
+                                    self.canvas[0] * composition.character_width / pose_aspect)) - 1
+                            if self.visual_quality else None
+                        ),
                     )
                 if environment_selection:
                     animation = animation.model_copy(update={"renderer_version": renderer_version})
@@ -669,11 +782,17 @@ class ProductionRenderer:
                     pose_id = inputs.pack.asset_artifact_ids[cue.sprite_role]
                     pose_path = store.path_for(pose_id)
                     with Image.open(pose_path) as pose_sprite:
-                        poses.append(pose_keyframe(cue, pose_sprite, pose_id, animation.size[1]))
+                        poses.append(pose_keyframe(
+                            cue, pose_sprite, pose_id, animation.size[1],
+                            transition="cut" if self.visual_quality else "short_crossfade",
+                        ))
                     sprite_paths[pose_id] = str(pose_path)
                 animation = attach_poses(
-                    animation, tuple(poses), self.canvas,
+                    animation,
+                    tuple(poses),
+                    self.canvas,
                     maximum_width=round(self.canvas[0] * composition.character_width),
+                    consistent_height=self.visual_quality,
                 )
                 motion_qa = validate_motion(
                     motion, inputs.alignment, inputs.target_vocabulary, animation, self.canvas
@@ -726,7 +845,13 @@ class ProductionRenderer:
                     samples = {
                         position(animation, (scene.end - scene.start) * i / 60) for i in range(61)
                     }
-                    if len(samples) < 2:
+                    pose_activity = self.visual_quality and len({
+                        p.sprite_role for p in animation.pose_sequence
+                    }) > 1
+                    lesson_hold = self.visual_quality and bool(composition.props) and any(
+                        e.channel == "lesson" for e in motion.activity_events
+                    )
+                    if len(samples) < 2 and not (pose_activity or lesson_hold):
                         raise ValueError("long character scene has no movement")
                 story_diagnostics: dict[str, Any] = {}
                 if story is not None:
@@ -780,6 +905,31 @@ class ProductionRenderer:
                         "pose_changes": max(0, len(motion.character_pose_sequence) - 1),
                         "keyword_events": len(motion.keyword_emphasis_events),
                     }
+                    if self.visual_quality:
+                        visible_props = []
+                        for track in motion.prop_tracks:
+                            bx0, by0, bx1, by1 = track.bbox
+                            v = visible_bounds[track.prop_key]
+                            visible_props.append((
+                                bx0 + v[0] * (bx1 - bx0), by0 + v[1] * (by1 - by0),
+                                bx0 + v[2] * (bx1 - bx0), by0 + v[3] * (by1 - by0),
+                            ))
+                        story_diagnostics["visible_prop_bboxes"] = visible_props
+                        # Keep the historical occupancy above, with its unchanged threshold.
+                        # Additional decoded-silhouette diagnostics do not replace that metric.
+                        with Image.open(sprite_path) as sprite_image:
+                            b = visible_alpha_bounds(sprite_image)
+                        crop = animation.crop_bbox
+                        visible_character = (
+                            (x + (b[0] - crop[0]) * animation.scale) / w,
+                            (y + (b[1] - crop[1]) * animation.scale) / h,
+                            (x + (b[2] - crop[0]) * animation.scale) / w,
+                            (y + (b[3] - crop[1]) * animation.scale) / h,
+                        )
+                        story_diagnostics["visible_character_bbox"] = visible_character
+                        story_diagnostics["visible_silhouette_occupancy"] = occupancy(
+                            visible_character, tuple(visible_props)
+                        )
                 deterministic.append(
                     {
                         "scene_id": scene.scene_id,
@@ -871,10 +1021,18 @@ class ProductionRenderer:
             manifest = manifest_type(
                 **{**timing_fields, "renderer_version": renderer_version},
                 camera_policy_version=(
-                    "story_camera_v1" if environment_selection else "gentle_camera_v1"
+                    "focal_hold_v1_r2"
+                    if self.visual_quality
+                    else "story_camera_v1"
+                    if environment_selection
+                    else "gentle_camera_v1"
                 ),
                 motion_grammar_version=(
-                    "visual_story_motion_v1" if environment_selection else "preschool_motion_v1"
+                    "supported_performance_v1_r3"
+                    if self.visual_quality
+                    else "visual_story_motion_v1"
+                    if environment_selection
+                    else "preschool_motion_v1"
                 ),
                 environmental_theme=environment.theme
                 if environment_selection
@@ -992,7 +1150,9 @@ class ProductionRenderer:
             output.mkdir(exist_ok=True)
             episode_key = inputs.store.database.get_episode(owner).external_key
             export_stem = f"TOVITUNES_{episode_key.upper().replace('-', '_')}_PILOT_" + (
-                "CREATIVE_V2"
+                "VISUAL_QUALITY_V1"
+                if self.visual_quality
+                else "CREATIVE_V2"
                 if isinstance(storyboard, TimedStoryboardV3)
                 else "V4"
                 if environment_selection
@@ -1005,7 +1165,9 @@ class ProductionRenderer:
                 output / f"{export_stem}_MEDIA_QA.json",
             )
             frame_version = (
-                "creative_v2"
+                "visual_quality_v1"
+                if self.visual_quality
+                else "creative_v2"
                 if isinstance(storyboard, TimedStoryboardV3)
                 else "v4"
                 if environment_selection

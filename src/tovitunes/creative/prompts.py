@@ -47,6 +47,13 @@ def freedom_messages(version: str, facts: object) -> list[Message]:
             '"tovi_action":"show the ball","objects":["yellow ball"]}]}. '
             "Tovi comes from the approved pack; never request a generated Tovi image. "
             "Renderer uses gentle pose animation and composited props, not arbitrary 3D operations."
+            " Give each scene a recognizable main focus and a readable entrance, reaction "
+            "and quiet hold. Vary arrangements and supported actions between scenes. "
+            "Prefer looking, pointing, presenting and celebrating over grasping, carrying "
+            "or articulated actions the approved poses cannot show. Describe tangible "
+            "objects as supported by the scenery; say explicitly when objects are floating "
+            "illustrations or conceptual displays. Keep illustration style and lighting "
+            "coherent. These are creative suggestions, not required story beats or lyric coverage."
         ),
     }
     return [
