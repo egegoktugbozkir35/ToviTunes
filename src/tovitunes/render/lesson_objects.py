@@ -348,6 +348,31 @@ def _prepare_qwen_white_background(
         if selected:
             alpha[index] = 0
     image.putalpha(Image.frombytes("L", (width, height), bytes(alpha)))
+    if version == WHITE_BACKGROUND_V2:
+        bounds = image.getchannel("A").getbbox()
+        if bounds is not None:
+            left, top, right, bottom = bounds
+            extremes = (
+                [(x, top) for x in range(left, right)],
+                [(x, bottom - 1) for x in range(left, right)],
+                [(left, y) for y in range(top, bottom)],
+                [(right - 1, y) for y in range(top, bottom)],
+            )
+
+            def has_neighbor(x: int, y: int) -> bool:
+                return any(
+                    alpha[ny * width + nx] > 0
+                    for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+                    if 0 <= nx < width and 0 <= ny < height
+                )
+
+            for edge in extremes:
+                occupied = [(x, y) for x, y in edge if alpha[y * width + x] > 0]
+                if occupied and not any(has_neighbor(x, y) for x, y in occupied):
+                    raise ValueError(
+                        "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: isolated pixels control trim "
+                        "bounds; inspect backdrop artifacts and supply a clean padded source"
+                    )
     return _validate_transparent_source(_png_bytes(image), "image/png")
 
 

@@ -438,7 +438,8 @@ def generate_assets(
         except (ValueError, OSError) as exc:
             blocked = ImageStageBlocked("BLOCKED", request_id, "image_processing_failure")
             blocked.evidence["diagnostic"] = (
-                "Inspect the retained raw image and its white padding. A pale subject needs "
+                "Inspect the retained raw image, white padding and isolated backdrop artifacts. "
+                "A pale subject needs "
                 "a distinct continuous contour; an indistinguishable white subject cannot "
                 "be extracted safely. Any new source requires explicit operator approval."
             )

@@ -43,7 +43,7 @@ They are evidence of readability limits, not a perceptual pass threshold.
 | Image / stable asset key suffix | Concrete defect and origin | Visible size at 360px |
 | --- | --- | --- |
 | big mirror / `ad5a54255507bd5e` | Raw includes a sink as requested by the description; composition duplicates fixtures already painted into the background. Pale sink edge is mostly retained. Planning/composition duplication, not a new render defect. | 58x91 |
-| shiny smile / `da1d67fe33bab615` | Raw has two disconnected tooth arcs and very faint sparkles. Extraction clips faint contours/sparkles; the solid white tooth interiors already enclosed by darker edges survive. V2 restores some faint pixels, not missing anatomy. Planning chooses a conceptual smile rather than literal brushing. | 73x45 |
+| shiny smile / `da1d67fe33bab615` | Raw has two disconnected tooth arcs, very faint sparkles and isolated cyan backdrop artifacts. V1 clips faint contours/sparkles; enclosed solid white interiors survive. A narrower key also retains backdrop specks that would shift the normalized subject: V2 explicitly blocks this unsuitable source. Planning chooses a conceptual smile rather than literal brushing. | 73x45 |
 | toothbrush / `7ec27c00e347042d` | Face and tooth-like blue head are present in raw despite `allow_face=false`. Raw semantic/style variability; extraction cannot remove the face or invent bristles. Thin subject occupies little of its square. | 22x91 |
 | up arrows / `d31653ad1a3bf5b8` | Raw adds a tooth/bone-like central body and hands to the arrows. Prompt supplies the full brushing objective, inviting unrelated subjects; raw also violates no-hands/no-anthropomorphism instructions. Not caused by alpha processing. | 79x91 |
 | down arrows / `00e7c284e49e4714` | Raw is one recognizable blue arrow. Mostly intact after extraction. Different treatment from the up-arrow collage is already present at source. | 35x91 |
@@ -142,6 +142,18 @@ errors. This is not semantic segmentation: a contour identical to the backdrop, 
 gap or a barely distinguishable subject can still be unsuitable. Such artwork
 requires a new source with a distinct continuous contour and plain white padding.
 
+If isolated pixels alone determine an extreme trim boundary, V2 blocks with
+`isolated pixels control trim bounds`. It does not silently delete them. This
+was found by inspecting identical-placement comparisons: the smile raw source
+contains single cyan pixels `(245,254,255,255)` at (223,923) and (239,923), well
+below the visible tooth arcs. Keeping them would extend the trim bottom from 667
+to 924 and move/shrink the subject. A new clean source is required. A connected
+single-pixel tip remains valid; a synthetic regression distinguishes the two.
+Four retained sources (smile, soap bubbles, water drops and toothbrush in a cup)
+produce this explicit diagnostic. Seven produce reproducible offline derivatives.
+The guard is intentionally conservative; it does not infer which small marks are
+artistic detail. The complete historical admitted versions remain untouched.
+
 The retained circle source is
 `d8876060edda376fa7568300427134cb9b8163e18f13e2864bebddd4e880daca`;
 its original admitted PNG is
@@ -149,11 +161,11 @@ its original admitted PNG is
 At raw coordinate (277,161), RGBA `(252,246,240,255)` is visible source artwork:
 V1 sets alpha to zero, V2 retains 255. Across that source V2 retains 49,047 pixels
 that V1 removed, with no newly removed pixels. Visual comparison confirms the
-restored outer rim; a pixel count alone is not a quality score. The smile restores
-905 pixels, including faint sparkle/contour detail. All eleven offline candidates
-were generated twice with identical pixel hashes. They are unselected derivatives,
-not replacement production artwork. Residual source shadows and semantic errors
-remain visible.
+restored outer rim; a pixel count alone is not a quality score. All eleven sources
+were processed twice, requiring identical pixel hashes for successful derivatives
+or identical explicit diagnostics for rejected sources. They are unselected local
+derivatives or blocked diagnostics, not replacement production artwork. Residual
+source shadows and semantic errors remain visible.
 
 The extraction helper defaults to `qwen_white_exterior_v1`. Existing reviewed
 lesson-object paths retain V1. Only new `episode_illustration_v3` requests explicitly
@@ -195,7 +207,8 @@ readable tooth graphic matter more than added decorative detail.
 
 `tests/test_qwen_art_quality.py` covers pale contours, enclosed white interiors,
 tinted near-white backgrounds, antialiased source edges, invisible white-on-white
-subjects, touching/near-border objects, uneven padding, frozen historical hashes,
+subjects, touching/near-border objects, uneven padding, isolated trim outliers,
+frozen historical hashes,
 scene generalization, changed-request blocking, immutable receipts and retained raw/
 admitted foreground reuse. Existing lesson-object, Qwen, environment, rendering and
 source-reuse tests remain authoritative. Run Ruff, strict Mypy, focused/relevant

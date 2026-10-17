@@ -219,6 +219,21 @@ def test_complete_object_close_to_border_is_not_cropped():
     assert result.getpixel((1, 24)) == (238, 238, 238, 255)
 
 
+def test_isolated_backdrop_pixels_must_not_silently_shift_normalized_subject():
+    image = Image.new("RGB", (128, 128), (253, 255, 250))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((24, 24, 103, 80), fill="#e0e0e0")
+    # Retained smile source has similar single-pixel cyan VAE artifacts below its subject.
+    image.putpixel((32, 115), (245, 254, 255))
+    with pytest.raises(ValueError, match="isolated pixels control trim"):
+        extract(image)
+    # A one-pixel tip connected to the subject is meaningful and must remain.
+    image.putpixel((32, 115), (253, 255, 250))
+    image.putpixel((64, 81), (224, 224, 224))
+    result = extract(image)
+    assert result.getpixel((64, 81)) == (224, 224, 224, 255)
+
+
 def test_foreground_prompt_scopes_subject_and_protects_unspecified_pale_parts():
     from types import SimpleNamespace
 
