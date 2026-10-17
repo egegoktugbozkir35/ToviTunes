@@ -71,6 +71,9 @@ def http_failure(status: int, *, nvidia_transient: bool = False) -> FailureCateg
     """
     if status in {401, 403}:
         return FailureCategory.AUTHENTICATION
+    # Ported from ollama-mpt-youtube PR #43: a retired NVIDIA model is unavailable.
+    if status == 410 and nvidia_transient:
+        return FailureCategory.MODEL_UNAVAILABLE
     if status == 429:
         return FailureCategory.RATE_LIMITED
     if status >= 500:
@@ -85,6 +88,17 @@ def http_failure(status: int, *, nvidia_transient: bool = False) -> FailureCateg
 def stored_failure(row: Row) -> FailureCategory:
     if row["status"] == "ambiguous":
         return FailureCategory.AMBIGUOUS
+    if (
+        row["status"] == "failed"
+        and row["provider"] == "nvidia"
+        and row["error_kind"] in {"configuration", "provider_rejected"}
+        and row["error_reason"] == f"NVIDIA NIM HTTP 410 for {row['model']}"
+        and row["response_content"] is None
+        and row["response_sha256"] is None
+    ):
+        # Interpret only the old transport's exact conclusive diagnostic. The terminal
+        # row stays immutable; resilience must still verify its original fingerprint.
+        return FailureCategory.MODEL_UNAVAILABLE
     if (
         row["status"] == "failed"
         and row["provider"] == "nvidia"

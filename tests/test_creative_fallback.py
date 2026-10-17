@@ -31,8 +31,8 @@ from tovitunes.persistence.creative_reconciliation import CreativeReconciliation
 from tovitunes.persistence.db import Database
 
 CHAIN = (
-    "moonshotai/kimi-k3",
     "z-ai/glm-5.3",
+    "z-ai/glm-5.3-flash",
     "nvidia/nemotron-3-ultra-550b-a55b",
     "deepseek-ai/deepseek-v4.1-flash",
 )
@@ -435,7 +435,11 @@ def test_legacy_failed_kimi_restart_preserves_all_evidence(owner, repair):
         calls.append(request)
         return reply("broken" if repair and len(calls) == 1 else "", identity=f"old-{len(calls)}")
 
-    config = CreativeLLMConfig(base_url="https://example.test/v1")
+    config = CreativeLLMConfig(
+        model="moonshotai/kimi-k3",
+        fallback_models=("z-ai/glm-5.3", *CHAIN[2:]),
+        base_url="https://example.test/v1",
+    )
     old = DurableStructuredGenerator(
         database,
         NvidiaNIMClient(config, client=httpx.Client(transport=httpx.MockTransport(handler))),
@@ -455,10 +459,11 @@ def test_legacy_failed_kimi_restart_preserves_all_evidence(owner, repair):
         build(
             database,
             lambda r: new_calls.append(json.loads(r.content)["model"]) or reply(identity="new-glm"),
+            config=config,
         ),
         context,
     )
-    assert draft.model == CHAIN[1] and new_calls == [CHAIN[1]]
+    assert draft.model == "z-ai/glm-5.3" and new_calls == ["z-ai/glm-5.3"]
     assert records(database)[: len(before)] == before
     assert records(database)[-1]["previous_attempt_id"] == before[-1]["request_id"]
 
@@ -504,6 +509,7 @@ def test_exhaustion_does_not_revisit_any_model_or_use_emergency(owner):
     [
         {"model": ""},
         {"fallback_models": [CHAIN[0]]},
+        {"fallback_models": [CHAIN[0].upper()]},
         {"fallback_models": [" "]},
         {"fallback_models": ["x/y"] * 9},
         {"ollama": {"base_url": "https://secret@localhost"}},
@@ -639,7 +645,7 @@ def test_forward_migration_preserves_actual_pre_fallback_failed_row(
     # This is the exact pre-PR settings serialization, not the new implementation's helper.
     settings = dict(
         provider="nvidia",
-        model=CHAIN[0],
+        model="moonshotai/kimi-k3",
         base_url="https://example.test/v1",
         timeout_seconds=1800,
         temperature=0.7,
@@ -648,7 +654,7 @@ def test_forward_migration_preserves_actual_pre_fallback_failed_row(
     digest = fingerprint(
         dict(
             provider="nvidia",
-            model=CHAIN[0],
+            model="moonshotai/kimi-k3",
             settings=settings,
             prompt_version="test-v1",
             messages=messages,
@@ -672,7 +678,7 @@ def test_forward_migration_preserves_actual_pre_fallback_failed_row(
                     "episode_spec",
                     "main",
                     "nvidia",
-                    CHAIN[0],
+                    "moonshotai/kimi-k3",
                     "old-remote-id",
                     digest,
                     "failed",
@@ -694,9 +700,18 @@ def test_forward_migration_preserves_actual_pre_fallback_failed_row(
     context = GenerationContext("episode_spec", "test-v1", episode_id=episode.episode_id)
     calls = []
     draft = run(
-        build(database, lambda r: calls.append(json.loads(r.content)["model"]) or reply()), context
+        build(
+            database,
+            lambda r: calls.append(json.loads(r.content)["model"]) or reply(),
+            config=CreativeLLMConfig(
+                model="moonshotai/kimi-k3",
+                fallback_models=("z-ai/glm-5.3", *CHAIN[2:]),
+                base_url="https://example.test/v1",
+            ),
+        ),
+        context,
     )
-    assert draft.model == CHAIN[1] and calls == [CHAIN[1]]
+    assert draft.model == "z-ai/glm-5.3" and calls == ["z-ai/glm-5.3"]
     assert records(database)[0] == after
 
 

@@ -116,7 +116,7 @@ def test_live_cli_contract_through_mock_nim_creates_nvidia_provenance(
 
     def handler(request):
         payload = json.loads(request.content)
-        assert payload["model"] == "moonshotai/kimi-k3"
+        assert payload["model"] == "z-ai/glm-5.3"
         reply = fake.chat(payload["messages"], record_identity=lambda value: None)
         return httpx.Response(
             200,
@@ -146,7 +146,7 @@ def test_live_cli_contract_through_mock_nim_creates_nvidia_provenance(
     )
     record = flow.store.get(result["music_spec_artifact_id"])
     assert record.provenance.provider == "nvidia"
-    assert record.provenance.model == "moonshotai/kimi-k3"
+    assert record.provenance.model == "z-ai/glm-5.3"
     assert record.provenance.request_id == "nim-4" and record.provenance.local_request_id
 
 
