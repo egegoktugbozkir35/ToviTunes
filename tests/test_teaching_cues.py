@@ -13,6 +13,7 @@ from test_visual_story import evidence
 from test_visual_story import runtime as runtime
 
 from tovitunes.artifacts.store import AssetStore
+from tovitunes.creative.provider import structured_json_instruction
 from tovitunes.domain.storyboard import TimedScene
 from tovitunes.domain.visual_draft import (
     CreativeObject,
@@ -21,7 +22,7 @@ from tovitunes.domain.visual_draft import (
     parse_visual_plan,
     validate_compiled_visual,
 )
-from tovitunes.domain.visual_plan import VisualRequirement
+from tovitunes.domain.visual_plan import EpisodeVisualPlan, VisualRequirement
 from tovitunes.persistence.db import Database
 from tovitunes.persistence.requests import RequestLedger
 from tovitunes.render import episode_assets
@@ -93,6 +94,24 @@ def test_explicit_cue_compiles_with_distinct_identity_and_roundtrips(episode):
     assert not plan.required_assets[0].grounded
     assert parse_visual_plan(plan.model_dump(mode="json")) == plan
     validate_compiled_visual(plan, episode, ("s", "l", "m"))
+
+
+@pytest.mark.parametrize("model,schema_hash,instruction_hash", [
+    (CreativeVisualDraft,
+     "81f3add2bc0496056f4a2ebfe762cc3fd64de10126dec15909c352440092113a",
+     "48fd4705c0fbb4bf8f4ad54973cb4d9ebcdfd0ce166c9a8982f82f972f0a94e8"),
+    (EpisodeVisualPlan,
+     "87a0cfda303ff74ee5f7a9132f12702caeab0fb0dac4d834b2220de6ae78dbcb",
+     "03431e0959e915483fbc35b2091fc60b2d15aad983bcc6c786b262200cea4da3"),
+])
+def test_historical_provider_schema_and_request_instruction_are_frozen(
+    model, schema_hash, instruction_hash,
+):
+    schema = model.model_json_schema()
+    assert sha256(json.dumps(schema, sort_keys=True).encode()).hexdigest() == schema_hash
+    instruction = structured_json_instruction(schema)["content"]
+    assert sha256(instruction.encode()).hexdigest() == instruction_hash
+    assert "teaching_cue" not in instruction
 
 
 @pytest.mark.parametrize("changes", [

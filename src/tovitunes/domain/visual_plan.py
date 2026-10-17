@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from tovitunes.creative.validation import contains, safe_text
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
@@ -36,7 +37,10 @@ class VisualRequirement(ProductionModel):
     allow_face: bool = False
     grounded: bool = True
     motion: Literal["static", "roll", "float"] = "static"
-    teaching_cue: TeachingCue | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Explicit local plan metadata; keep historical model-facing request schemas frozen.
+    teaching_cue: SkipJsonSchema[TeachingCue | None] = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def cue_contract(self) -> "VisualRequirement":

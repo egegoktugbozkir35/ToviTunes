@@ -9,7 +9,7 @@ relaxed or repainted by this correction.
 
 An optional `teaching_cue` enum is supported on `CreativeObject` and the compiled
 `VisualRequirement`. Its only value is `dotted_circle_brushing_v1`. An explicitly
-authored proposal object can request it:
+authored local proposal object can request it:
 
 ```json
 {
@@ -20,6 +20,11 @@ authored proposal object can request it:
 ```
 
 The compiler carries the enum to the asset requirement and marks it ungrounded.
+This is local, explicit metadata: it is deliberately omitted from model-facing
+JSON schemas, keeping historical structured instructions and request fingerprints
+unchanged. The creative provider does not automatically introduce the cue. Automatic
+proposal of symbols would require a separately versioned future creative contract;
+that work is outside this correction.
 Direct requirements must be static, ungrounded, non-decorative `scene_element`s,
 with no face or target-color override. Unknown cue values and conflicting
 requirements fail validation. Text, names, asset keys and lesson topics never
@@ -39,7 +44,8 @@ or a new animation channel.
 ## Historical boundary
 
 Absent/null cue fields are omitted from JSON, preserving historical proposal
-hashes, compiler keys and visual-plan serialization. An explicit cue changes the
+hashes, compiler keys and visual-plan serialization. Model-facing schema and
+structured-instruction hashes are frozen in regressions. An explicit cue changes the
 object hash and therefore receives a distinct asset key. Existing selected assets
 are checked and reused first, byte-for-byte, with the existing plan-dependency
 guard. Any prior Qwen request for an unselected cue slot blocks for explicit

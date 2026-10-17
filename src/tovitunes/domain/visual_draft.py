@@ -5,6 +5,7 @@ from hashlib import sha256
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from tovitunes.creative.validation import contains, safe_creative_text
 from tovitunes.domain.creative_drafts import CreativeDraftModel
@@ -32,7 +33,9 @@ ROLES: tuple[EnvironmentRoleV2, ...] = (
 class CreativeObject(CreativeDraftModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = Field(default=None, min_length=1, max_length=1000)
-    teaching_cue: TeachingCue | None = Field(default=None, exclude_if=lambda value: value is None)
+    teaching_cue: SkipJsonSchema[TeachingCue | None] = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
 
 class CreativeScene(CreativeDraftModel):
