@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from hashlib import sha256
 from importlib import resources
 from typing import Any
@@ -122,14 +123,15 @@ def create_app(
 
     @app.get("/api/system")
     def system() -> dict[str, Any]:
+        history = jobs.list()
         active = next(
-            (j.model_dump() for j in jobs.list() if j.status in {"queued", "running"}), None
+            (j.model_dump() for j in history if j.status in {"queued", "running"}), None
         )
         result = system_status(config, active)
         verified = next(
             (
                 j
-                for j in jobs.list()
+                for j in history
                 if j.operation == "youtube_connect"
                 and j.status in {"succeeded", "complete", "failed"}
             ),
@@ -152,9 +154,10 @@ def create_app(
         result["services"].update(
             {
                 "creative_director": {
-                    "status": "ready"
+                    "status": "configured"
                     if result["nvidia_key_configured"] and result["creative_provider_configured"]
-                    else "configuration issue"
+                    else "configuration issue",
+                    "message": "Credentials and model configuration only; generation unverified.",
                 },
                 "ffmpeg": {
                     "status": "ready"
@@ -169,10 +172,30 @@ def create_app(
                 },
                 "youtube": {
                     "status": youtube_state,
-                    "message": "Channel identity is verified on Connect and before publication.",
+                    "message": "Last Connect result only; may be stale. Publication rechecks "
+                    "channel identity independently of local rendering.",
+                    "checked_at": verified.finished_at if verified else None,
                 },
             }
         )
+        result["checked_at"] = datetime.now(UTC).isoformat()
+        result["readiness_scope"] = "partial_configuration_and_health"
+        result["generation_verified"] = False
+        for name, service in result["services"].items():
+            if name in supervisor.urls:
+                service["verification"] = (
+                    "endpoint_reachable" if service["status"] == "ready" else "unavailable"
+                )
+                scope = (
+                    "Endpoint health only; workflow, checkpoints and generation are unverified."
+                    if "comfyui" in name
+                    else "Endpoint health only; successful generation is unverified."
+                )
+                service["message"] = " ".join(filter(None, (service.get("message"), scope)))
+            elif name in {"ffmpeg", "database", "tovi_pack"}:
+                service["verification"] = "local_presence_only"
+                service["message"] = "Local presence/configuration checked; full production "
+                service["message"] += "preflight has not run."
         return result
 
     @app.post("/api/system/services/{name}/retry", status_code=202)

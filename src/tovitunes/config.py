@@ -75,7 +75,7 @@ class CreativeLLMConfig(StrictConfigModel):
     """Explicit NIM configuration; credentials are read only from the named environment."""
 
     provider: Literal["nvidia"] = "nvidia"
-    model: str = Field(default="moonshotai/kimi-k3", pattern=r"^[\w.-]+/[\w.-]+$")
+    model: str = Field(default="z-ai/glm-5.3", pattern=r"^[\w.-]+/[\w.-]+$")
     base_url: str = "https://integrate.api.nvidia.com/v1"
     api_key_env: str = Field(default="NVIDIA_API_KEY", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     timeout_seconds: float = Field(default=1800, gt=0)
@@ -83,7 +83,7 @@ class CreativeLLMConfig(StrictConfigModel):
     max_tokens: int = Field(default=16384, ge=1, le=131072)
     fallback_models: tuple[str, ...] = Field(
         default=(
-            "z-ai/glm-5.3",
+            "z-ai/glm-5.3-flash",
             "nvidia/nemotron-3-ultra-550b-a55b",
             "deepseek-ai/deepseek-v4.1-flash",
         ),

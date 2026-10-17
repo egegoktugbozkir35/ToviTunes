@@ -65,7 +65,7 @@ def test_explicit_model_bearer_schema_timeout_and_json_fallback(request_owner):
         assert request.extensions["timeout"]["write"] == 1800
         payload = json.loads(request.content)
         calls.append(payload)
-        assert payload["model"] == "moonshotai/kimi-k3"
+        assert payload["model"] == "z-ai/glm-5.3"
         assert payload["stream"] is True
         assert payload["temperature"] == 0.7
         assert payload["max_tokens"] == 16384

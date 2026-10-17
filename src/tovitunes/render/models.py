@@ -176,7 +176,13 @@ class RenderManifest(ProductionModel):
 
 class RenderManifestV2(ProductionModel):
     schema_version: Literal[2] = 2
-    renderer_version: Literal["tovitunes_creative_render_v1"] = "tovitunes_creative_render_v1"
+    renderer_version: Literal[
+        "tovitunes_creative_render_v1", "tovitunes_visual_quality_v1",
+        "tovitunes_visual_quality_v1_r2",
+        "tovitunes_visual_quality_v1_r3",
+    ] = (
+        "tovitunes_creative_render_v1"
+    )
     camera_policy_version: str = "gentle_camera_v1"
     motion_grammar_version: str = "preschool_motion_v1"
     keyword_emphasis_policy: Literal["disabled_duration_path"] = "disabled_duration_path"

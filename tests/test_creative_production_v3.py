@@ -510,6 +510,100 @@ def test_qwen_environment_alpha_normalization_is_bounded():
         _validate_image(buffer.getvalue(), (768, 1376), allow_near_opaque_alpha=True)
 
 
+def test_visual_quality_preview_preserves_completed_sources_and_surface_intent(
+    new_case, monkeypatch
+):
+    from tovitunes.render.composition import VISUAL_QUALITY_VERSION
+    from tovitunes.render.production import ProductionRenderer
+
+    new = new_case
+    draft = CreativeVisualDraft.model_validate(
+        {
+            "scenes": [
+                {
+                    "description": "Tovi presents a puppy beside him",
+                    "tovi_action": "present",
+                    "objects": ["puppy"],
+                },
+                {
+                    "description": "Tovi presents the same puppy again",
+                    "tovi_action": "present",
+                    "objects": ["puppy"],
+                },
+                {
+                    "description": "Animal friends gather around Tovi",
+                    "tovi_action": "sing",
+                    "objects": ["puppy", "kitten", "duckling"],
+                },
+                {
+                    "description": "Tovi points to a floating sun illustration",
+                    "tovi_action": "point",
+                    "objects": ["sun"],
+                },
+            ]
+        }
+    )
+    new["fake"].responses["CreativeVisualDraft"] = [draft.model_dump_json()]
+    monkeypatch.setattr(
+        PublicationService, "publish", lambda *a, **k: pytest.fail("preview published")
+    )
+    result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["target_complete"], result
+    store, episode = new["store"], new["episode"]
+    with closing(store.database.connect()) as db:
+        selections = [tuple(r) for r in db.execute("SELECT * FROM artifact_selections")]
+        requests = [tuple(r) for r in db.execute("SELECT * FROM generation_requests")]
+    original = store.get(result["final_render_id"])
+    original_bytes = store.path_for(original.identity.artifact_id).read_bytes()
+    effects = (len(new["music_events"]), len(new["image_events"]), len(new["fake"].calls))
+    with ProductionExecutionOwnership(store.database, operation="visual-quality-test") as owner:
+        renderer = ProductionRenderer(
+            new["config"],
+            canvas=(270, 480),
+            local_preview=True,
+            visual_quality=True,
+            assert_owner=owner.assert_owned,
+        )
+        preview = renderer.render(episode.external_key, visual_story=True)
+        again = renderer.render(episode.external_key, visual_story=True)
+    assert preview["final_render_id"] == again["final_render_id"] != original.identity.artifact_id
+    assert preview["media_qa"]["passed"] and preview["publication"] == "blocked"
+    assert preview["provider_calls"] == 0
+    assert effects == (len(new["music_events"]), len(new["image_events"]), len(new["fake"].calls))
+    assert original_bytes == store.path_for(original.identity.artifact_id).read_bytes()
+    with closing(store.database.connect()) as db:
+        assert all(
+            db.execute(
+                "SELECT 1 FROM artifact_selections WHERE owner_scope=? AND owner_id=? "
+                "AND kind=? AND slot_key=? AND artifact_id=? AND selected_at=?",
+                r,
+            ).fetchone()
+            for r in selections
+        )
+        assert requests == [tuple(r) for r in db.execute("SELECT * FROM generation_requests")]
+        assert db.execute("SELECT count(*) FROM publication_attempts").fetchone()[0] == 0
+    checks = preview["media_qa"]["educational_checks"]
+    first, repeated, group, floating = [x["composition"] for x in checks]
+    assert first["props"] == repeated["props"]
+    assert all(p["placement_mode"] == "ground" for p in group["props"])
+    assert floating["props"][0]["placement_mode"] == "display"
+    manifest = parse_manifest(store.read_json(preview["render_manifest_id"]))
+    assert manifest.renderer_version == VISUAL_QUALITY_VERSION
+    motions = [store.read_json(s.scene_motion_artifact_id) for s in manifest.scenes]
+    assert motions[0]["prop_tracks"][0]["bbox"] == motions[1]["prop_tracks"][0]["bbox"]
+    assert motions[0]["camera_track"]["zoom_end"] == motions[1]["camera_track"]["zoom_start"]
+    for motion in motions:
+        from tovitunes.render.motion import SceneMotionPlan, prop_state
+
+        plan = SceneMotionPlan.model_validate(motion)
+        for track in plan.prop_tracks:
+            if track.grounded:
+                assert all(
+                    abs(prop_state(track, plan, plan.duration * i / 60)[1] - track.bbox[3]) < 1e-9
+                    for i in range(61)
+                )
+
+
 def test_pipeline_repairs_unsupported_adapter_tempo_before_success(new_case):
     new = new_case
     new["fake"].responses["MusicDraft"] = [
@@ -740,7 +834,9 @@ def test_explicit_recovery_preserves_failures_upstream_music_and_episode(
                     "/api/studio/jobs/retained-studio-job/recover", json={"target": "publish"}
                 )
                 assert response.status_code == 202
-                app.state.jobs._executor.submit(lambda: None).result(timeout=60)
+                # This recovery includes a real offline fixture render. Observe
+                # completion without imposing a one-minute rendering SLA.
+                app.state.jobs._executor.submit(lambda: None).result(timeout=180)
                 job = app.state.jobs.get("retained-studio-job")
                 assert job.status == "complete", job
                 assert job.target == ProductionTarget.RENDER

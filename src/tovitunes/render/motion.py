@@ -15,7 +15,12 @@ from pydantic import Field, model_validator
 from tovitunes.domain.production_v3 import AudioClock
 from tovitunes.domain.storyboard import AudioAlignment, BeatAnalysis, ProductionModel
 from tovitunes.render import VERSION, VISUAL_STORY_VERSION
-from tovitunes.render.composition import SceneComposition
+from tovitunes.render.composition import (
+    FRAMING_VISUAL_QUALITY_VERSION,
+    LEGACY_VISUAL_QUALITY_VERSION,
+    VISUAL_QUALITY_VERSION,
+    SceneComposition,
+)
 from tovitunes.render.models import CharacterAnimation, SpriteRole
 from tovitunes.render.story import VisualStoryPlan
 
@@ -261,6 +266,7 @@ def plan_motion(
     canvas: tuple[int, int] = (1080, 1920),
     story: VisualStoryPlan | None = None,
     continuity_positions: dict[str, tuple[float, float]] | None = None,
+    visual_quality: bool = False,
 ) -> SceneMotionPlan:
     action = composition.resolved_action
     seed = hashlib.sha256(f"{storyboard_id}:{composition.scene_id}:{VERSION}".encode()).hexdigest()
@@ -289,7 +295,9 @@ def plan_motion(
             "point": ("sprite/neutral_full_body", "sprite/pointing"),
             "question": ("sprite/neutral_full_body", "sprite/pointing"),
             "celebrate": ("sprite/hello", "sprite/hopping"),
-            "idle": ("sprite/hello", "sprite/neutral_full_body"),
+            "idle": ("sprite/pointing", "sprite/neutral_full_body")
+            if visual_quality and composition.props and composition.character_slot == "lower_left"
+            else ("sprite/hello", "sprite/neutral_full_body"),
         }
         sequence = sequences[action]
         if action == "celebrate" and composition.outro_phases:
@@ -297,6 +305,54 @@ def plan_motion(
         for i, role in enumerate(sequence):
             t, source = cue((i + 1) / (len(sequence) + 1))
             if t > roles[-1].time + 0.3 and role != roles[-1].sprite_role:
+                roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
+    continuous = bool(visual_quality and previous and story
+                      and story.continuity_source == previous.scene_id
+                      and abs(previous.scene_start + previous.duration - scene_start) < 1e-6)
+    if visual_quality and not composition.micro_scene and duration > 1.1:
+        musical = action == "sing" or bool(story and re.search(
+            r"\b(sing\w*|duet|dance|call.and.response|quack together)\b",
+            story.character_intent.casefold()
+        ))
+        farewell = previous is not None and composition.sprite_role == "sprite/hello"
+        initial: SpriteRole = (
+            previous.character_pose_sequence[-1].sprite_role
+            if continuous and previous else "sprite/neutral_full_body"
+        )
+        progression: tuple[tuple[float, SpriteRole], ...] = ()
+        if farewell:
+            if not continuous:
+                initial = "sprite/hello"
+            progression = ((0.16, "sprite/hello"), (0.80, "sprite/neutral_full_body"))
+        elif (scene_start == 0 and not musical and action != "celebrate") or action == "enter":
+            initial = "sprite/hello"
+            progression = ((0.30, "sprite/pointing" if composition.props
+                            else "sprite/neutral_full_body"),)
+        elif musical:
+            progression = ((0.20, "sprite/pointing"), (0.46, "sprite/singing")) \
+                if composition.props else ((0.20, "sprite/singing"),)
+        elif action == "celebrate":
+            progression = ((0.22, "sprite/pointing"), (0.58, "sprite/hopping"),
+                           (0.86, "sprite/neutral_full_body"))
+        elif action == "point":
+            # Direct presentation is already a readable pose; don't reset it first.
+            initial = initial if continuous else "sprite/pointing"
+            progression = ((0.18, "sprite/pointing"),) if initial != "sprite/pointing" else ()
+            if duration > 4.5:
+                progression += ((0.82, "sprite/neutral_full_body"),)
+        elif composition.props:
+            # Discovery acknowledges the subject once, then leaves time to study it.
+            progression = ((0.26, "sprite/pointing"),) if initial != "sprite/pointing" \
+                else ((0.68, "sprite/neutral_full_body"),)
+        roles = [PoseCue(time=0, sprite_role=initial, timing_source="initial")]
+        for fraction, role in progression:
+            t, source = cue(fraction)
+            # Leave a complete landing before switching away from a hopping drawing.
+            if roles[-1].sprite_role == "sprite/hopping":
+                landing = roles[-1].time + 0.74
+                if t < landing:
+                    t, source = landing, "scene_fraction"
+            if roles[-1].time + 0.35 < t < duration - 0.20 and role != roles[-1].sprite_role:
                 roles.append(PoseCue(time=t, sprite_role=role, timing_source=source))
     phases = tuple((p.name, p.start, p.end) for p in composition.outro_phases)
     settle = phases[-1][1] if phases else None
@@ -325,6 +381,23 @@ def plan_motion(
         camera = CameraTrack(behavior="slow_push_in", duration=duration, zoom_end=1.065)
     if settle is not None:
         camera = camera.model_copy(update={"hold_from": settle})
+    if visual_quality:
+        if (
+            action in {"idle", "question", "sing"}
+            or composition.visual_state_persistence != "replace"
+        ):
+            camera = CameraTrack(duration=duration)
+        else:
+            camera = camera.model_copy(update={"hold_from": min(duration * 0.55, 1.6)})
+        if previous and (composition.visual_state_persistence != "replace" or continuous):
+            zoom, px, py = camera_state(previous.camera_track, previous.duration)
+            camera = CameraTrack(
+                duration=duration,
+                zoom_start=zoom,
+                zoom_end=zoom,
+                pan_start=(px, py),
+                pan_end=(px, py),
+            )
     variant: Literal["wide", "lesson_focus", "performance", "celebration"] = (
         "performance"
         if action == "sing"
@@ -356,7 +429,25 @@ def plan_motion(
         bbox = (pixels[0] / w, pixels[1] / h, pixels[2] / w, pixels[3] / h)
         events: list[MotionEvent] = []
         new = composition.visual_state_persistence == "replace"
-        if story and story.story_action == "drop_and_settle" and prop.primary:
+        if continuous and previous and any(
+            p.prop_key == prop.type and p.bbox == bbox for p in previous.prop_tracks
+        ):
+            new = False  # The retained object is already at its resting placement.
+        if visual_quality and prop.placement_mode == "ground":
+            # Surface-supported animals arrive with a restrained accent, then hold.
+            # No airborne performance arc or repeated vertical bouncing.
+            if new and not composition.micro_scene:
+                entry_duration = min(0.35, duration / max(1, len(composition.props)))
+                entry_start = i * entry_duration
+                events.append(
+                    MotionEvent(
+                        start=entry_start,
+                        end=entry_start + entry_duration,
+                        motion="pulse",
+                        timing_source="scene_entry",
+                    )
+                )
+        elif story and story.story_action == "drop_and_settle" and prop.primary:
             contact = min(duration * 0.62, max(0.55, story.action_phase.end))
             events.append(
                 MotionEvent(start=0, end=contact, motion="fall_in", timing_source="scene_entry")
@@ -416,8 +507,10 @@ def plan_motion(
             entry: PropMotion = "roll_in" if prop.motion == "roll_in" else "pop_in"
             entry_duration = min(duration, 0.95 if entry == "roll_in" else 0.4)
             entry_start = 0.0
-            if story is not None and entry == "pop_in" and (
-                len(composition.props) > 2 or action == "enter" and len(composition.props) > 1
+            if (
+                story is not None
+                and entry == "pop_in"
+                and (len(composition.props) > 2 or action == "enter" and len(composition.props) > 1)
             ):
                 entry_duration = min(entry_duration, duration / len(composition.props))
                 entry_start = i * entry_duration
@@ -429,8 +522,8 @@ def plan_motion(
                     timing_source="scene_entry",
                 )
             )
-        if not composition.micro_scene and duration > 2.5:
-            fraction = (i + 1) / (len(composition.props) + 1)
+        if not composition.micro_scene and duration > 2.5 and (not visual_quality or prop.primary):
+            fraction = 0.38 if visual_quality else (i + 1) / (len(composition.props) + 1)
             t, source = cue(fraction)
             if phases:
                 t = phases[1][1] + (phases[1][2] - phases[1][1]) * fraction
@@ -442,7 +535,9 @@ def plan_motion(
                     MotionEvent(
                         start=t,
                         end=t + 0.5,
-                        motion="pulse" if action == "sing" or phases else "gentle_bounce",
+                        motion="pulse"
+                        if visual_quality or action == "sing" or phases
+                        else "gentle_bounce",
                         timing_source="recap_phase" if phases else source,
                     )
                 )
@@ -527,17 +622,24 @@ def plan_motion(
         offset = previous.clock_offset + scene_start - previous.scene_start
         tracks = [p.model_copy(update={"events": ()}) for p in previous.prop_tracks]
     if story is not None and story.story_action == "compare" and len(tracks) == 3:
-        arrival_end = max((e.end for p in tracks for e in p.events
-                           if e.timing_source == "scene_entry"), default=0.0)
+        arrival_end = max(
+            (e.end for p in tracks for e in p.events if e.timing_source == "scene_entry"),
+            default=0.0,
+        )
         delayed = [roles[0]]
         for cue_pose in roles[1:]:
             at = max(cue_pose.time, arrival_end + 0.01, delayed[-1].time + 0.31)
             if at < duration:
-                delayed.append(cue_pose.model_copy(update={
-                    "time": at,
-                    "timing_source": "scene_fraction" if at != cue_pose.time
-                    else cue_pose.timing_source,
-                }))
+                delayed.append(
+                    cue_pose.model_copy(
+                        update={
+                            "time": at,
+                            "timing_source": "scene_fraction"
+                            if at != cue_pose.time
+                            else cue_pose.timing_source,
+                        }
+                    )
+                )
         roles = delayed
     activities: list[ActivityEvent] = []
     if not composition.micro_scene:
@@ -568,6 +670,18 @@ def plan_motion(
                     reason="approved_pose_change",
                 )
             )
+        if visual_quality:
+            # Account for the full supported movement, not only the sprite switch.
+            for i, pose_cue in enumerate(roles):
+                end = roles[i + 1].time if i + 1 < len(roles) else duration
+                if pose_cue.sprite_role in {"sprite/singing", "sprite/hopping"}:
+                    activities.append(ActivityEvent(
+                        start=max(0, pose_cue.time - 0.16)
+                        if pose_cue.sprite_role == "sprite/hopping" else pose_cue.time,
+                        end=min(end, pose_cue.time + 0.72)
+                        if pose_cue.sprite_role == "sprite/hopping" else end,
+                        channel="character", reason="supported_body_motion",
+                    ))
         for track in tracks:
             for event in track.events:
                 activities.append(
@@ -598,9 +712,21 @@ def plan_motion(
             )
         )
     planned = SceneMotionPlan(
-        renderer_version=VISUAL_STORY_VERSION if story else VERSION,
-        camera_policy_version="story_camera_v1" if story else "gentle_camera_v1",
-        motion_grammar_version="visual_story_motion_v1" if story else "preschool_motion_v1",
+        renderer_version=VISUAL_QUALITY_VERSION
+        if visual_quality
+        else VISUAL_STORY_VERSION
+        if story
+        else VERSION,
+        camera_policy_version="focal_hold_v1_r2"
+        if visual_quality
+        else "story_camera_v1"
+        if story
+        else "gentle_camera_v1",
+        motion_grammar_version="supported_performance_v1_r3"
+        if visual_quality
+        else "visual_story_motion_v1"
+        if story
+        else "preschool_motion_v1",
         environmental_theme="selected_environment_set_v1" if story else "playful_meadow_v2",
         scene_id=composition.scene_id,
         scene_start=scene_start,
@@ -614,7 +740,8 @@ def plan_motion(
         ambient_tracks=ambient,
         keyword_emphasis_events=keywords,
         scene_entry_effect="none"
-        if composition.micro_scene or composition.visual_state_persistence != "replace"
+        if (composition.micro_scene or composition.visual_state_persistence != "replace"
+            or continuous)
         else "side_reveal"
         if action == "enter"
         else "soft_pop",
@@ -623,9 +750,10 @@ def plan_motion(
         micro_scene=composition.micro_scene,
         clock_offset=offset,
         ambient_time_offset=scene_start,
-        inherited_from_scene_id=composition.inherited_from_scene_id,
+        inherited_from_scene_id=previous.scene_id if continuous and previous
+        else composition.inherited_from_scene_id,
         inherited_motion_artifact_id=previous_artifact_id
-        if composition.micro_scene and previous
+        if (composition.micro_scene or continuous) and previous
         else None,
         settle_start=settle,
         outro_phases=phases,
@@ -633,13 +761,18 @@ def plan_motion(
     if activity_diagnostics(planned)["max_simultaneous_major_motion"] > 3:
         # Optional camera movement yields to admitted keyword timing and object
         # actions. Keep the same bounded overscan without adding another motion.
-        planned = planned.model_copy(update={
-            "camera_track": camera.model_copy(update={
-                "behavior": "static", "zoom_end": camera.zoom_start,
-                "pan_end": camera.pan_start,
-            }),
-            "activity_events": tuple(a for a in activities if a.channel != "camera"),
-        })
+        planned = planned.model_copy(
+            update={
+                "camera_track": camera.model_copy(
+                    update={
+                        "behavior": "static",
+                        "zoom_end": camera.zoom_start,
+                        "pan_end": camera.pan_start,
+                    }
+                ),
+                "activity_events": tuple(a for a in activities if a.channel != "camera"),
+            }
+        )
     return planned
 
 
@@ -825,6 +958,18 @@ def validate_motion(
                 and abs(bottom - prop.bbox[3]) > 1e-9
             ):
                 raise ValueError("rolling object loses ground contact")
+            if (
+                plan.renderer_version in {LEGACY_VISUAL_QUALITY_VERSION,
+                                          FRAMING_VISUAL_QUALITY_VERSION, VISUAL_QUALITY_VERSION}
+                and prop.grounded
+                and not any(
+                    e.motion in {"fall_in", "bounce_settle", "gentle_bounce"}
+                    and e.start <= t <= e.end
+                    for e in prop.events
+                )
+                and abs(bottom - prop.bbox[3]) > 1e-9
+            ):
+                raise ValueError("surface-supported object loses contact")
             for cx0, cy0, cx1, cy1 in char_boxes:
                 if box[0] < cx1 and box[2] > cx0 and box[1] < cy1 and box[3] > cy0:
                     raise ValueError("prop motion occludes Tovi")
