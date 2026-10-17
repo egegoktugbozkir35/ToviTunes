@@ -27,6 +27,7 @@ from tovitunes.render.lesson_objects import (
     _provider,
     normalize,
 )
+from tovitunes.render.props import dotted_circle_brushing
 
 LEGACY_IMAGE_PROMPT = "episode_illustration_v2"
 IMAGE_PROMPT = "episode_illustration_v3"
@@ -217,9 +218,6 @@ def generate_assets(
     if not visual.required_assets:
         assert_owner()
         return {}
-    provider = provider or _provider(config)
-    if provider.provider != "qwen_comfyui":
-        raise ValueError("production illustrations require the existing Qwen adapter")
     ledger = RequestLedger(store.database)
     assets: dict[str, str] = {}
     for index, requirement in enumerate(visual.required_assets, 1):
@@ -271,12 +269,36 @@ def generate_assets(
             assets[slot] = existing.identity.artifact_id
             continue
         path = working / f"{slot}.png"
+        if requirement.teaching_cue is not None:
+            # An explicit enum selects geometry, never free-text classification. Historical
+            # requests still require reconciliation; a local cue cannot hide a pending call.
+            with closing(store.database.connect()) as db:
+                prior_cue = db.execute(
+                    "SELECT 1 FROM generation_requests WHERE episode_id=? "
+                    "AND kind='visual_asset' AND slot_key=? LIMIT 1",
+                    (episode.episode_id, slot),
+                ).fetchone()
+            if prior_cue:
+                raise ValueError("image request inputs changed; explicit reconciliation required")
+            dotted_circle_brushing().save(path)
+            assets[slot] = persist_file(
+                store, episode, "visual_asset", slot, path, (plan_id,),
+                Provenance(
+                    source_kind="deterministic", acquired_at=datetime.now(UTC),
+                    provider="tovitunes.teaching_cue", model=requirement.teaching_cue,
+                    input_artifact_ids=(plan_id,),
+                ),
+            ).identity.artifact_id
+            continue
         if requirement.kind == "color_swatch":
             swatch(requirement.target_color or "").save(path)
             assets[slot] = persist_file(
                 store, episode, "visual_asset", slot, path, (plan_id,)
             ).identity.artifact_id
             continue
+        provider = provider or _provider(config)
+        if provider.provider != "qwen_comfyui":
+            raise ValueError("production illustrations require the existing Qwen adapter")
         spec = image_spec(episode, requirement, visual_direction, prompt_version=image_prompt)
         translated = provider.translate(spec)  # Local workflow loading only; never network.
         profile: dict[str, Any] = {

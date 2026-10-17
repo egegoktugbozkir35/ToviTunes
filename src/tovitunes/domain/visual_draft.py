@@ -14,6 +14,7 @@ from tovitunes.domain.visual_plan import (
     ENVIRONMENT_ROLES,
     EnvironmentRequirement,
     EpisodeVisualPlan,
+    TeachingCue,
     VisualRequirement,
 )
 
@@ -31,6 +32,7 @@ ROLES: tuple[EnvironmentRoleV2, ...] = (
 class CreativeObject(CreativeDraftModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = Field(default=None, min_length=1, max_length=1000)
+    teaching_cue: TeachingCue | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CreativeScene(CreativeDraftModel):
@@ -177,6 +179,8 @@ def compile_visual_draft(
                 semantic_label=obj.name[:80],
                 description=obj.description or obj.name,
                 educational_role="supporting",
+                teaching_cue=obj.teaching_cue,
+                grounded=obj.teaching_cue is None,
             )
             if key not in keys:
                 keys.append(key)

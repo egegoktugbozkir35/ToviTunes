@@ -72,6 +72,7 @@ def test_historical_environment_identity_is_frozen():
 
 @pytest.mark.parametrize("setting", [
     "A bright cozy bathroom with a mirror above the sink",
+    "A single outdoor farmyard with a barn, fences and an open staging area",
     "A sheltered underwater coral cove with a sandy open floor",
 ])
 def test_episode_setting_has_one_authoritative_description(setting):

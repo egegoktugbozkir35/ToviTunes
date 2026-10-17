@@ -1,6 +1,7 @@
 """Shared supersampled preschool prop style and composition-driven scene artwork."""
 
 import json
+import math
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +35,32 @@ PROP_STYLE_CONTRACT = {
 }
 
 RENDER_STRATEGIES = {key: value.render_strategy for key, value in PROP_DEFINITIONS.items()}
+
+
+def dotted_circle_brushing(size: int = 1024) -> Image.Image:
+    """Hollow clockwise teaching path; no painted backdrop, shadow or extraction."""
+    if size <= 0:
+        raise ValueError("invalid cue size")
+    internal = size * SUPERSAMPLE
+    scale = internal / 600
+    image = Image.new("RGBA", (internal, internal))
+    draw = ImageDraw.Draw(image)
+    ink = "#216E83"
+    # Ten separate dots plus two tangent arrowheads remain legible in a 108px slot.
+    for angle in (30, 60, 90, 120, 150, 210, 240, 270, 300, 330):
+        theta = math.radians(angle)
+        x, y = 300 + 200 * math.cos(theta), 300 + 200 * math.sin(theta)
+        draw.ellipse(
+            tuple(round(v * scale) for v in (x - 22, y - 22, x + 22, y + 22)),
+            fill=ink, outline="white", width=max(1, round(4 * scale)),
+        )
+    for sign in (1, -1):
+        draw.polygon(
+            [(round((300 + sign * x) * scale), round((300 + sign * y) * scale))
+             for x, y in ((200, 33), (170, -24), (230, -24))],
+            fill=ink, outline="white", width=max(1, round(4 * scale)),
+        )
+    return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def soft_shape(size: int, shapes: list[tuple[str, tuple[int, int, int, int], int]]) -> Image.Image:
