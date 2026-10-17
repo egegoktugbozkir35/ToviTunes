@@ -20,9 +20,16 @@ from tovitunes.domain.visual_draft import EpisodeVisualPlanV2
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
-from tovitunes.render.lesson_objects import _prepare_qwen_white_background, _provider, normalize
+from tovitunes.render.lesson_objects import (
+    WHITE_BACKGROUND_V1,
+    WHITE_BACKGROUND_V2,
+    _prepare_qwen_white_background,
+    _provider,
+    normalize,
+)
 
-IMAGE_PROMPT = "episode_illustration_v2"
+LEGACY_IMAGE_PROMPT = "episode_illustration_v2"
+IMAGE_PROMPT = "episode_illustration_v3"
 
 
 def swatch(color: str, size: int = 1024) -> Image.Image:
@@ -52,10 +59,13 @@ def image_spec(
     episode: Episode,
     requirement: VisualRequirement,
     visual_direction: str,
+    *, prompt_version: str = IMAGE_PROMPT,
 ) -> CanonicalImageSpec:
-    return CanonicalImageSpec(
+    if prompt_version not in {LEGACY_IMAGE_PROMPT, IMAGE_PROMPT}:
+        raise ValueError("unsupported episode illustration prompt version")
+    spec = CanonicalImageSpec(
         benchmark_version="episode_visual_assets_v1",
-        prompt_version=IMAGE_PROMPT,
+        prompt_version=prompt_version,
         case_id=requirement.asset_key,
         attempt=1,
         scene_brief=(
@@ -96,6 +106,36 @@ def image_spec(
         composition_brief="Square, centered complete object with generous removable white padding.",
         reference_instructions="Textual style contract only; no reference images.",
     )
+    if prompt_version == LEGACY_IMAGE_PROMPT:
+        return spec
+    return spec.model_copy(update={
+        "scene_brief": requirement.description,
+        "teaching_check": (
+            f"Illustrate exactly this subject: {requirement.semantic_label}. "
+            "Other subjects from the lesson are separate assets."
+        ),
+        "common_brief": visual_direction + (
+            " Preschool 2D illustration: rounded forms, soft tonal contours, gentle "
+            "dimensional shading, warm even light and a bright controlled palette. "
+            "Use natural proportions and a simple readable silhouette."
+        ),
+        "composition_brief": (
+            "Square, centered complete subject with generous uniform white padding. "
+            "Keep pale and white parts enclosed by a continuous visible tonal contour, "
+            "distinct from the backdrop. Make essential details readable at phone size."
+        ),
+        "palette": {"subject": COLORS_V1[requirement.target_color]}
+        if requirement.target_color in COLORS_V1 else {},
+        "forbidden_changes": (
+            "No text, logos, extra subjects or scenic background.",
+            "A simple face only as explicitly described; no added limbs."
+            if requirement.allow_face else
+            "No decorative faces, eyes, mouths or limbs; preserve the subject's natural anatomy.",
+        ),
+        "negative_constraints": (
+            "No photorealism, plastic 3D, dramatic lighting or franchise imitation.",
+        ),
+    })
 
 
 def persist_file(
@@ -170,6 +210,7 @@ def generate_assets(
     visual_direction: str,
     provider: ImageProvider | None = None,
     *,
+    image_prompt: str = IMAGE_PROMPT,
     progress: Callable[[str, str], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
@@ -236,12 +277,14 @@ def generate_assets(
                 store, episode, "visual_asset", slot, path, (plan_id,)
             ).identity.artifact_id
             continue
-        spec = image_spec(episode, requirement, visual_direction)
+        spec = image_spec(episode, requirement, visual_direction, prompt_version=image_prompt)
         translated = provider.translate(spec)  # Local workflow loading only; never network.
-        profile = {
+        profile: dict[str, Any] = {
             "canonical": spec.model_dump(mode="json"),
             "translated": translated.model_dump(mode="json"),
         }
+        if image_prompt == IMAGE_PROMPT:
+            profile["normalization_version"] = WHITE_BACKGROUND_V2
         fingerprint = sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
         with closing(store.database.connect()) as db:
             prior = db.execute(
@@ -324,7 +367,7 @@ def generate_assets(
                         model=provider.model,
                         local_request_id=request_id,
                         request_id=result.provider_request_id,
-                        prompt_version=IMAGE_PROMPT,
+                        prompt_version=image_prompt,
                         input_artifact_ids=(plan_id,),
                     ),
                     dependencies=[InputDependency(plan_id, "visual_plan")],
@@ -387,11 +430,20 @@ def generate_assets(
         try:
             image = normalize(
                 _prepare_qwen_white_background(
-                    store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png"
+                    store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png",
+                    version=WHITE_BACKGROUND_V2
+                    if image_prompt == IMAGE_PROMPT else WHITE_BACKGROUND_V1,
                 )
             )
         except (ValueError, OSError) as exc:
-            raise ImageStageBlocked("BLOCKED", request_id, "image_processing_failure") from exc
+            blocked = ImageStageBlocked("BLOCKED", request_id, "image_processing_failure")
+            blocked.evidence["diagnostic"] = (
+                "Inspect the retained raw image and its white padding. A pale subject needs "
+                "a distinct continuous contour; an indistinguishable white subject cannot "
+                "be extracted safely. Any new source requires explicit operator approval."
+            )
+            blocked.evidence["source_artifact_id"] = source_record.identity.artifact_id
+            raise blocked from exc
         image.save(path)
         assert_owner()
         record = persist_file(

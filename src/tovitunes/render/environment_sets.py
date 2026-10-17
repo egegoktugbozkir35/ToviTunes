@@ -32,6 +32,7 @@ from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.db import Database
 
 PROMPT_VERSION = "environment_world_v1"
+EPISODE_PROMPT_VERSION = "environment_scene_v2"
 THEME = "preschool-world-v1"
 ROLES = ("meadow_wide", "lesson_garden", "play_path", "celebration_meadow")
 ROLE_BRIEFS = {
@@ -162,10 +163,12 @@ def _generation_fingerprint(
     location: str,
     image_size: str,
     qwen_profile: dict[str, object] | None = None,
+    *,
+    prompt_version: str = PROMPT_VERSION,
 ) -> str:
     payload: dict[str, object] = {
         "theme": theme,
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": prompt_version,
         "roles": ROLES,
         "provider": provider,
         "model": model,
@@ -200,8 +203,40 @@ def _request_fingerprint(spec: CanonicalImageSpec, generation_fingerprint: str) 
 
 
 def _spec(
-    role: str, brand_id: str, attempt: int, reference: ReferenceImage | None
+    role: str, brand_id: str, attempt: int, reference: ReferenceImage | None,
+    *, scene_brief: str | None = None,
 ) -> CanonicalImageSpec:
+    if scene_brief is not None:
+        return CanonicalImageSpec(
+            benchmark_version="production_environment_v1",
+            prompt_version=EPISODE_PROMPT_VERSION,
+            case_id=role,
+            attempt=attempt,
+            scene_brief=scene_brief,
+            teaching_check="Setting only; teaching subjects are composited separately.",
+            common_brief=(
+                "Preschool 2D illustration: rounded forms, soft tonal contours, gentle "
+                "dimensional shading, warm even light and a bright controlled palette. "
+                "Depict the described setting as one continuous physical space from a "
+                "single viewpoint. Keep the middle and lower stage quiet and open for "
+                "a separate character and educational illustrations, with depth behind them."
+            ),
+            composition_brief=(
+                "One portrait 9:16 scene, filling the frame with consistent perspective "
+                "and safe padding for gentle camera moves."
+            ),
+            reference_instructions=(
+                "Use the supplied environment for style continuity; depict this scene's setting."
+                if reference else "Use the shared textual art direction; no image reference."
+            ),
+            pack_revision_id="environment-only",
+            brand_revision_id=brand_id,
+            references=(reference,) if reference else (),
+            palette={},
+            identity_rules=("Characters and teaching subjects are separate render layers.",),
+            forbidden_changes=("No characters, prominent teaching subjects, text or logos.",),
+            negative_constraints=("No collage, panels, photorealism or franchise imitation.",),
+        )
     return CanonicalImageSpec(
         benchmark_version="production_environment_v1",
         prompt_version=PROMPT_VERSION,
@@ -413,6 +448,7 @@ def generate_set(
     provider: ImageProvider | None = None,
     episode_id: str | None = None,
     role_briefs: dict[str, str] | None = None,
+    prompt_version: str | None = None,
     assert_owner: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     if episode_id is not None and assert_owner is None:
@@ -424,13 +460,25 @@ def generate_set(
     if theme != THEME or attempt < 1:
         raise ValueError("unsupported environment theme or attempt")
     provider = provider or _configured_provider(config)
+    if role_briefs is not None and (
+        set(role_briefs) != set(ROLES) or any(not brief.strip() for brief in role_briefs.values())
+    ):
+        raise ValueError("plan must supply all environment roles with nonempty descriptions")
+    prompt_version = prompt_version or (
+        EPISODE_PROMPT_VERSION if role_briefs is not None else PROMPT_VERSION
+    )
+    if prompt_version not in {PROMPT_VERSION, EPISODE_PROMPT_VERSION} or (
+        prompt_version == EPISODE_PROMPT_VERSION and role_briefs is None
+    ):
+        raise ValueError("unsupported environment prompt version or missing scene descriptions")
     if isinstance(provider, GeminiImageProvider):
         provider.preflight()
     provider_name, model, location, image_size = _provider_settings(config, provider)
     generation_fingerprint = _generation_fingerprint(
-        theme, provider_name, model, location, image_size, _qwen_profile(provider)
+        theme, provider_name, model, location, image_size, _qwen_profile(provider),
+        prompt_version=prompt_version,
     )
-    if episode_id is not None:
+    if episode_id is not None or role_briefs is not None:
         generation_fingerprint = sha256(
             json.dumps(
                 {
@@ -448,6 +496,16 @@ def generate_set(
         else SOURCE_DIMENSIONS.get((model, image_size))
     )
     db, store, brand_id = _store(config)
+    if episode_id is not None:
+        with closing(db.connect()) as conn:
+            prior = conn.execute(
+                "SELECT 1 FROM environment_requests WHERE episode_id=? AND set_id!=? LIMIT 1",
+                (episode_id, set_id),
+            ).fetchone()
+        if prior:
+            raise ValueError(
+                "episode environment request inputs changed; explicit reconciliation required"
+            )
     owner_scope: Literal["episode", "brand"] = "episode" if episode_id else "brand"
     owner_id = episode_id or brand_id
     working = config.data_root / ".environment-working"
@@ -470,10 +528,12 @@ def generate_set(
                     sha256=(master.source_sha256 or master.sha256),
                     mime_type=store.get(master_reference_id).mime_type,
                 )
-            spec = _spec(role, brand_id, attempt, reference)
-            if role_briefs is not None:
-                if set(role_briefs) != set(ROLES):
-                    raise ValueError("plan must supply all environment roles")
+            spec = _spec(
+                role, brand_id, attempt, reference,
+                scene_brief=role_briefs[role]
+                if role_briefs is not None and prompt_version == EPISODE_PROMPT_VERSION else None,
+            )
+            if role_briefs is not None and prompt_version == PROMPT_VERSION:
                 spec = spec.model_copy(
                     update={
                         "scene_brief": role_briefs[role],
@@ -610,7 +670,7 @@ def generate_set(
                     model=model,
                     request_id=result.provider_request_id,
                     local_request_id=request_id,
-                    prompt_version=PROMPT_VERSION,
+                    prompt_version=prompt_version,
                     input_artifact_ids=(master_reference_id,) if master_reference_id else (),
                 )
                 if source_suffix is not None:
@@ -728,7 +788,13 @@ def generate_set(
         assert_owner()
         environment = EnvironmentSet(
             set_id=set_id,
+            prompt_version=prompt_version,
             theme=theme,
+            visual_theme=(
+                "rounded preschool 2D, soft tonal contours, warm even light"
+                if prompt_version == EPISODE_PROMPT_VERSION
+                else EnvironmentSet.model_fields["visual_theme"].default
+            ),
             plates=tuple(plates),
             provider=provider_name,
             model=model,
@@ -752,7 +818,7 @@ def generate_set(
                     acquired_at=datetime.now(UTC),
                     provider=f"tovitunes.environment_sets:{provider_name}",
                     model=model,
-                    prompt_version=PROMPT_VERSION,
+                    prompt_version=prompt_version,
                     input_artifact_ids=tuple(p.artifact_id for p in plates),
                 ),
                 dependencies=[InputDependency(p.artifact_id, "environment_plate") for p in plates],
