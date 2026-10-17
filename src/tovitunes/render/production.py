@@ -425,7 +425,8 @@ class ProductionRenderer:
                 )
                 prop_definitions = {
                     a.asset_key: PropDefinition(
-                        visual_class="abstract" if a.kind == "color_swatch" else "object",
+                        visual_class="abstract"
+                        if a.kind == "color_swatch" or a.teaching_cue is not None else "object",
                         grounded=a.grounded,
                         motion_class=a.motion,
                         color=COLORS_V1.get(a.target_color or "", "#FFFFFF"),

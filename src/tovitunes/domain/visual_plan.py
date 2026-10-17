@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from tovitunes.creative.validation import contains, safe_text
 from tovitunes.domain.creative import EpisodeSpec, LyricsSpec
@@ -21,6 +22,7 @@ COLORS_V1 = {
     "white": "#FFFFFF",
 }
 ENVIRONMENT_ROLES = ("meadow_wide", "lesson_garden", "play_path", "celebration_meadow")
+TeachingCue = Literal["dotted_circle_brushing_v1"]
 
 
 class VisualRequirement(ProductionModel):
@@ -35,6 +37,20 @@ class VisualRequirement(ProductionModel):
     allow_face: bool = False
     grounded: bool = True
     motion: Literal["static", "roll", "float"] = "static"
+    # Explicit local plan metadata; keep historical model-facing request schemas frozen.
+    teaching_cue: SkipJsonSchema[TeachingCue | None] = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def cue_contract(self) -> "VisualRequirement":
+        if self.teaching_cue is not None and (
+            self.kind != "scene_element" or self.allow_face or self.target_color is not None
+            or self.grounded or self.motion != "static" or self.educational_role == "decorative"
+        ):
+            raise ValueError("teaching cue requires an ungrounded static scene element without "
+                             "face, target color or decorative role")
+        return self
 
 
 class VisualLine(ProductionModel):

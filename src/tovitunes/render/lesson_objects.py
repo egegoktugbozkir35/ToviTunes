@@ -265,8 +265,21 @@ def _validate_transparent_source(data: bytes, mime_type: str) -> Image.Image:
     return image
 
 
-def _prepare_qwen_white_background(data: bytes, mime_type: str) -> Image.Image:
-    """Remove only near-white pixels connected to the image exterior."""
+WHITE_BACKGROUND_V1 = "qwen_white_exterior_v1"
+WHITE_BACKGROUND_V2 = "qwen_white_exterior_v2"
+
+
+def _prepare_qwen_white_background(
+    data: bytes, mime_type: str, *, version: str = WHITE_BACKGROUND_V1
+) -> Image.Image:
+    """Key the exterior only; V1 remains the historical normalization contract.
+
+    V2 matches the measured border color range instead of
+    treating the whole 240..255 range as background. No dilation, filling or blur.
+    A white subject indistinguishable from its backdrop cannot be recovered here.
+    """
+    if version not in {WHITE_BACKGROUND_V1, WHITE_BACKGROUND_V2}:
+        raise ValueError("unknown Qwen white-background extraction version")
     if mime_type != "image/png":
         raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: source is not PNG")
     try:
@@ -291,6 +304,22 @@ def _prepare_qwen_white_background(data: bytes, mime_type: str) -> Image.Image:
     edges += [(width - 1, y) for y in range(1, height - 1)]
     if sum(near_white(x, y) for x, y in edges) < len(edges) * 0.995:
         raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: border is not uniformly white")
+    if version == WHITE_BACKGROUND_V2:
+        border = [cast(tuple[int, int, int, int], pixels[x, y]) for x, y in edges]
+        backdrop = tuple((min(p[c] for p in border), max(p[c] for p in border)) for c in range(3))
+        if not all(near_white(x, y) for x, y in edges) or any(
+            high - low > 12 for low, high in backdrop
+        ):
+            raise ValueError(
+                "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: subject touches border or backdrop "
+                "varies; supply a complete subject with uniform white padding"
+            )
+
+        def matches_border(x: int, y: int) -> bool:
+            pixel = cast(tuple[int, int, int, int], pixels[x, y])
+            return all(low - 1 <= pixel[c] <= high + 1 for c, (low, high) in enumerate(backdrop))
+
+        near_white = matches_border
     seen = bytearray(width * height)
     queue: deque[tuple[int, int]] = deque(edges)
     removed = 0
@@ -310,12 +339,40 @@ def _prepare_qwen_white_background(data: bytes, mime_type: str) -> Image.Image:
         if y + 1 < height:
             queue.append((x, y + 1))
     if removed < width * height * 0.15 or removed > width * height * 0.95:
-        raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: exterior coverage is implausible")
+        raise ValueError(
+            "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: exterior coverage is implausible; "
+            "supply a source with a distinct continuous contour and white padding"
+        )
     alpha = bytearray(image.getchannel("A").tobytes())
     for index, selected in enumerate(seen):
         if selected:
             alpha[index] = 0
     image.putalpha(Image.frombytes("L", (width, height), bytes(alpha)))
+    if version == WHITE_BACKGROUND_V2:
+        bounds = image.getchannel("A").getbbox()
+        if bounds is not None:
+            left, top, right, bottom = bounds
+            extremes = (
+                [(x, top) for x in range(left, right)],
+                [(x, bottom - 1) for x in range(left, right)],
+                [(left, y) for y in range(top, bottom)],
+                [(right - 1, y) for y in range(top, bottom)],
+            )
+
+            def has_neighbor(x: int, y: int) -> bool:
+                return any(
+                    alpha[ny * width + nx] > 0
+                    for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+                    if 0 <= nx < width and 0 <= ny < height
+                )
+
+            for edge in extremes:
+                occupied = [(x, y) for x, y in edge if alpha[y * width + x] > 0]
+                if occupied and not any(has_neighbor(x, y) for x, y in occupied):
+                    raise ValueError(
+                        "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: isolated pixels control trim "
+                        "bounds; inspect backdrop artifacts and supply a clean padded source"
+                    )
     return _validate_transparent_source(_png_bytes(image), "image/png")
 
 

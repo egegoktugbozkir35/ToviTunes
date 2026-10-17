@@ -24,7 +24,12 @@ from tovitunes.domain.visual_draft import (
 )
 from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
 from tovitunes.errors import ProductionStop
-from tovitunes.render.environment_sets import EnvironmentSet, generate_set, selected_set
+from tovitunes.render.environment_sets import (
+    EPISODE_PROMPT_VERSION,
+    EnvironmentSet,
+    generate_set,
+    selected_set,
+)
 from tovitunes.services.context import StageContext
 
 
@@ -251,6 +256,7 @@ class VisualService(StageContext):
                         confirmed=True,
                         episode_id=episode.episode_id,
                         role_briefs={env.role: env.description for env in visual.environments},
+                        prompt_version=EPISODE_PROMPT_VERSION,
                         assert_owner=self.ownership.assert_owned,
                     )
                 except ProviderFailure as exc:
