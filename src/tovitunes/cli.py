@@ -98,6 +98,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     retry_image.add_argument("--confirm-definitive-failure", action="store_true")
     retry_image.add_argument("--actor", required=True)
     retry_image.add_argument("--reason", required=True)
+    abandon_image = production_commands.add_parser("abandon-native-image-task")
+    abandon_image.add_argument("--request-id", required=True)
+    abandon_image.add_argument("--confirm-abandon-native-crash", action="store_true")
+    abandon_image.add_argument("--evidence", type=Path, required=True)
+    abandon_image.add_argument("--actor", required=True)
+    abandon_image.add_argument("--reason", required=True)
     recover_visual = production_commands.add_parser("recover-visual-contract")
     recover_visual.add_argument("--episode-key", required=True)
     recover_visual.add_argument("--confirm-new-contract", action="store_true")
@@ -299,15 +305,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(str(exc))
         print(json.dumps(recovered, sort_keys=True))
         return 0
-    if args.command == "production" and args.production_command == "retry-image-request":
+    if args.command == "production" and args.production_command in {
+        "retry-image-request", "abandon-native-image-task"
+    }:
         from tovitunes.render.image_recovery import authorize_image_retry
 
         try:
             retry = authorize_image_retry(
-                config, args.request_id, confirmed=args.confirm_definitive_failure,
+                config, args.request_id,
+                confirmed=args.confirm_abandon_native_crash
+                if args.production_command == "abandon-native-image-task"
+                else args.confirm_definitive_failure,
                 actor=args.actor, reason=args.reason,
+                native_crash_evidence=args.evidence
+                if args.production_command == "abandon-native-image-task" else None,
             )
-        except (ValueError, KeyError) as exc:
+        except (ValueError, KeyError, OSError) as exc:
             parser.error(str(exc))
         print(json.dumps(retry, sort_keys=True))
         return 0

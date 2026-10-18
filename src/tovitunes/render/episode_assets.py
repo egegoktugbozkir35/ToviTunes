@@ -358,6 +358,15 @@ def generate_assets(
             def remote_start() -> None:
                 nonlocal started
                 assert_owner()
+                from tovitunes.render.image_recovery import recheck_native_image_successor
+
+                try:
+                    recheck_native_image_successor(config, store.database, request_id)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    raise ImageStageBlocked(
+                        "BLOCKED", request_id, "native_crash_recheck_required"
+                    ) from exc
+                assert_owner()
                 ledger.transition(request_id, "remote_started")
                 started = True
 
@@ -414,6 +423,8 @@ def generate_assets(
                         ),
                     )
                     db.commit()
+            except ImageStageBlocked:
+                raise
             except ExecutionOwnershipError:
                 if started:
                     ledger.transition(request_id, "ambiguous")
