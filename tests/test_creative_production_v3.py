@@ -5,7 +5,7 @@ import math
 import sqlite3
 import subprocess
 import sys
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -333,6 +333,352 @@ def test_definitive_image_retry_preserves_old_request_and_renders(new_case):
             actor="offline-operator",
             reason="must not resend",
         )
+
+
+@pytest.fixture
+def native_crash_case(new_case, tmp_path):
+    from tovitunes.persistence.requests import RequestLedger
+
+    new = new_case
+    new["image_behavior"]["interrupt_after_accept"] = True
+    with pytest.raises(SystemExit):
+        new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    with closing(new["store"].database.connect()) as db:
+        request_id = db.execute(
+            "SELECT request_id FROM generation_requests WHERE kind='visual_asset'"
+        ).fetchone()[0]
+    RequestLedger(new["store"].database).transition(request_id, "ambiguous")
+    with closing(new["store"].database.connect()) as db:
+        original = dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (request_id,)
+        ).fetchone())
+    root = tmp_path / "comfy"
+    (root / "output").mkdir(parents=True)
+    (root / "temp").mkdir()
+    (root / "main.py").touch()
+    log = root / "crash.log"
+    log.write_text(
+        f"{root}\ngot prompt\nout of memory\nFatal Python error: Aborted\nattention_split",
+        encoding="utf-8",
+    )
+    evidence = {
+        k: original[k] for k in (
+            "request_id", "episode_id", "provider_request_id", "input_fingerprint"
+        )
+    }
+    evidence.update(
+        confirm_log_attribution_and_exclusive_service=True,
+        confirm_original_process_exited=True,
+        confirm_no_output_directory_overrides=True,
+        comfyui_root=str(root), crash_log_path=str(log),
+        crash_log_sha256=sha256(log.read_bytes()).hexdigest(),
+    )
+    path = root / "evidence.json"
+    responses = {
+        "/system_stats": {"system": {"argv": [str(root / "main.py")]}},
+        "/queue": {"queue_running": [], "queue_pending": []},
+        f"/history/{original['provider_request_id']}": {},
+    }
+    return new, original, evidence, path, responses
+
+
+@contextmanager
+def native_clients(case, monkeypatch):
+    import httpx
+
+    responses = case[-1]
+    client_type = httpx.Client
+
+    def get_only(request):
+        assert request.method == "GET"
+        value = responses[request.url.path]
+        return httpx.Response(200, json=value() if callable(value) else value)
+
+    def client(**kwargs):
+        if "base_url" in kwargs:
+            kwargs["transport"] = httpx.MockTransport(get_only)
+        return client_type(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("tovitunes.render.image_recovery.httpx.Client", client)
+        yield
+
+
+def native_grant(case, monkeypatch, *, confirmed=True, actor="operator"):
+    from tovitunes.render.image_recovery import authorize_image_retry
+
+    new, original, evidence, path, _ = case
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with native_clients(case, monkeypatch):
+        return authorize_image_retry(
+            new["config"], original["request_id"], confirmed=confirmed, actor=actor,
+            reason="abandon evidenced native crash, accept one distinct successor",
+            native_crash_evidence=path,
+        )
+
+
+def test_native_crash_successor_is_durable_idempotent_and_reuses_music(
+    native_crash_case, monkeypatch,
+):
+    new, old, _, _, _ = native_crash_case
+    music = list(new["music_events"])
+    images = list(new["image_events"])
+    grant = native_grant(native_crash_case, monkeypatch)
+    assert grant == native_grant(native_crash_case, monkeypatch)
+    assert new["image_events"] == images
+    assert grant["new_request_id"] != old["request_id"]
+    with closing(new["store"].database.connect()) as db:
+        successor = dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (grant["new_request_id"],)
+        ).fetchone())
+        for key in ("episode_id", "slot_key", "provider", "model", "input_fingerprint"):
+            assert successor[key] == old[key]
+        assert successor["parent_request_id"] == old["request_id"]
+        assert successor["provider_request_id"] is None and successor["status"] == "prepared"
+        assert db.execute("SELECT count(*) FROM image_retry_authorizations").fetchone()[0] == 1
+        evidence = db.execute("SELECT * FROM image_native_crash_abandonments").fetchone()
+        assert sha256(evidence["evidence_json"].encode()).hexdigest() == evidence["evidence_sha256"]
+        assert "Fatal Python error: Aborted" in json.loads(evidence["evidence_json"])["crash_log"]
+        for sql in (
+            "DELETE FROM image_native_crash_abandonments",
+            "UPDATE image_native_crash_abandonments SET evidence_json='{}'",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                db.execute(sql)
+    new["image_behavior"].pop("interrupt_after_accept")
+    with native_clients(native_crash_case, monkeypatch):
+        result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["target_complete"], result
+    assert new["music_events"] == music
+    assert music.count("/release_task") == 1
+    assert f"/history/{old['provider_request_id']}" not in new["image_events"][len(images):]
+    with closing(new["store"].database.connect()) as db:
+        assert dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (old["request_id"],)
+        ).fetchone()) == old
+        assert db.execute(
+            "SELECT status FROM generation_requests WHERE request_id=?", (grant["new_request_id"],)
+        ).fetchone()[0] == "succeeded"
+
+
+@pytest.mark.parametrize("bad", [
+    "unconfirmed", "actor", "identity", "fingerprint", "episode", "hash", "log",
+    "attestation", "queue", "history",
+    "output", "temp", "staging", "override", "unavailable", "receipt", "ownership", "endpoint",
+])
+def test_native_crash_rejects_unsafe_or_unauthorized_replacement(
+    native_crash_case, monkeypatch, bad,
+):
+    new, old, evidence, path, responses = native_crash_case
+    if bad == "identity":
+        evidence["provider_request_id"] = "unrelated-task"
+    elif bad == "fingerprint":
+        evidence["input_fingerprint"] = "a" * 64
+    elif bad == "episode":
+        evidence["episode_id"] = "other-episode"
+    elif bad == "endpoint":
+        new["config"] = new["config"].model_copy(update={
+            "lesson_object_generation": new["config"].lesson_object_generation.model_copy(
+                update={"base_url": "http://127.0.0.1:8189"}
+            )
+        })
+    elif bad == "hash":
+        evidence["crash_log_sha256"] = "a" * 64
+    elif bad == "log":
+        log = Path(evidence["crash_log_path"])
+        log.write_text("connection timed out", encoding="utf-8")
+        evidence["crash_log_sha256"] = sha256(log.read_bytes()).hexdigest()
+    elif bad == "attestation":
+        evidence["confirm_original_process_exited"] = False
+    elif bad == "queue":
+        responses["/queue"]["queue_running"] = [[1, old["provider_request_id"]]]
+    elif bad == "history":
+        responses[f"/history/{old['provider_request_id']}"] = {old["provider_request_id"]: {}}
+    elif bad in {"output", "temp", "staging"}:
+        directory = new["config"].data_root if bad == "staging" else path.parent / bad
+        (directory / "unattributed.png").write_bytes(b"possible result")
+    elif bad == "override":
+        responses["/system_stats"]["system"]["argv"].append("--output-directory=elsewhere")
+    elif bad == "unavailable":
+        import httpx
+
+        monkeypatch.setattr(httpx.Client, "get", lambda *a, **k: (_ for _ in ()).throw(
+            httpx.ConnectError("offline")
+        ))
+    elif bad == "receipt":
+        with closing(new["store"].database.connect()) as db, db:
+            db.execute("UPDATE production_image_receipts SET response_sha256=?", ("a" * 64,))
+    elif bad == "ownership":
+        from tovitunes.errors import ExecutionOwnershipConflictError
+
+        with ProductionExecutionOwnership(new["store"].database, operation="other-owner"):
+            with pytest.raises(ExecutionOwnershipConflictError):
+                native_grant(native_crash_case, monkeypatch)
+        return
+    with pytest.raises(ValueError):
+        native_grant(
+            native_crash_case, monkeypatch, confirmed=bad != "unconfirmed",
+            actor="" if bad == "actor" else "operator",
+        )
+    with closing(new["store"].database.connect()) as db:
+        assert db.execute("SELECT count(*) FROM image_retry_authorizations").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM image_native_crash_abandonments").fetchone()[0] == 0
+        assert dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (old["request_id"],)
+        ).fetchone()) == old
+
+
+def test_native_crash_does_not_unlock_default_ambiguous_retry(native_crash_case):
+    from tovitunes.render.image_recovery import authorize_image_retry
+
+    new, old, _, _, _ = native_crash_case
+    with pytest.raises(ValueError, match="definitively failed"):
+        authorize_image_retry(
+            new["config"], old["request_id"], confirmed=True, actor="operator",
+            reason="ambiguity alone must stay blocked",
+        )
+
+
+@pytest.mark.parametrize("endpoint", ["/queue", "history"])
+def test_native_crash_rejects_changes_during_final_provider_check(
+    native_crash_case, monkeypatch, endpoint,
+):
+    _, old, _, _, responses = native_crash_case
+    endpoint = f"/history/{old['provider_request_id']}" if endpoint == "history" else endpoint
+    first = responses[endpoint]
+    calls = []
+
+    def changing():
+        calls.append(1)
+        return first if len(calls) == 1 else {"changed": True}
+
+    responses[endpoint] = changing
+    with pytest.raises(ValueError, match="changed during"):
+        native_grant(native_crash_case, monkeypatch)
+
+
+def test_native_crash_rejects_slow_stale_observations(native_crash_case, monkeypatch):
+    from types import SimpleNamespace
+
+    ticks = iter((0, 31))
+    monkeypatch.setattr(
+        "tovitunes.render.image_recovery.time", SimpleNamespace(monotonic=lambda: next(ticks))
+    )
+    with pytest.raises(ValueError, match="freshness budget"):
+        native_grant(native_crash_case, monkeypatch)
+
+
+def test_native_crash_lost_owner_rolls_back_grant(native_crash_case, monkeypatch):
+    from tovitunes.persistence.db import Database
+
+    new, old, _, _, _ = native_crash_case
+
+    def lost(*args):
+        raise ExecutionOwnershipLostError("injected loss immediately before grant commit")
+
+    monkeypatch.setattr(Database, "assert_production_execution_owner", lost)
+    with pytest.raises(ExecutionOwnershipLostError):
+        native_grant(native_crash_case, monkeypatch)
+    with closing(new["store"].database.connect()) as db:
+        assert db.execute("SELECT count(*) FROM image_retry_authorizations").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM image_native_crash_abandonments").fetchone()[0] == 0
+        assert dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (old["request_id"],)
+        ).fetchone()) == old
+
+
+def test_native_crash_grant_survives_real_process_restart(native_crash_case, monkeypatch):
+    new, old, _, path, _ = native_crash_case
+    grant = native_grant(native_crash_case, monkeypatch)
+    config_path = path.parent / "runtime.json"
+    config_path.write_text(new["config"].model_dump_json(), encoding="utf-8")
+    script = """
+import json, socket, sys
+from pathlib import Path
+from tovitunes.config import RuntimeConfig
+from tovitunes.render.image_recovery import authorize_image_retry
+def deny(*args, **kwargs):
+    raise AssertionError('restart idempotency must not use the network')
+socket.socket.connect = deny
+config = RuntimeConfig.model_validate_json(Path(sys.argv[1]).read_text(encoding='utf-8'))
+print(json.dumps(authorize_image_retry(config, sys.argv[2], confirmed=True, actor='operator',
+    reason='restart replay', native_crash_evidence=Path(sys.argv[3]))))
+"""
+    restarted = subprocess.run(
+        [sys.executable, "-c", script, str(config_path), old["request_id"], str(path)],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    assert json.loads(restarted.stdout) == grant
+
+
+def test_native_crash_accepted_successor_is_never_resubmitted(native_crash_case, monkeypatch):
+    new, old, _, _, _ = native_crash_case
+    grant = native_grant(native_crash_case, monkeypatch)
+    with native_clients(native_crash_case, monkeypatch):
+        with pytest.raises(SystemExit):
+            new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    accepted = list(new["image_events"])
+    result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["status"] == "AMBIGUOUS", result
+    assert new["image_events"] == accepted
+    assert native_grant(native_crash_case, monkeypatch) == grant
+    with closing(new["store"].database.connect()) as db:
+        successor = db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (grant["new_request_id"],)
+        ).fetchone()
+        assert successor["status"] == "remote_started" and successor["provider_request_id"]
+        assert db.execute("SELECT count(*) FROM image_retry_authorizations").fetchone()[0] == 1
+        assert dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (old["request_id"],)
+        ).fetchone()) == old
+
+
+@pytest.mark.parametrize("changed", ["queue", "history", "output", "receipt", "owner"])
+def test_native_crash_successor_rechecks_before_post(native_crash_case, monkeypatch, changed):
+    new, old, _, path, responses = native_crash_case
+    grant = native_grant(native_crash_case, monkeypatch)
+    images = list(new["image_events"])
+    new["image_behavior"].pop("interrupt_after_accept")
+    if changed == "queue":
+        responses["/queue"]["queue_running"] = [[1, old["provider_request_id"]]]
+    elif changed == "history":
+        responses[f"/history/{old['provider_request_id']}"] = {old["provider_request_id"]: {}}
+    elif changed == "output":
+        (path.parent / "output/late.png").write_bytes(b"late retained output")
+    elif changed == "receipt":
+        with closing(new["store"].database.connect()) as db, db:
+            db.execute(
+                "UPDATE production_image_receipts SET response_sha256=? WHERE request_id=?",
+                ("a" * 64, old["request_id"]),
+            )
+    else:
+        from tovitunes.render import image_recovery
+
+        original = image_recovery.recheck_native_image_successor
+
+        def lose_owner(config, database, request_id):
+            original(config, database, request_id)
+            with closing(database.connect()) as db, db:
+                db.execute(
+                    "UPDATE production_execution_lease SET expires_at='2000-01-01T00:00:00Z'"
+                )
+
+        monkeypatch.setattr(image_recovery, "recheck_native_image_successor", lose_owner)
+    with native_clients(native_crash_case, monkeypatch):
+        if changed == "owner":
+            with pytest.raises(ExecutionOwnershipLostError):
+                new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+        else:
+            result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+            assert result["status"] == "BLOCKED", result
+    assert images == new["image_events"]
+    with closing(new["store"].database.connect()) as db:
+        assert db.execute(
+            "SELECT status FROM generation_requests WHERE request_id=?", (grant["new_request_id"],)
+        ).fetchone()[0] == "prepared"
+        assert dict(db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (old["request_id"],)
+        ).fetchone()) == old
 
 
 def test_accepted_image_task_survives_restart_without_resubmission(new_case):

@@ -9,6 +9,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact requested head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'CI checkout differs from requested head' }
+          git rev-parse HEAD
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -20,5 +28,7 @@ jobs:
       - run: uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml
       - run: uv run ruff check .
       - run: uv run mypy src
+      - name: Native crash recovery regressions
+        run: uv run --locked pytest -q tests/test_creative_production_v3.py -k native_crash -o faulthandler_timeout=120
       - name: Offline suite (MPT application boundaries and ToviTunes domain)
         run: uv run --locked pytest -q -o faulthandler_timeout=120
