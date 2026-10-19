@@ -1,0 +1,639 @@
+{
+  "production": {
+    "migration_replay": {
+      "source_count": 29,
+      "copy_count_after_twice": 30,
+      "historical_table_changes": [],
+      "added_tables": [
+        "image_native_crash_abandonments"
+      ],
+      "quick_check": "ok",
+      "foreign_key_violations": []
+    },
+    "historical_formats": [
+      {
+        "artifact_id": "25937e67-b373-42e5-a816-9d21a732d96c",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/timed_storyboard/main/25937e67-b373-42e5-a816-9d21a732d96c.json",
+        "schema_version": 1,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "ddf6f790-86fa-479d-9318-88c3f077ce0e",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/render_manifest/main_v4/ddf6f790-86fa-479d-9318-88c3f077ce0e.json",
+        "schema_version": 1,
+        "renderer_version": "tovitunes_visual_story_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1735ba4b-7584-4ccc-ba73-37d50b8082d8",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/timed_storyboard/main/1735ba4b-7584-4ccc-ba73-37d50b8082d8.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "0b37048f-c6b0-4516-b193-61195e9671c0",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/render_manifest/main_v4/0b37048f-c6b0-4516-b193-61195e9671c0.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1298befa-a755-48c1-baca-c22a2dab70bf",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/timed_storyboard/main/1298befa-a755-48c1-baca-c22a2dab70bf.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "4e568975-92d7-4a06-a735-44eefc337ef8",
+        "kind": "render_manifest",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/render_manifest/main_v4/4e568975-92d7-4a06-a735-44eefc337ef8.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      }
+    ],
+    "image_profile_fingerprints": [
+      {
+        "request_id": "0fb13c98-083b-474d-9e6e-bbc42749bd61",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "42616ba3-5e08-4941-8f35-20fe2d8ed483",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "b8e6d420-3533-4856-a218-3d052f096efa",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "ddf028cd-2f49-46ce-8098-4195cd51c60f",
+        "fingerprint": "ce2ee6038300ecccd2e53509e487ac1abca2df36fa7aff14040bdfb9b0839d4c",
+        "matches": true
+      },
+      {
+        "request_id": "ecc92a0a-d805-4d98-bcbe-5446847e9781",
+        "fingerprint": "3e2361099a87f97fa39a52b7de46dd9541f67479dd67b619a1750fd801a6f7a8",
+        "matches": true
+      },
+      {
+        "request_id": "60652e79-a919-44e6-99fe-7a3ca838f48d",
+        "fingerprint": "22264a83ef84f32165e33c220821a9471a7fde4d7bdbef8af545116dd9246d69",
+        "matches": true
+      },
+      {
+        "request_id": "7da24c6b-5c9c-444d-85d7-c1952cfb33f8",
+        "fingerprint": "4f4fc4cdcbf792108bf7c11e57cdf3328e8a22957102497b06588225e9ac208c",
+        "matches": true
+      },
+      {
+        "request_id": "a9f70b5f-8b70-49ac-8cb5-d32e9c7fa249",
+        "fingerprint": "2119a4a3e0dbcdf28c883baaef985ac79a0583e388f1b2dbeeba024bb75117da",
+        "matches": true
+      },
+      {
+        "request_id": "0b1bdc47-1398-4f0c-98ac-9865273c8be4",
+        "fingerprint": "1a96b9cffca886ecd8edb3496a2d7297ba5ee213d17c88a5085137a0a2a43403",
+        "matches": true
+      },
+      {
+        "request_id": "70946a58-011d-4173-8b6b-ce65f5b24715",
+        "fingerprint": "8e919f161d430f475730975aeeeede21fe4618682e5ba2aa6a961d33ad9305bf",
+        "matches": true
+      },
+      {
+        "request_id": "1a5c469c-fdbb-40dc-9705-18b12308a853",
+        "fingerprint": "652ebb115a90da74309abadd1e8c389718163c71aa8a26234441eb80ce686569",
+        "matches": true
+      },
+      {
+        "request_id": "2bb1278b-82ea-443d-ba6d-a5323017fd82",
+        "fingerprint": "4b4aa89e2c3f429704c8ad2f9a90966a37ec05cb03b6199440ae5a91d0c9ccb8",
+        "matches": true
+      },
+      {
+        "request_id": "84f082ad-1e19-4069-befa-19c4a11c9802",
+        "fingerprint": "ed82cd799569c05b9e63c487e9b5d6a602527262206d8784d15af0b164c66b5d",
+        "matches": true
+      },
+      {
+        "request_id": "e04227d4-5543-4f30-9397-5d02f3db0030",
+        "fingerprint": "44939049ef5290ddc369a64a409f49b3292eecf27f1c91f689ad7f1a56b44887",
+        "matches": true
+      },
+      {
+        "request_id": "29ca1c68-16a2-407e-a3df-3b30bd31677e",
+        "fingerprint": "e64af231d066cccae0563789d529247b53569637e6d2fba4253ea48cea43f9f5",
+        "matches": true
+      },
+      {
+        "request_id": "5fdeda04-58e1-429a-a485-4ddd40d5695f",
+        "fingerprint": "66a035b1ed81d790ba091d030b0420b877bdf486e3ad9c1412b7767cce18aeb2",
+        "matches": true
+      },
+      {
+        "request_id": "71b7e4cb-064b-4558-a680-ff6745aeb71e",
+        "fingerprint": "62a96130eea4c5d80c83484f62d221e354b915d67ad88c145dc1c554463307e5",
+        "matches": true
+      },
+      {
+        "request_id": "24860f56-30a0-416f-9f9f-39a20b4513a4",
+        "fingerprint": "f4c687afce5ecf82fe0f392dbce9cbe5c720d7f897db67519ad907a4e00712bb",
+        "matches": true
+      },
+      {
+        "request_id": "6f676185-f012-4462-8cc0-e94cee4be376",
+        "fingerprint": "a4732b5a4ebc68d49e10c0f58112f6ece1d14d6d8d52e33960bc09c334aac3b9",
+        "matches": true
+      },
+      {
+        "request_id": "77908c90-135f-46da-8403-46427a797b14",
+        "fingerprint": "424f00c9fd670c451f362c27e443816c61b28e83e8c077e899a102c09833f971",
+        "matches": true
+      },
+      {
+        "request_id": "2bb75109-8a32-4dbc-a45c-3b8574e83610",
+        "fingerprint": "ea4e5dcf22e8b9a6b4ee2bcec4cab73fb5d41c86abb71060f4866c1c00496a6a",
+        "matches": true
+      },
+      {
+        "request_id": "792e223f-b4fe-48cd-bfe3-bd7fd9d650dd",
+        "fingerprint": "35f8d004f9e37fd3f86f7135d52909a9357d6d6b48da17588bf03c235cbb462a",
+        "matches": true
+      },
+      {
+        "request_id": "eebe314f-b170-4049-884b-f6faa85a83ba",
+        "fingerprint": "8bd932f0d0d3989b8c8256488c7fd58717994242b44148b313915a18634d04a5",
+        "matches": true
+      },
+      {
+        "request_id": "f659cbef-c498-4b4e-9eee-f7e710f3e11c",
+        "fingerprint": "0649d01de07e67d0bbb79c52e6d50c13d4c736c5f84f0856e23f4cb5ff128c82",
+        "matches": true
+      }
+    ],
+    "all_formats_valid": true,
+    "all_fingerprints_match": true
+  },
+  "acceptance": {
+    "migration_replay": {
+      "source_count": 30,
+      "copy_count_after_twice": 30,
+      "historical_table_changes": [],
+      "added_tables": [],
+      "quick_check": "ok",
+      "foreign_key_violations": []
+    },
+    "historical_formats": [
+      {
+        "artifact_id": "25937e67-b373-42e5-a816-9d21a732d96c",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/timed_storyboard/main/25937e67-b373-42e5-a816-9d21a732d96c.json",
+        "schema_version": 1,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "ddf6f790-86fa-479d-9318-88c3f077ce0e",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/render_manifest/main_v4/ddf6f790-86fa-479d-9318-88c3f077ce0e.json",
+        "schema_version": 1,
+        "renderer_version": "tovitunes_visual_story_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1735ba4b-7584-4ccc-ba73-37d50b8082d8",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/timed_storyboard/main/1735ba4b-7584-4ccc-ba73-37d50b8082d8.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "0b37048f-c6b0-4516-b193-61195e9671c0",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/render_manifest/main_v4/0b37048f-c6b0-4516-b193-61195e9671c0.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1298befa-a755-48c1-baca-c22a2dab70bf",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/timed_storyboard/main/1298befa-a755-48c1-baca-c22a2dab70bf.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "4e568975-92d7-4a06-a735-44eefc337ef8",
+        "kind": "render_manifest",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/render_manifest/main_v4/4e568975-92d7-4a06-a735-44eefc337ef8.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      }
+    ],
+    "image_profile_fingerprints": [
+      {
+        "request_id": "0fb13c98-083b-474d-9e6e-bbc42749bd61",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "42616ba3-5e08-4941-8f35-20fe2d8ed483",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "b8e6d420-3533-4856-a218-3d052f096efa",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "ddf028cd-2f49-46ce-8098-4195cd51c60f",
+        "fingerprint": "ce2ee6038300ecccd2e53509e487ac1abca2df36fa7aff14040bdfb9b0839d4c",
+        "matches": true
+      },
+      {
+        "request_id": "ecc92a0a-d805-4d98-bcbe-5446847e9781",
+        "fingerprint": "3e2361099a87f97fa39a52b7de46dd9541f67479dd67b619a1750fd801a6f7a8",
+        "matches": true
+      },
+      {
+        "request_id": "60652e79-a919-44e6-99fe-7a3ca838f48d",
+        "fingerprint": "22264a83ef84f32165e33c220821a9471a7fde4d7bdbef8af545116dd9246d69",
+        "matches": true
+      },
+      {
+        "request_id": "7da24c6b-5c9c-444d-85d7-c1952cfb33f8",
+        "fingerprint": "4f4fc4cdcbf792108bf7c11e57cdf3328e8a22957102497b06588225e9ac208c",
+        "matches": true
+      },
+      {
+        "request_id": "a9f70b5f-8b70-49ac-8cb5-d32e9c7fa249",
+        "fingerprint": "2119a4a3e0dbcdf28c883baaef985ac79a0583e388f1b2dbeeba024bb75117da",
+        "matches": true
+      },
+      {
+        "request_id": "0b1bdc47-1398-4f0c-98ac-9865273c8be4",
+        "fingerprint": "1a96b9cffca886ecd8edb3496a2d7297ba5ee213d17c88a5085137a0a2a43403",
+        "matches": true
+      },
+      {
+        "request_id": "70946a58-011d-4173-8b6b-ce65f5b24715",
+        "fingerprint": "8e919f161d430f475730975aeeeede21fe4618682e5ba2aa6a961d33ad9305bf",
+        "matches": true
+      },
+      {
+        "request_id": "1a5c469c-fdbb-40dc-9705-18b12308a853",
+        "fingerprint": "652ebb115a90da74309abadd1e8c389718163c71aa8a26234441eb80ce686569",
+        "matches": true
+      },
+      {
+        "request_id": "2bb1278b-82ea-443d-ba6d-a5323017fd82",
+        "fingerprint": "4b4aa89e2c3f429704c8ad2f9a90966a37ec05cb03b6199440ae5a91d0c9ccb8",
+        "matches": true
+      },
+      {
+        "request_id": "84f082ad-1e19-4069-befa-19c4a11c9802",
+        "fingerprint": "ed82cd799569c05b9e63c487e9b5d6a602527262206d8784d15af0b164c66b5d",
+        "matches": true
+      },
+      {
+        "request_id": "e04227d4-5543-4f30-9397-5d02f3db0030",
+        "fingerprint": "44939049ef5290ddc369a64a409f49b3292eecf27f1c91f689ad7f1a56b44887",
+        "matches": true
+      },
+      {
+        "request_id": "29ca1c68-16a2-407e-a3df-3b30bd31677e",
+        "fingerprint": "e64af231d066cccae0563789d529247b53569637e6d2fba4253ea48cea43f9f5",
+        "matches": true
+      },
+      {
+        "request_id": "5fdeda04-58e1-429a-a485-4ddd40d5695f",
+        "fingerprint": "66a035b1ed81d790ba091d030b0420b877bdf486e3ad9c1412b7767cce18aeb2",
+        "matches": true
+      },
+      {
+        "request_id": "71b7e4cb-064b-4558-a680-ff6745aeb71e",
+        "fingerprint": "62a96130eea4c5d80c83484f62d221e354b915d67ad88c145dc1c554463307e5",
+        "matches": true
+      },
+      {
+        "request_id": "24860f56-30a0-416f-9f9f-39a20b4513a4",
+        "fingerprint": "f4c687afce5ecf82fe0f392dbce9cbe5c720d7f897db67519ad907a4e00712bb",
+        "matches": true
+      },
+      {
+        "request_id": "6f676185-f012-4462-8cc0-e94cee4be376",
+        "fingerprint": "a4732b5a4ebc68d49e10c0f58112f6ece1d14d6d8d52e33960bc09c334aac3b9",
+        "matches": true
+      },
+      {
+        "request_id": "77908c90-135f-46da-8403-46427a797b14",
+        "fingerprint": "424f00c9fd670c451f362c27e443816c61b28e83e8c077e899a102c09833f971",
+        "matches": true
+      },
+      {
+        "request_id": "2bb75109-8a32-4dbc-a45c-3b8574e83610",
+        "fingerprint": "ea4e5dcf22e8b9a6b4ee2bcec4cab73fb5d41c86abb71060f4866c1c00496a6a",
+        "matches": true
+      },
+      {
+        "request_id": "792e223f-b4fe-48cd-bfe3-bd7fd9d650dd",
+        "fingerprint": "35f8d004f9e37fd3f86f7135d52909a9357d6d6b48da17588bf03c235cbb462a",
+        "matches": true
+      },
+      {
+        "request_id": "eebe314f-b170-4049-884b-f6faa85a83ba",
+        "fingerprint": "8bd932f0d0d3989b8c8256488c7fd58717994242b44148b313915a18634d04a5",
+        "matches": true
+      },
+      {
+        "request_id": "f659cbef-c498-4b4e-9eee-f7e710f3e11c",
+        "fingerprint": "0649d01de07e67d0bbb79c52e6d50c13d4c736c5f84f0856e23f4cb5ff128c82",
+        "matches": true
+      },
+      {
+        "request_id": "036c3a81-23e9-40d1-8ac3-947f2989eba7",
+        "fingerprint": "5d185288c2f4fce00a24f4e7ab50e2817249f507188f8fe6f6b645e7a7d486c7",
+        "matches": true
+      },
+      {
+        "request_id": "43fc83d9-200c-497e-ac9e-7f23693029b1",
+        "fingerprint": "5d185288c2f4fce00a24f4e7ab50e2817249f507188f8fe6f6b645e7a7d486c7",
+        "matches": true
+      }
+    ],
+    "all_formats_valid": true,
+    "all_fingerprints_match": true
+  },
+  "retained-acceptance": {
+    "migration_replay": {
+      "source_count": 29,
+      "copy_count_after_twice": 30,
+      "historical_table_changes": [],
+      "added_tables": [
+        "image_native_crash_abandonments"
+      ],
+      "quick_check": "ok",
+      "foreign_key_violations": []
+    },
+    "historical_formats": [
+      {
+        "artifact_id": "25937e67-b373-42e5-a816-9d21a732d96c",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/timed_storyboard/main/25937e67-b373-42e5-a816-9d21a732d96c.json",
+        "schema_version": 1,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "ddf6f790-86fa-479d-9318-88c3f077ce0e",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e9751591-906e-4404-88a2-31e7a41071d6/render_manifest/main_v4/ddf6f790-86fa-479d-9318-88c3f077ce0e.json",
+        "schema_version": 1,
+        "renderer_version": "tovitunes_visual_story_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1735ba4b-7584-4ccc-ba73-37d50b8082d8",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/timed_storyboard/main/1735ba4b-7584-4ccc-ba73-37d50b8082d8.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "0b37048f-c6b0-4516-b193-61195e9671c0",
+        "kind": "render_manifest",
+        "relative_path": "episodes/e4299d67-961b-4d4c-bd65-0ed55fc91cdd/render_manifest/main_v4/0b37048f-c6b0-4516-b193-61195e9671c0.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "1298befa-a755-48c1-baca-c22a2dab70bf",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/timed_storyboard/main/1298befa-a755-48c1-baca-c22a2dab70bf.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "4e568975-92d7-4a06-a735-44eefc337ef8",
+        "kind": "render_manifest",
+        "relative_path": "episodes/680754d0-8bcd-4461-b9d9-95234e8e7e1d/render_manifest/main_v4/4e568975-92d7-4a06-a735-44eefc337ef8.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      },
+      {
+        "artifact_id": "c1f7c67b-165b-4a72-ae2e-a3aa965036a1",
+        "kind": "timed_storyboard",
+        "relative_path": "episodes/909efb22-9e51-4c50-9839-475fc13190fe/timed_storyboard/main/c1f7c67b-165b-4a72-ae2e-a3aa965036a1.json",
+        "schema_version": 3,
+        "renderer_version": null,
+        "valid": true
+      },
+      {
+        "artifact_id": "07807db3-f003-4aaf-a688-67ba8d9dc095",
+        "kind": "render_manifest",
+        "relative_path": "episodes/909efb22-9e51-4c50-9839-475fc13190fe/render_manifest/main_v4/07807db3-f003-4aaf-a688-67ba8d9dc095.json",
+        "schema_version": 2,
+        "renderer_version": "tovitunes_creative_render_v1",
+        "valid": true
+      }
+    ],
+    "image_profile_fingerprints": [
+      {
+        "request_id": "0fb13c98-083b-474d-9e6e-bbc42749bd61",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "42616ba3-5e08-4941-8f35-20fe2d8ed483",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "b8e6d420-3533-4856-a218-3d052f096efa",
+        "fingerprint": "a42c2cc2ebef393bd014b7b1bc8f58ffa51e90d33f10e21ebfcf72371cecfbed",
+        "matches": true
+      },
+      {
+        "request_id": "ddf028cd-2f49-46ce-8098-4195cd51c60f",
+        "fingerprint": "ce2ee6038300ecccd2e53509e487ac1abca2df36fa7aff14040bdfb9b0839d4c",
+        "matches": true
+      },
+      {
+        "request_id": "ecc92a0a-d805-4d98-bcbe-5446847e9781",
+        "fingerprint": "3e2361099a87f97fa39a52b7de46dd9541f67479dd67b619a1750fd801a6f7a8",
+        "matches": true
+      },
+      {
+        "request_id": "60652e79-a919-44e6-99fe-7a3ca838f48d",
+        "fingerprint": "22264a83ef84f32165e33c220821a9471a7fde4d7bdbef8af545116dd9246d69",
+        "matches": true
+      },
+      {
+        "request_id": "7da24c6b-5c9c-444d-85d7-c1952cfb33f8",
+        "fingerprint": "4f4fc4cdcbf792108bf7c11e57cdf3328e8a22957102497b06588225e9ac208c",
+        "matches": true
+      },
+      {
+        "request_id": "a9f70b5f-8b70-49ac-8cb5-d32e9c7fa249",
+        "fingerprint": "2119a4a3e0dbcdf28c883baaef985ac79a0583e388f1b2dbeeba024bb75117da",
+        "matches": true
+      },
+      {
+        "request_id": "0b1bdc47-1398-4f0c-98ac-9865273c8be4",
+        "fingerprint": "1a96b9cffca886ecd8edb3496a2d7297ba5ee213d17c88a5085137a0a2a43403",
+        "matches": true
+      },
+      {
+        "request_id": "70946a58-011d-4173-8b6b-ce65f5b24715",
+        "fingerprint": "8e919f161d430f475730975aeeeede21fe4618682e5ba2aa6a961d33ad9305bf",
+        "matches": true
+      },
+      {
+        "request_id": "1a5c469c-fdbb-40dc-9705-18b12308a853",
+        "fingerprint": "652ebb115a90da74309abadd1e8c389718163c71aa8a26234441eb80ce686569",
+        "matches": true
+      },
+      {
+        "request_id": "2bb1278b-82ea-443d-ba6d-a5323017fd82",
+        "fingerprint": "4b4aa89e2c3f429704c8ad2f9a90966a37ec05cb03b6199440ae5a91d0c9ccb8",
+        "matches": true
+      },
+      {
+        "request_id": "84f082ad-1e19-4069-befa-19c4a11c9802",
+        "fingerprint": "ed82cd799569c05b9e63c487e9b5d6a602527262206d8784d15af0b164c66b5d",
+        "matches": true
+      },
+      {
+        "request_id": "e04227d4-5543-4f30-9397-5d02f3db0030",
+        "fingerprint": "44939049ef5290ddc369a64a409f49b3292eecf27f1c91f689ad7f1a56b44887",
+        "matches": true
+      },
+      {
+        "request_id": "29ca1c68-16a2-407e-a3df-3b30bd31677e",
+        "fingerprint": "e64af231d066cccae0563789d529247b53569637e6d2fba4253ea48cea43f9f5",
+        "matches": true
+      },
+      {
+        "request_id": "5fdeda04-58e1-429a-a485-4ddd40d5695f",
+        "fingerprint": "66a035b1ed81d790ba091d030b0420b877bdf486e3ad9c1412b7767cce18aeb2",
+        "matches": true
+      },
+      {
+        "request_id": "71b7e4cb-064b-4558-a680-ff6745aeb71e",
+        "fingerprint": "62a96130eea4c5d80c83484f62d221e354b915d67ad88c145dc1c554463307e5",
+        "matches": true
+      },
+      {
+        "request_id": "24860f56-30a0-416f-9f9f-39a20b4513a4",
+        "fingerprint": "f4c687afce5ecf82fe0f392dbce9cbe5c720d7f897db67519ad907a4e00712bb",
+        "matches": true
+      },
+      {
+        "request_id": "6f676185-f012-4462-8cc0-e94cee4be376",
+        "fingerprint": "a4732b5a4ebc68d49e10c0f58112f6ece1d14d6d8d52e33960bc09c334aac3b9",
+        "matches": true
+      },
+      {
+        "request_id": "77908c90-135f-46da-8403-46427a797b14",
+        "fingerprint": "424f00c9fd670c451f362c27e443816c61b28e83e8c077e899a102c09833f971",
+        "matches": true
+      },
+      {
+        "request_id": "2bb75109-8a32-4dbc-a45c-3b8574e83610",
+        "fingerprint": "ea4e5dcf22e8b9a6b4ee2bcec4cab73fb5d41c86abb71060f4866c1c00496a6a",
+        "matches": true
+      },
+      {
+        "request_id": "792e223f-b4fe-48cd-bfe3-bd7fd9d650dd",
+        "fingerprint": "35f8d004f9e37fd3f86f7135d52909a9357d6d6b48da17588bf03c235cbb462a",
+        "matches": true
+      },
+      {
+        "request_id": "eebe314f-b170-4049-884b-f6faa85a83ba",
+        "fingerprint": "8bd932f0d0d3989b8c8256488c7fd58717994242b44148b313915a18634d04a5",
+        "matches": true
+      },
+      {
+        "request_id": "f659cbef-c498-4b4e-9eee-f7e710f3e11c",
+        "fingerprint": "0649d01de07e67d0bbb79c52e6d50c13d4c736c5f84f0856e23f4cb5ff128c82",
+        "matches": true
+      },
+      {
+        "request_id": "7cd9fb6a-f824-4391-9175-a3920b0cab3a",
+        "fingerprint": "e65fb19044424a8277d6aad263420e69731f58163a27397ab1d3a313b02476d7",
+        "matches": true
+      },
+      {
+        "request_id": "002be651-5b29-45b8-8002-b158863311e3",
+        "fingerprint": "292efd5696183f634da1dcc848b10e938e15e47e5ce89df64fbf51dc7af92f11",
+        "matches": true
+      },
+      {
+        "request_id": "38e31109-6fa9-4d70-8f94-07dfe17c26af",
+        "fingerprint": "1124a3e8c5e3fc797315971facbb679896d95c1f73c6b40fcea8056524be4824",
+        "matches": true
+      },
+      {
+        "request_id": "e2db3599-ea21-4bb7-a996-b2add14bacd8",
+        "fingerprint": "6696fe9fa97813b62ea82ab427018b442866a10467df0479c471cd25da91b663",
+        "matches": true
+      },
+      {
+        "request_id": "97296e7c-ffd4-4b3f-8ee1-9250215e0eec",
+        "fingerprint": "64d8e8812f4beb5a6046bf8e8a30c113cfd941b0ca8a8a9febaa49a0e1dfd010",
+        "matches": true
+      },
+      {
+        "request_id": "87c958ae-831f-494d-bfd6-f3f14c8756d2",
+        "fingerprint": "540c6a9a1e015a441647fbbf3121fea4cf0efc87bb0bd26c910a467fa11c5d30",
+        "matches": true
+      },
+      {
+        "request_id": "942d1030-3ff3-40ca-98cc-0ffa9b049104",
+        "fingerprint": "3452a36406e4b0ed115d1f71818595eabebcb133c56b9d71fb5d71e1770c6b1b",
+        "matches": true
+      },
+      {
+        "request_id": "98b2fc55-9ba2-4695-a88c-0c12f29e0013",
+        "fingerprint": "70da3b703c71ecc0693d80af7ee0025e531d5f116b1b48d7863e946f8dc83777",
+        "matches": true
+      },
+      {
+        "request_id": "23db3d96-165a-4859-9f95-3c6a96a7aaf5",
+        "fingerprint": "82d08858441d449269acaf65b992418999cc78f507b115f0dd2d98cdc9ad4231",
+        "matches": true
+      },
+      {
+        "request_id": "0ac395cd-1d7e-42db-9b8d-0a77a8e27712",
+        "fingerprint": "3237753a4e2bd35ce3bcdcc1af0a40515c3f6a42616bde85c1c74878bc2c27c9",
+        "matches": true
+      },
+      {
+        "request_id": "3f12e8b3-9698-4375-95f0-08eb695c6940",
+        "fingerprint": "3efd1bd211cf90849fd4808d5afec3f75969bb0b93ab7bbbda4f1be7bbc664e1",
+        "matches": true
+      }
+    ],
+    "all_formats_valid": true,
+    "all_fingerprints_match": true
+  }
+}

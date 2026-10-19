@@ -1,0 +1,146 @@
+{
+  "run_id": 39162600600,
+  "head_sha": "790da5502a966675b94a32838e303a97fb16503e",
+  "url": "https://github.com/egegoktugbozkir35/ToviTunes/actions/runs/39162600600",
+  "jobs": [
+    {
+      "name": "windows",
+      "head_sha": "790da5502a966675b94a32838e303a97fb16503e",
+      "conclusion": "success",
+      "started_at": "2026-10-18T20:17:10Z",
+      "completed_at": "2026-10-18T21:09:14Z",
+      "html_url": "https://github.com/egegoktugbozkir35/ToviTunes/actions/runs/39162600600/job/117778855871",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-18T20:17:11Z",
+          "completed_at": "2026-10-18T20:17:11Z"
+        },
+        {
+          "name": "Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-18T20:17:11Z",
+          "completed_at": "2026-10-18T20:17:17Z"
+        },
+        {
+          "name": "Verify exact requested head",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-18T20:17:17Z",
+          "completed_at": "2026-10-18T20:17:17Z"
+        },
+        {
+          "name": "Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-18T20:17:17Z",
+          "completed_at": "2026-10-18T20:17:17Z"
+        },
+        {
+          "name": "Run astral-sh/setup-uv@v6",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-18T20:17:17Z",
+          "completed_at": "2026-10-18T20:17:20Z"
+        },
+        {
+          "name": "Run choco install ffmpeg --no-progress -y",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-18T20:17:20Z",
+          "completed_at": "2026-10-18T20:17:42Z"
+        },
+        {
+          "name": "Run uv sync --python 3.11 --locked --extra dev --extra video-render --extra web --extra youtube",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-18T20:17:42Z",
+          "completed_at": "2026-10-18T20:17:46Z"
+        },
+        {
+          "name": "Run uv run python -m tovitunes.cli --config config.example.yaml character-pack validate-lock --recipe brands/tovitunes/characters/tovi/packs/v1/intake.yaml --lock brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-10-18T20:17:46Z",
+          "completed_at": "2026-10-18T20:17:50Z"
+        },
+        {
+          "name": "Run uv run ruff check .",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-10-18T20:17:50Z",
+          "completed_at": "2026-10-18T20:17:51Z"
+        },
+        {
+          "name": "Run uv run mypy src",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-10-18T20:17:51Z",
+          "completed_at": "2026-10-18T20:18:09Z"
+        },
+        {
+          "name": "Native crash recovery regressions",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-10-18T20:18:09Z",
+          "completed_at": "2026-10-18T20:22:38Z"
+        },
+        {
+          "name": "Offline suite (MPT application boundaries and ToviTunes domain)",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-10-18T20:22:38Z",
+          "completed_at": "2026-10-18T21:09:10Z"
+        },
+        {
+          "name": "Post Run astral-sh/setup-uv@v6",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-10-18T21:09:10Z",
+          "completed_at": "2026-10-18T21:09:11Z"
+        },
+        {
+          "name": "Post Run actions/setup-python@v5",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-10-18T21:09:11Z",
+          "completed_at": "2026-10-18T21:09:11Z"
+        },
+        {
+          "name": "Post Run actions/checkout@v4",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-10-18T21:09:11Z",
+          "completed_at": "2026-10-18T21:09:13Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-10-18T21:09:13Z",
+          "completed_at": "2026-10-18T21:09:13Z"
+        }
+      ]
+    }
+  ],
+  "log_sha256": "ab08252ef53aaf36ec9437fe0d7a9ab18d67164321299516b1b488f1533d41fc"
+}
