@@ -90,13 +90,121 @@ ceilings are derived from existing one-output and plan-bound provider contracts:
 | One initial ACE-Step song request per episode; three initial song requests for the Gate 5 batch | **PROPOSED — OWNER APPROVAL REQUIRED.** Existing `batch_size=1`, one immutable episode music binding and no regeneration of a successful source. This is a proposed effect budget, not existing authorization. |
 | Per episode, at most one initial Qwen request per distinct planned provider illustration plus four planned environment-role requests, less valid admitted/shared reuse; explicit swatches/cues use zero | **PROPOSED — OWNER APPROVAL REQUIRED.** `episode_assets.generate_assets`, `environment_sets.ROLES` and compiled asset keys define the formula. Freeze the actual plan inventory/counts before image effects; unused roles are not quietly removed by Gate 0. No best-of-N samples are implied. |
 | No additional image/music attempts, replacement grants or extra candidates charged automatically; failed/uncertain work stops under existing contracts | **PROPOSED — OWNER APPROVAL REQUIRED** as a batch ceiling. Existing no-blind-resend invariants still apply independently. Any authorized recovery must preserve identities and the unattended criterion; budget approval does not permit per-episode manual repair. |
-| Creative spending follows the frozen configured chain and existing per-contract repair/transient bounds, with every attempt accounted for | **PROPOSED — OWNER APPROVAL REQUIRED** for the live batch. The initial/fallback/repair/retry ledger and topic-round settings determine the declared ceiling. No unsupported aggregate LLM count is invented; the exact Gate 5 stage inventory and ceiling must be recorded and approved before its first provider effect. |
+| Creative spending is calculated from the frozen configuration and existing request state machine using the formula below | **PROPOSED — OWNER APPROVAL REQUIRED** for a live batch. Record its contract inventory, configured chain, topic-round bound, retained ledger state and derived reservation before its first provider effect. This accounting does not add retries, repairs, models or topic rounds. |
 
 These proposals neither tighten nor relax the locked release rubric. Unapproved
 ceilings authorize **zero** calls. Approving this contract must explicitly accept
 or amend its budget proposals; any changed roadmap criterion requires the owner's
 versioned written change control. Provider unavailability is a blocker, not permission
 to add another model, exceed budget or restart a slot.
+
+### Reproducible creative-provider accounting
+
+Count creative **chat-generation attempts**, including unsuccessful or uncertain
+remote-started attempts, not output candidates or tokens. For each structured
+contract `s` and visited model `m`, distinguish started initial attempts `i`,
+started structural repairs `h`, and started transient-retry attempts `t`:
+
+```text
+C(s,m) = i(s,m) + h(s,m) + t(s,m)
+0 <= i <= 1; 0 <= h <= 1
+C_creative = sum over declared contracts s, visited models m of C(s,m)
+```
+
+`h` is available only after invalid structured output from the initial attempt;
+failure alone does not grant a repair. There is no second structural repair.
+`DurableStructuredGenerator.generate/_response` shares **one retry counter across
+the initial and repair attempts** for the same owner/kind-family/input fingerprint.
+It does not grant a fresh retry allowance to the repair. Call that allocation
+counter `r`: it starts at the ledger's maximum `retry_index`, including already
+prepared retries, not at zero on Resume (`CreativeRequestLedger.retry_count`).
+For the attempt sum, initial/repair rows have `retry_index=0`; transient-retry
+rows have `retry_index>0`. Count each distinct remote-started request once, even
+if its eventual status is failed/ambiguous; do not count reused receipts again.
+
+The exact rule for a new transient retry after a live failure `f` is:
+
+```text
+allow_retry = (provider == nvidia AND retry_sleep is configured
+               AND r < len(classify_creative_failure(f).retry_delays))
+if allow_retry: r := r + 1; retry the current initial/repair contract
+otherwise: apply the existing failure-scope/fallback rule
+```
+
+| Live failure classification | Retry delays / maximum shared counter admitting another retry | Existing dispatch after retry exhaustion |
+|---|---|---|
+| Endpoint unreachable | 2, 5, 15 seconds; `r < 3` | Go directly to the already configured emergency Ollama transport if enabled; otherwise stop. Do not visit every NVIDIA model for an endpoint failure. |
+| HTTP server / rate limited | 2, 5 seconds; `r < 2` | Existing model-scope fallback may advance to the next configured NVIDIA model. |
+| Read timeout / stream interrupted | 2 seconds; `r < 1` | Existing model-scope fallback may advance; uncertainty remains recorded under the original request identity. |
+| Other classifications | No transient retry | Existing model-scope failures may advance; authentication/configuration and other fail-closed outcomes stop. Invalid structured output follows the single-repair rule above. |
+
+For mixed live failure categories, evaluate the rule against the **current shared
+counter** each time. The category allowances are not added together. Its maximum
+is therefore `t <= r <= 3` for NVIDIA and `t = r = 0` for Ollama. A supported Retry-After
+value in 0–30 seconds changes the wait only, not the request count. Stored failures
+or ambiguity do not independently grant live retries after restart. A retained
+prepared retry can start once through its existing identity/fence; its already
+allocated index is not refunded. A completed response is reused without a new call.
+
+`ResilientStructuredGenerator` follows the configured ordered NVIDIA chain from
+its existing/sticky anchor, without wraparound. Each visited model has its own
+fingerprinted contract; dispatch requires the existing durable evidence. Success,
+fail-closed errors and chain exhaustion stop further attempts. Ollama is visited
+only through the existing endpoint-failure path when its configuration flag is
+already true; this contract does not enable it.
+
+For reservation before outcomes are known, let `M` be
+`1 + len(creative_llm.fallback_models)` and `E` be 1 only when
+`fallback_to_ollama_on_endpoint_failure` is already enabled, otherwise 0. The
+existing state machine implies this **conservative arithmetic upper envelope**:
+
+```text
+B_contract <= M * (1 initial + 1 repair + 3 shared transient retries)
+              + E * (1 initial + 1 repair)
+           = 5*M + 2*E
+B_declared_creative <= sum over declared contracts s of (5*M_s + 2*E_s)
+```
+
+This is additive, **not** `(initial + repair) * (1 + retries)`. The envelope does
+not override the classification-specific rule or permit unused attempts to be
+transferred between models/contracts. For example, with four NVIDIA models and
+Ollama disabled, persistent HTTP-server failure permits at most `4*(1+2)=12`
+attempts for a contract; persistent read timeouts permit `4*(1+1)=8`; persistent
+endpoint failure permits `1+3=4` and then stops. These paths do not gain a repair
+or permission to spend the looser `5*M` envelope.
+
+For the **current fresh autonomous V3 RENDER flow**, topic selection has at most
+`R = creative_topics.max_generation_rounds` structured pool contracts, followed by
+five contracts: episode idea/spec, lyrics, music direction/spec, visual draft and
+metadata. The learning brief is compiled locally. A topic pool's configured
+`candidate_batch_size` is candidates in one response, not that many provider calls.
+Thus, for `N` fresh episode slots with one frozen configuration:
+
+```text
+B_fresh_batch <= N * (R + 5) * (5*M + 2*E)
+audited example: N=3, R=3, M=4, E=0
+               => 8 contracts * 20 = 160 reserved attempts per fresh slot
+               => 3 * 160 = 480 reserved attempts across the three slots
+```
+
+These deliberately loose totals are **derived accounting bounds, not new provider
+limits, spending authorization, a target to exhaust, or additional creative
+restrictions**. The exact state-dependent rules always prevail. Existing/sticky
+model choice, early success, fewer topic rounds and valid retained artifacts reduce
+actual calls; Resume never receives another fresh-run reservation. Record request
+IDs, parent/previous-attempt links, prompt/fingerprint, model, `attempt`,
+`retry_index`, status and remote-start evidence before/after to reconcile the sum
+and preserve already spent allocations. For other separately approved gate samples,
+sum only their declared structured contracts; do not assign them a full-episode
+reservation. If a future approved implementation changes this flow, derive its
+inventory from that frozen code/config under the same owner change control.
+
+Sources: `creative/provider.py`, `creative/failures.py`, `creative/resilience.py`,
+`creative/factory.py`, `persistence/requests.py`, `creative/topics.py`,
+`creative/service.py`, `services/visual.py`, `creative/metadata.py`, and `config.py`.
+Gate 0 policy approval can accept this accounting and the separately marked
+ACE-Step/Qwen proposals; it still authorizes **zero live calls**. Every future
+gate's live batch requires separate explicit authorization for its declared effects.
 
 ## Human review and record
 
