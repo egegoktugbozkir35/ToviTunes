@@ -1,0 +1,378 @@
+{
+  "host": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "tools": {
+      "git": "git version 2.56.0.windows.1",
+      "uv": "uv 0.12.13 (0ebbd9274 2026-09-10 x86_64-pc-windows-msvc)",
+      "node": "v24.14.0",
+      "ffmpeg": "ffmpeg version 8.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+      "ffprobe": "ffprobe version 8.1-full_build-www.gyan.dev Copyright (c) 2007-2026 the FFmpeg developers"
+    }
+  },
+  "configs": {
+    "example": {
+      "sha256": "1af47243f81f76f21f30495919b0267649b0f93d88c4a98f523e6e87bad4d4ba",
+      "schema_valid": true,
+      "schema_version": 1,
+      "publication_enabled": false,
+      "youtube_enabled": false,
+      "automation": {
+        "auto_publish": false,
+        "require_human_review": true,
+        "allow_model_download": false,
+        "asr_model": "small.en"
+      },
+      "creative_models": [
+        "z-ai/glm-5.3",
+        "z-ai/glm-5.3-flash",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "deepseek-ai/deepseek-v4.1-flash"
+      ],
+      "ollama_fallback": false,
+      "music": {
+        "provider": "ace_step_local",
+        "base_url": "http://127.0.0.1:8001",
+        "model": "acestep-v15-turbo",
+        "lm_model": "acestep-5Hz-lm-0.6B",
+        "lm_backend": "pt",
+        "thinking": true,
+        "inference_steps": 8,
+        "audio_format": "wav",
+        "batch_size": 1,
+        "timeout_seconds": 1800.0,
+        "poll_interval_seconds": 2.0
+      },
+      "image_model": "qwen-image-2.1-q8",
+      "environment_model": "qwen-image-2.1-q8",
+      "workflow_sha256": "fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e",
+      "local_services_auto_discover": true,
+      "local_service_commands_configured": {
+        "ace_step": false,
+        "comfyui": false,
+        "ollama": false
+      }
+    },
+    "production": {
+      "sha256": "051a7e6ca6f5d649b3eb203af47e2e8330d9274f49296499509375814631ed61",
+      "schema_valid": true,
+      "schema_version": 1,
+      "publication_enabled": true,
+      "youtube_enabled": true,
+      "automation": {
+        "auto_publish": false,
+        "require_human_review": true,
+        "allow_model_download": false,
+        "asr_model": "large-v3"
+      },
+      "creative_models": [
+        "moonshotai/kimi-k3",
+        "z-ai/glm-5.3-flash",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "deepseek-ai/deepseek-v4.1-flash"
+      ],
+      "ollama_fallback": false,
+      "music": {
+        "provider": "ace_step_local",
+        "base_url": "http://127.0.0.1:8001",
+        "model": "acestep-v15-turbo",
+        "lm_model": "acestep-5Hz-lm-0.6B",
+        "lm_backend": "pt",
+        "thinking": true,
+        "inference_steps": 8,
+        "audio_format": "wav",
+        "batch_size": 1,
+        "timeout_seconds": 1800.0,
+        "poll_interval_seconds": 2.0
+      },
+      "image_model": "qwen-image-2.1-q8",
+      "environment_model": "qwen-image-2.1-q8",
+      "workflow_sha256": "fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e",
+      "local_services_auto_discover": true,
+      "local_service_commands_configured": {
+        "ace_step": false,
+        "comfyui": false,
+        "ollama": false
+      },
+      "character_media": {
+        "count": 48,
+        "all_valid": true,
+        "pack_revision": "tovi-pack-v1-8f7e487b5ac5279b"
+      }
+    },
+    "acceptance": {
+      "sha256": "9ff7b2cf1636b2d28db11ce475391bfbe4284580ebc7e367c26d0c4e5c97a7de",
+      "schema_valid": true,
+      "schema_version": 1,
+      "publication_enabled": true,
+      "youtube_enabled": true,
+      "automation": {
+        "auto_publish": false,
+        "require_human_review": true,
+        "allow_model_download": false,
+        "asr_model": "large-v3"
+      },
+      "creative_models": [
+        "moonshotai/kimi-k3",
+        "z-ai/glm-5.3-flash",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "deepseek-ai/deepseek-v4.1-flash"
+      ],
+      "ollama_fallback": false,
+      "music": {
+        "provider": "ace_step_local",
+        "base_url": "http://127.0.0.1:8001",
+        "model": "acestep-v15-turbo",
+        "lm_model": "acestep-5Hz-lm-0.6B",
+        "lm_backend": "pt",
+        "thinking": true,
+        "inference_steps": 8,
+        "audio_format": "wav",
+        "batch_size": 1,
+        "timeout_seconds": 1800.0,
+        "poll_interval_seconds": 2.0
+      },
+      "image_model": "qwen-image-2.1-q8",
+      "environment_model": "qwen-image-2.1-q8",
+      "workflow_sha256": "fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e",
+      "local_services_auto_discover": true,
+      "local_service_commands_configured": {
+        "ace_step": false,
+        "comfyui": false,
+        "ollama": false
+      },
+      "character_media": {
+        "count": 48,
+        "all_valid": true,
+        "pack_revision": "tovi-pack-v1-8f7e487b5ac5279b"
+      }
+    },
+    "recovery": {
+      "sha256": "d46b378a4427000e8f5c256e7327bf3a95db486d5165abe67f34cc2a541bfe41",
+      "schema_valid": true,
+      "schema_version": 1,
+      "publication_enabled": true,
+      "youtube_enabled": true,
+      "automation": {
+        "auto_publish": false,
+        "require_human_review": true,
+        "allow_model_download": false,
+        "asr_model": "large-v3"
+      },
+      "creative_models": [
+        "moonshotai/kimi-k3",
+        "z-ai/glm-5.3-flash",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "deepseek-ai/deepseek-v4.1-flash"
+      ],
+      "ollama_fallback": false,
+      "music": {
+        "provider": "ace_step_local",
+        "base_url": "http://127.0.0.1:8001",
+        "model": "acestep-v15-turbo",
+        "lm_model": "acestep-5Hz-lm-0.6B",
+        "lm_backend": "pt",
+        "thinking": true,
+        "inference_steps": 8,
+        "audio_format": "wav",
+        "batch_size": 1,
+        "timeout_seconds": 1800.0,
+        "poll_interval_seconds": 2.0
+      },
+      "image_model": "qwen-image-2.1-q8",
+      "environment_model": "qwen-image-2.1-q8",
+      "workflow_sha256": "fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e",
+      "local_services_auto_discover": false,
+      "local_service_commands_configured": {
+        "ace_step": false,
+        "comfyui": true,
+        "ollama": false
+      }
+    }
+  },
+  "schema_export_sha256": "7f525e4a932ff4e51e2dd396ac1e23a1f21436d7e776d613a170b6a68728ddc4",
+  "dependency_check": "67 installed packages compatible",
+  "installed_models": [
+    {
+      "path": "diffusion_models\\qwen_image_2.1_Q8_0.gguf",
+      "exists": true,
+      "bytes": 7591579808,
+      "sha256": "cf1962b6c3ffd1d77ab8407f226f72073a333fc82ffe90e2337ad61a4053d47d"
+    },
+    {
+      "path": "text_encoders\\qwen3vl_8b_int8_convrot.safetensors",
+      "exists": true,
+      "bytes": 9350798360,
+      "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+    },
+    {
+      "path": "vae\\qwen_image_2.1_vae_bf16.safetensors",
+      "exists": true,
+      "bytes": 675509688,
+      "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+    },
+    {
+      "path": "ACE-Step/acestep-v15-turbo\\config.json",
+      "exists": true,
+      "bytes": 1968,
+      "sha256": "74745ff704ea49164c3d2d1c99fc0670f3fc635a869f0aec2d1311e6a52d400a"
+    },
+    {
+      "path": "ACE-Step/acestep-v15-turbo\\configuration_acestep_v15.py",
+      "exists": true,
+      "bytes": 217,
+      "sha256": "a48cf207b12b24913fa680b085a410855a628e48841ab885d90c23f0ccb44dd6"
+    },
+    {
+      "path": "ACE-Step/acestep-v15-turbo\\model.safetensors",
+      "exists": true,
+      "bytes": 4787825604,
+      "sha256": "3f6e0797fad420a39bd33979eb6e840e30989e34a3794e843d23b60ec6e422d7"
+    },
+    {
+      "path": "ACE-Step/acestep-v15-turbo\\modeling_acestep_v15_turbo.py",
+      "exists": true,
+      "bytes": 111091,
+      "sha256": "d29a2b0b724d21670072c48b146675c32a48d1b71825d23a7e46979e2e27704c"
+    },
+    {
+      "path": "ACE-Step/acestep-v15-turbo\\silence_latent.pt",
+      "exists": true,
+      "bytes": 3841215,
+      "sha256": "a778e9dd942f5e8b2c09c55370782d318834432b03dabbcdf70e6ed49ad6358b"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\.gitattributes",
+      "exists": true,
+      "bytes": 1628,
+      "sha256": "deeeb9e4ddcc13c09872c2e1768bb9bbfa752c00ec1a3d233ab056bed4365048"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\added_tokens.json",
+      "exists": true,
+      "bytes": 2217787,
+      "sha256": "db08b66a515fb5d6acca0b3492d25bb44e0deda6241fc1113ac0679d40558c48"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\chat_template.jinja",
+      "exists": true,
+      "bytes": 4168,
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\config.json",
+      "exists": true,
+      "bytes": 1386,
+      "sha256": "873ca63808b74e1e008ab950114765553b898b489b9e077e80db83348a118384"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\merges.txt",
+      "exists": true,
+      "bytes": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\model.safetensors",
+      "exists": true,
+      "bytes": 1325804024,
+      "sha256": "5d92a60806e2e88c04de58ddc6dde93f2bc8f1336162b3ad5853886c9bcc6b82"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\README.md",
+      "exists": true,
+      "bytes": 5498,
+      "sha256": "ed42093e8f7903f23bd45ea56bea8f484c8aee47820ae8880d6da752681a1da7"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\special_tokens_map.json",
+      "exists": true,
+      "bytes": 1824199,
+      "sha256": "76e233bfc357b0b03d7b6e6ba8e799244f358552575a7cdadb78d3d19106b298"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\tokenizer.json",
+      "exists": true,
+      "bytes": 24321939,
+      "sha256": "35af56c3f5cb3ea2cc578aa28a8937770981d504f183ac5c8c38baf4bbd4af4d"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\tokenizer_config.json",
+      "exists": true,
+      "bytes": 14072925,
+      "sha256": "6cd70cdd89425971794f5235562edcc608b0629a6c4686ae51a8b8c8b8ba5e95"
+    },
+    {
+      "path": "ACE-Step/acestep-5Hz-lm-0.6B\\vocab.json",
+      "exists": true,
+      "bytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    {
+      "path": "ACE-Step/vae\\config.json",
+      "exists": true,
+      "bytes": 425,
+      "sha256": "14e019904df567f26df750317a70e2bd08f9f8f3c40ff4a24c97d1cd3f20ccd2"
+    },
+    {
+      "path": "ACE-Step/vae\\diffusion_pytorch_model.safetensors",
+      "exists": true,
+      "bytes": 337431388,
+      "sha256": "da17edb604c40deaf09e9b24974e590d1ca83a374070e5d0884cfa4bed9a99b0"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\added_tokens.json",
+      "exists": true,
+      "bytes": 707,
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\chat_template.jinja",
+      "exists": true,
+      "bytes": 4116,
+      "sha256": "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\config.json",
+      "exists": true,
+      "bytes": 1359,
+      "sha256": "bb23c1607cfe059a58d8f0196cf1cebb52082b1056b8e358a579da80a5759420"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\merges.txt",
+      "exists": true,
+      "bytes": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\model.safetensors",
+      "exists": true,
+      "bytes": 1191586416,
+      "sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\special_tokens_map.json",
+      "exists": true,
+      "bytes": 613,
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\tokenizer.json",
+      "exists": true,
+      "bytes": 11423705,
+      "sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\tokenizer_config.json",
+      "exists": true,
+      "bytes": 5404,
+      "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0"
+    },
+    {
+      "path": "ACE-Step/Qwen3-Embedding-0.6B\\vocab.json",
+      "exists": true,
+      "bytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    }
+  ],
+  "model_files_unchanged": true
+}

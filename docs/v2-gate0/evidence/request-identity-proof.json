@@ -1,0 +1,14 @@
+{
+  "original_and_successor_rows_match_Gate0_snapshot": true,
+  "successor_has_source": true,
+  "normalized_artifact_id": null,
+  "counts": {
+    "selections": 0,
+    "preview_admissions": 0,
+    "successor_grants": 1,
+    "native_crash_audits": 1
+  },
+  "native_crash_evidence_hash_valid": true,
+  "provider_generation_calls": 0,
+  "recovery_actions": 0
+}

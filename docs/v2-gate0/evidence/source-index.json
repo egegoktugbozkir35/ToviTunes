@@ -1,0 +1,2221 @@
+[
+  {
+    "path": "src/tovitunes/__init__.py",
+    "sha256": "9952cdd3cb5d426321a105b7d7e6b2d51c314b3ba37982d6b5d29eaf40c25552",
+    "responsibility": "ToviTunes durable production foundation.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/artifacts/__init__.py",
+    "sha256": "a6834ca749417cd026614516163e529f402487fd2a0e78e6942e9f7342333b81",
+    "responsibility": "Immutable media ingestion and validation.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/artifacts/character_intake.py",
+    "sha256": "885abae80e29fcd90f6ed53a3f4774d32591cdabc68cf6e1f78455a45cbe3363",
+    "responsibility": "Repeatable, offline intake of owner-supplied character art.",
+    "definitions": [
+      "SourceSpec",
+      "MouthNormalization",
+      "RightsEvidence",
+      "AssetSpec",
+      "IntakeRecipe",
+      "load_recipe",
+      "_digest",
+      "_source_path",
+      "_largest_component",
+      "_extract",
+      "_write_png",
+      "prepare_assets",
+      "_approval",
+      "_record_openai_rights",
+      "ingest_prepared"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_pack",
+      "tovitunes.artifacts.character_png",
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.character",
+      "tovitunes.domain.review"
+    ]
+  },
+  {
+    "path": "src/tovitunes/artifacts/character_lock.py",
+    "sha256": "afe90957a8b8008bb27bebbac1a029124efeb32e7256312ee6a30a857a1691ea",
+    "responsibility": "Portable bootstrap snapshot for an already approved character pack.\n\nThe lock exports existing SQLite state. It never grants approval or rights.",
+    "definitions": [
+      "LockedRightsDecision",
+      "LockedApprovalDecision",
+      "LockedArtifact",
+      "LockedSelection",
+      "CharacterPackLock",
+      "_uuid",
+      "_role_kind_slot",
+      "load_lock",
+      "validate_pack_lock",
+      "export_pack_lock",
+      "_input_paths",
+      "_restore_decisions",
+      "_restore_selection",
+      "rehydrate_pack"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_intake",
+      "tovitunes.artifacts.character_pack",
+      "tovitunes.artifacts.media",
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.review"
+    ]
+  },
+  {
+    "path": "src/tovitunes/artifacts/character_pack.py",
+    "sha256": "923b1871e3e2124a0aaaf5214f1443a5a63259f1b16df0e8826879dd3c59e3cd",
+    "responsibility": "Read-only readiness check for a character pack's pinned brand artifacts.",
+    "definitions": [
+      "PackReadiness",
+      "assess_pack_assets",
+      "approve_pack_manifest"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_png",
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.domain.character"
+    ]
+  },
+  {
+    "path": "src/tovitunes/artifacts/character_png.py",
+    "sha256": "40f6650335524199eb4e08fbbc026ea0be3a15edc13b6a060919c40ccbacf31d",
+    "responsibility": "Pixel-level validation for transparent character animation sprites.",
+    "definitions": [
+      "InvalidCharacterSprite",
+      "SpriteFacts",
+      "MouthFacts",
+      "visible_art_bbox",
+      "validate_mouth_states",
+      "inspect_mouth_component",
+      "inspect_sprite_png"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/artifacts/media.py",
+    "sha256": "3e8a162fdeee01fed62d06521a24c6225e1ed27bc343ef855aa57457d052c4fa",
+    "responsibility": "Cheap file validation before deeper media QA becomes available.",
+    "definitions": [
+      "InvalidMedia",
+      "validate_media"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/artifacts/store.py",
+    "sha256": "f305c6b5448cb6c7bac1cfe63a4c0ec4780957135b227543fe621d95aeb184b6",
+    "responsibility": "Durable, immutable asset ingestion with explicit selection and recovery.",
+    "definitions": [
+      "_safe_segment",
+      "_now",
+      "InputDependency",
+      "ArtifactRecord",
+      "ValidationResult",
+      "AssetStore"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.media",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.review",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/benchmark/__init__.py",
+    "sha256": "4cbdf63f066958ac7048868022da323e6e1f4ef4cba061f38bb470a1aa909412",
+    "responsibility": "Executable, provider-neutral visual benchmark.",
+    "definitions": [],
+    "dependencies": [
+      "tovitunes.benchmark.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/benchmark/models.py",
+    "sha256": "99f648827ca2ad93c0cb5a0a63991d55715bb1e84708ffcfc1be2c2c4349a7c5",
+    "responsibility": "Typed benchmark inputs, canonical prompts, and human scorecards.",
+    "definitions": [
+      "BenchmarkCase",
+      "BenchmarkDefinition",
+      "Rubric",
+      "ReferenceImage",
+      "CanonicalImageSpec",
+      "Scores",
+      "Scorecard",
+      "ResolvedScore",
+      "load_benchmark",
+      "load_rubric",
+      "load_scorecard",
+      "load_references",
+      "build_spec",
+      "resolve_reviews"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_lock"
+    ]
+  },
+  {
+    "path": "src/tovitunes/benchmark/persistence.py",
+    "sha256": "19241c10e440880774d98c4b3a03cf995a353fe066424af4eec0da40360260fb",
+    "responsibility": "Durable request, output mapping, and human-review records.",
+    "definitions": [
+      "_now",
+      "BenchmarkStore"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/benchmark/providers.py",
+    "sha256": "1ed6aec237d8486b4bb8c26c09af265ca7cfcbfa3abba360bd42beb08f47efad",
+    "responsibility": "Narrow image-provider adapters with injectable, offline-testable transports.",
+    "definitions": [
+      "ProviderCapabilities",
+      "TranslatedRequest",
+      "ProviderResult",
+      "ProviderFailure",
+      "_sanitize_provider_text",
+      "_safe_identifier",
+      "_vertex_error_diagnostics",
+      "HttpResponse",
+      "Transport",
+      "UrllibTransport",
+      "ImageProvider",
+      "QwenComfyUIImageProvider",
+      "_api_failure",
+      "_load_reference_bytes",
+      "OpenAIImageProvider",
+      "_VertexBoundaryTransport",
+      "_vertex_credentials",
+      "GeminiImageProvider"
+    ],
+    "dependencies": [
+      "tovitunes.benchmark.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/benchmark/runner.py",
+    "sha256": "3abb354e545f3842684bc807218c0c50ca38db6e5ac51d61f8c3248f9e4700f4",
+    "responsibility": "Plan, execute, resume, review, and aggregate the visual benchmark.",
+    "definitions": [
+      "PlannedRequest",
+      "_request_fingerprint",
+      "plan_requests",
+      "BenchmarkRunner",
+      "blind_review_queue",
+      "aggregate",
+      "dump_json"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.media",
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.benchmark.persistence",
+      "tovitunes.benchmark.providers",
+      "tovitunes.domain.artifact"
+    ]
+  },
+  {
+    "path": "src/tovitunes/catalog.py",
+    "sha256": "7a1342e60ec57d0da3cb9079d580b7c993b222d36cf19ffe70a51c99e9ce019a",
+    "responsibility": "Load and pin the complete brand catalog from trusted versioned YAML.",
+    "definitions": [
+      "_within",
+      "_read_yaml",
+      "BrandCatalog",
+      "load_brand"
+    ],
+    "dependencies": [
+      "tovitunes.domain.brand",
+      "tovitunes.domain.character",
+      "tovitunes.domain.curriculum"
+    ]
+  },
+  {
+    "path": "src/tovitunes/cli.py",
+    "sha256": "7ced08512d91826f07af0cd0bbad34697425601adba09b568834e57e9583e989",
+    "responsibility": "Inspect planning state and perform offline character-pack intake.",
+    "definitions": [
+      "main"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_intake",
+      "tovitunes.artifacts.character_lock",
+      "tovitunes.artifacts.character_pack",
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.benchmark.persistence",
+      "tovitunes.benchmark.providers",
+      "tovitunes.benchmark.runner",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.creative.recovery",
+      "tovitunes.creative.service",
+      "tovitunes.creative.topic_memory",
+      "tovitunes.creative.visual_recovery",
+      "tovitunes.errors",
+      "tovitunes.execution",
+      "tovitunes.music.ace_step",
+      "tovitunes.music.analysis",
+      "tovitunes.music.analysis_runtime",
+      "tovitunes.music.benchmark",
+      "tovitunes.music.models",
+      "tovitunes.music.providers",
+      "tovitunes.music.timing_runtime",
+      "tovitunes.music.vertex_lyria",
+      "tovitunes.orchestrator",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.production",
+      "tovitunes.pipeline.targets",
+      "tovitunes.preflight",
+      "tovitunes.render.environment_recovery",
+      "tovitunes.render.environment_sets",
+      "tovitunes.render.image_recovery",
+      "tovitunes.render.lesson_objects"
+    ]
+  },
+  {
+    "path": "src/tovitunes/config.py",
+    "sha256": "21dc84346ff6692cacbfd0ff7f52b498781e37c9fe39e9ff46810bc0cfeb0409",
+    "responsibility": "Strict runtime configuration with paths relative to the config file.",
+    "definitions": [
+      "StrictConfigModel",
+      "OllamaCreativeConfig",
+      "TopicEmbeddingConfig",
+      "CreativeTopicsConfig",
+      "CreativeLLMConfig",
+      "EnvironmentGenerationConfig",
+      "_local_http_url",
+      "LessonObjectGenerationConfig",
+      "MusicGenerationConfig",
+      "YouTubeConfig",
+      "PublicationConfig",
+      "ProductionAutomationConfig",
+      "LocalServiceLaunchConfig",
+      "LocalServicesConfig",
+      "RuntimeConfig",
+      "load_config"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/continuation.py",
+    "sha256": "dc861ff81476b6fccd93001f7764904f1b6e8fda5ac9eb9889cb1ce61042478e",
+    "responsibility": "MPT-derived continuation planning; jobs, progress and stage events are never inputs.",
+    "definitions": [
+      "plan_continuation"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.creative.service",
+      "tovitunes.creative.visual_recovery",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.duration_source",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.pipeline.production",
+      "tovitunes.pipeline.targets",
+      "tovitunes.publication.models",
+      "tovitunes.publication.preflight",
+      "tovitunes.render.admission_v3",
+      "tovitunes.render.models",
+      "tovitunes.render.production",
+      "tovitunes.render.visual_evidence"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/__init__.py",
+    "sha256": "d4ce8b6e4fd4911786b29db658c407576f75c0523b250cf92190e627e36f61c2",
+    "responsibility": "Curriculum-constrained creative generation; no music, rendering or upload calls.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/creative/director.py",
+    "sha256": "355b5c4ad5636e846db33c794e8f734319f87a2a251ac987b77fb63590915348",
+    "responsibility": "Provider-neutral director satisfying the existing DraftGenerator boundary.",
+    "definitions": [
+      "compiled_draft",
+      "pinned_facts",
+      "validate_pins",
+      "CreativeDirector"
+    ],
+    "dependencies": [
+      "tovitunes.catalog",
+      "tovitunes.creative",
+      "tovitunes.creative.learning",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.topic_memory",
+      "tovitunes.creative.validation",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.episode",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/factory.py",
+    "sha256": "d2a3edb1a0c3668bd793622b00f74453977df41b3c755963660cd749ab2d6e8b",
+    "responsibility": "Construct explicit donor-style model chain; Ollama is instantiated only when enabled.",
+    "definitions": [
+      "creative_generator"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.nvidia",
+      "tovitunes.creative.ollama",
+      "tovitunes.creative.resilience",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/failures.py",
+    "sha256": "3f285eab9bd4844f411bb4739fd8298a1a47db8edf5e6674395824f676a09c14",
+    "responsibility": "One donor-derived disposition model owns creative failover policy.",
+    "definitions": [
+      "FailureScope",
+      "FailureDecision",
+      "classify_creative_failure"
+    ],
+    "dependencies": [
+      "tovitunes.errors"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/fake.py",
+    "sha256": "bdca3cc25f7caf0360b68b3f28e72ec596e03647622f1d171a759f27bbc31d26",
+    "responsibility": "Fully offline NIM-contract fixture exercising the same durable structured path.",
+    "definitions": [
+      "FakeNIMTransport"
+    ],
+    "dependencies": [
+      "tovitunes.creative.learning",
+      "tovitunes.creative.models",
+      "tovitunes.creative.provider",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/learning.py",
+    "sha256": "24c1a6c812661394123e7fd4cc86e413e469dab447d7a2db3655390731dc2a06",
+    "responsibility": "Versioned broad learning policy and immutable selected educational facts.",
+    "definitions": [
+      "LearningPolicy",
+      "TopicCandidate",
+      "TopicPool",
+      "LearningBrief",
+      "subject_slug"
+    ],
+    "dependencies": [
+      "tovitunes.creative.provider",
+      "tovitunes.creative.similarity"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/metadata.py",
+    "sha256": "c8f20663e0d01423e0abbf63cf83a9cb8588697f35bcce33776a848a7ebe881a",
+    "responsibility": "Write publication metadata from selected final-render evidence; never upload.",
+    "definitions": [
+      "MetadataWriter"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.creative.director",
+      "tovitunes.creative.models",
+      "tovitunes.creative.prompts",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.resilience",
+      "tovitunes.creative.service",
+      "tovitunes.creative.topic_memory",
+      "tovitunes.creative.validation",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.review",
+      "tovitunes.domain.storyboard",
+      "tovitunes.render.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/models.py",
+    "sha256": "8f5a9bcb68b70d212c3824f8a0e485c3aeba2bfb2a7f4bdbf7be33c48a0a72b0",
+    "responsibility": "Small subject and publication contracts, separate from authoritative creative specs.",
+    "definitions": [
+      "CreativeSubjectCandidate",
+      "CreativeSubjectPool",
+      "EpisodePublicationMetadata"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/creative/nvidia.py",
+    "sha256": "ff27f6fceb46f7a9d86ed6fd133beab0533700a1e311c160d866780bdcc77ea8",
+    "responsibility": "First-party donor NIM transport adapted with typed, secret-safe failures.",
+    "definitions": [
+      "_retry_after_seconds",
+      "NvidiaNIMClient"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.provider",
+      "tovitunes.errors"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/ollama.py",
+    "sha256": "08b7ccc039dfc82e33d84beea64b48ffdf360fd6ca921ea8677dbeba4637beb3",
+    "responsibility": "Optional local emergency inference, using the same durable structured contracts.",
+    "definitions": [
+      "OllamaClient"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.provider",
+      "tovitunes.errors"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/prompts.py",
+    "sha256": "8f1d0a8035188cdc678ed1d0f61f08049ae0fe8b1fea8890c17bc17699dc8a78",
+    "responsibility": "Pure, versioned ToviTunes prompts. Donor editorial prompts are intentionally excluded.",
+    "definitions": [
+      "safe_draft",
+      "freedom_messages",
+      "build_messages",
+      "subject_messages",
+      "topic_messages",
+      "episode_messages",
+      "lyrics_messages",
+      "music_messages",
+      "metadata_messages",
+      "metadata_copy_messages"
+    ],
+    "dependencies": [
+      "tovitunes.creative.provider",
+      "tovitunes.creative.validation"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/provider.py",
+    "sha256": "edd2cbe010b2be4df44fe47bae935704761be469afb255ba391bba98a7a6f2a5",
+    "responsibility": "Donor-adapted structured contract with durable, visible repair requests.",
+    "definitions": [
+      "canonical",
+      "fingerprint",
+      "structured_json_instruction",
+      "GenerationContext",
+      "ChatResponse",
+      "http_failure",
+      "stored_failure",
+      "RequestAudit",
+      "ChatTransport",
+      "StructuredGenerator",
+      "DurableStructuredGenerator"
+    ],
+    "dependencies": [
+      "tovitunes.creative.failures",
+      "tovitunes.errors",
+      "tovitunes.persistence.db",
+      "tovitunes.persistence.requests",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/recovery.py",
+    "sha256": "1780a179243cc9eac205ea99108c16f352c1abb2bd6ea801e44f37f9dd91c660",
+    "responsibility": "Historical request audit projection; no production recovery effects.",
+    "definitions": [
+      "request_status"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.failures",
+      "tovitunes.creative.provider",
+      "tovitunes.errors",
+      "tovitunes.persistence.creative_reconciliation",
+      "tovitunes.persistence.db",
+      "tovitunes.persistence.requests"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/resilience.py",
+    "sha256": "4ca5e9c78309b7f08dbc5bf036476572f2583ee10aa1a5432d822929caf24036",
+    "responsibility": "Donor retries and ordered/sticky fallback around authoritative durable receipts.",
+    "definitions": [
+      "ResilientStructuredGenerator",
+      "generation_audit"
+    ],
+    "dependencies": [
+      "tovitunes.creative.failures",
+      "tovitunes.creative.provider",
+      "tovitunes.errors",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/service.py",
+    "sha256": "1aa0c3b4a27fa14298c1db1480c29581599fcf516b492a2ba347c4b427b0ca52",
+    "responsibility": "A bounded durable planning run and resumable creative-only production path.",
+    "definitions": [
+      "committed_curriculum_digest",
+      "episode_by_key",
+      "eligibility",
+      "call_snapshot",
+      "call_report",
+      "CreativeService"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.creative.director",
+      "tovitunes.creative.learning",
+      "tovitunes.creative.models",
+      "tovitunes.creative.prompts",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.resilience",
+      "tovitunes.creative.topic_memory",
+      "tovitunes.creative.topics",
+      "tovitunes.creative.validation",
+      "tovitunes.domain.episode",
+      "tovitunes.errors",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/similarity.py",
+    "sha256": "050f059d6d77f33b287ecbe8fb92208b2b755195359676d264f9177d360c1285",
+    "responsibility": "First-party donor normalization and lexical similarity; embeddings deliberately excluded.",
+    "definitions": [
+      "normalize_topic",
+      "lexical_similarity",
+      "cosine_similarity"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/creative/topic_memory.py",
+    "sha256": "fd13075d709d6ef5850b9e1e5d24eabd2f12bb0476038cc56eb1d53e5d5ba034",
+    "responsibility": "Editorial projections and reservations in the existing ToviTunes Database.",
+    "definitions": [
+      "DuplicateSelection",
+      "concept_signature",
+      "educational_identity",
+      "validate_candidate",
+      "duplicate_reason",
+      "TopicMemory",
+      "compact_history"
+    ],
+    "dependencies": [
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.creative.learning",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.similarity",
+      "tovitunes.creative.validation",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/topics.py",
+    "sha256": "05e3edf933d4c0085d075477d1814190bfaa37850d3efa0596b5c73f34c0db23",
+    "responsibility": "Bounded editorial pools; downstream production belongs to the application orchestrator.",
+    "definitions": [
+      "EmbeddingProvider",
+      "OllamaTopicEmbedding",
+      "TopicPlanner"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.learning",
+      "tovitunes.creative.prompts",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.topic_memory"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/validation.py",
+    "sha256": "12c7444f44cf9069da25018cf24d16a97d1d3869d3145d941b3c1560419d3bfd",
+    "responsibility": "Conservative V1 structural and lexical checks; not a semantic safety certification.",
+    "definitions": [
+      "contains",
+      "safe_text",
+      "safe_creative_text",
+      "treatment",
+      "treatment_signature",
+      "validate_subject",
+      "validate_episode_spec",
+      "validate_lyrics",
+      "validate_music",
+      "validate_metadata"
+    ],
+    "dependencies": [
+      "tovitunes.creative.models",
+      "tovitunes.creative.similarity",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode"
+    ]
+  },
+  {
+    "path": "src/tovitunes/creative/visual_recovery.py",
+    "sha256": "7a983542bcdbf56ce750719eec1917bff2ffa209af744b494b9c0698ccbcd5dc",
+    "responsibility": "Explicit local authorization; old requests are never reset or resent.",
+    "definitions": [
+      "recovery_evidence",
+      "recovery_state",
+      "authorize_visual_recovery"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.creative.provider",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.execution",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.duration_source",
+      "tovitunes.pipeline.music_adapter"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/__init__.py",
+    "sha256": "2b3a87f43f677fe43ce3d4b133e7a8d932e3367a5e4a5ee72aca81493dd020c7",
+    "responsibility": "Typed, versioned ToviTunes domain contracts.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/artifact.py",
+    "sha256": "8cc4e6dec73306f2cadf6c5634735dad261f63719c97308e42c503a58e9807ac",
+    "responsibility": "Artifact identity and provenance without premature file registration.",
+    "definitions": [
+      "ArtifactIdentity",
+      "ArtifactSelection",
+      "ArtifactDependency",
+      "Provenance"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/brand.py",
+    "sha256": "f7bbba6bbb81a7f74435564321e5a292ae151d77d020eae80cee8040067d3c1d",
+    "responsibility": "Versioned brand and policy definitions.",
+    "definitions": [
+      "BrandDefinition",
+      "CreativeBible",
+      "SafetyPolicy",
+      "BrandVersion"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/character.py",
+    "sha256": "8abd1d4d7d2265993d90f7fbb82dde23d149738275f349335c146b0ea4b9bbb3",
+    "responsibility": "Independently versioned character pack metadata.",
+    "definitions": [
+      "CharacterDefinition",
+      "CharacterAssetPack",
+      "CharacterPackRevision"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/creative.py",
+    "sha256": "dc7d2b8541b808286a5ef17dbe269b8e11cd89cfd3226c6ccc4b281c74419abd",
+    "responsibility": "Typed pre-music creative contracts; no timed storyboard is inferred here.",
+    "definitions": [
+      "EpisodeConcept",
+      "StoryBeat",
+      "EpisodeSpec",
+      "LyricLine",
+      "LyricsSpec",
+      "MusicSection",
+      "MusicSpec"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/creative_drafts.py",
+    "sha256": "b4a89327ed97f6fe4e4c0be95e8e16b3c8f9e510427fcb9ea449897e3ced6d4f",
+    "responsibility": "New creative contracts. Historical domain.creative schemas remain unchanged.",
+    "definitions": [
+      "CreativeDraftModel",
+      "EpisodeIdeaDraft",
+      "LyricsDraft",
+      "MusicDraft",
+      "MetadataDraft",
+      "EpisodeSpecV3",
+      "LyricsSpecV2",
+      "MusicSpecV2",
+      "parse_episode_spec",
+      "parse_lyrics",
+      "parse_music_spec"
+    ],
+    "dependencies": [
+      "tovitunes.domain.creative",
+      "tovitunes.domain.storyboard"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/curriculum.py",
+    "sha256": "36c974ebda022cf8dabba0bcfb72b75a042a7badf8466b8556aabc3d0bbf10e2",
+    "responsibility": "Learning objectives are stable curriculum data, not generated prose.",
+    "definitions": [
+      "CurriculumConcept",
+      "Curriculum",
+      "CurriculumRevision"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/episode.py",
+    "sha256": "2aad5b1c95ece6f22eed1e154c987c8f954a7cde7a59bbfc9f102c605b94b7d4",
+    "responsibility": "Episode identity is pinned before any expensive generation.",
+    "definitions": [
+      "PinnedCharacterPack",
+      "Episode"
+    ],
+    "dependencies": [
+      "tovitunes.catalog",
+      "tovitunes.creative.learning",
+      "tovitunes.domain.creative"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/production_v3.py",
+    "sha256": "8e0a55b52d33a5e433971d090b6a259533b5bdb3e35fae5cfe8eade4f899de4a",
+    "responsibility": "Duration authority and frame-based visuals, independent of lyric timing evidence.",
+    "definitions": [
+      "AudioClock",
+      "VisualTimedScene",
+      "TimedStoryboardV3",
+      "compile_storyboard_v3"
+    ],
+    "dependencies": [
+      "tovitunes.domain.episode",
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.music.analysis_models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/review.py",
+    "sha256": "987a5654bf03498c31cb16535e06f51f68a6542d732669bd3f00bf8de8feae14",
+    "responsibility": "Rights and approvals are independent append-only decisions.",
+    "definitions": [
+      "RightsDecision",
+      "ApprovalDecision"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/domain/storyboard.py",
+    "sha256": "abb6923c7a8a8c89be80ff4493e4075cb255e6fb449582172b84e479e823a830",
+    "responsibility": "Small renderer-facing contracts built from admitted production evidence.",
+    "definitions": [
+      "ProductionModel",
+      "Interval",
+      "TimedText",
+      "AudioAlignment",
+      "BeatAnalysis",
+      "SceneIntent",
+      "LyricIntent",
+      "StoryboardTemplate",
+      "TimedScene",
+      "TimedStoryboard",
+      "beat_range",
+      "build_storyboard",
+      "TimedStoryboardV2",
+      "parse_storyboard"
+    ],
+    "dependencies": [
+      "tovitunes.domain.episode",
+      "tovitunes.domain.production_v3",
+      "tovitunes.music.analysis"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/visual_draft.py",
+    "sha256": "b971fab76b2d4e9a74194923f0b5c497223d6b360addf14072dcb204094c8b3d",
+    "responsibility": "Small model proposal and deterministic V2 visual compiler; no lyric matching.",
+    "definitions": [
+      "CreativeObject",
+      "CreativeScene",
+      "CreativeVisualDraft",
+      "VisualSceneV2",
+      "EpisodeVisualPlanV2",
+      "action_for",
+      "compile_visual_draft",
+      "parse_visual_plan",
+      "validate_compiled_visual"
+    ],
+    "dependencies": [
+      "tovitunes.creative.validation",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_plan"
+    ]
+  },
+  {
+    "path": "src/tovitunes/domain/visual_plan.py",
+    "sha256": "9debc7bef4eff9bc576eadf02e45a369675a98bf535b88764de0161c106b6378",
+    "responsibility": "Additive, episode-scoped creative visuals; asset keys are data, never a registry.",
+    "definitions": [
+      "VisualRequirement",
+      "VisualLine",
+      "EnvironmentRequirement",
+      "EpisodeVisualPlan",
+      "validate_visual_plan"
+    ],
+    "dependencies": [
+      "tovitunes.creative.validation",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.storyboard"
+    ]
+  },
+  {
+    "path": "src/tovitunes/errors.py",
+    "sha256": "b19499c0238876be8acfbca88bed6f442d9e83504f318ffb0a2d45578cd5c6c2",
+    "responsibility": "Typed application errors used at external and orchestration boundaries.",
+    "definitions": [
+      "PipelineError",
+      "ConfigurationError",
+      "StateError",
+      "ExecutionOwnershipError",
+      "ExecutionOwnershipConflictError",
+      "ExecutionOwnershipLostError",
+      "ProductionStop",
+      "LLMError",
+      "FailureCategory",
+      "ProviderError",
+      "StructuredOutputError",
+      "CreativeAmbiguity",
+      "CreativeChainExhausted",
+      "YouTubeError",
+      "UploadAmbiguous",
+      "UploadRejected",
+      "ChannelMismatch"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/execution.py",
+    "sha256": "632a16b2f9feec16d251bb97009cc32a46855208a209f88c2649867750c04e7a",
+    "responsibility": "Cross-process production execution ownership and heartbeat management.",
+    "definitions": [
+      "ProductionExecutionLease",
+      "ProductionExecutionLeaseStore",
+      "ProductionExecutionOwnership"
+    ],
+    "dependencies": [
+      "tovitunes.errors"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/__init__.py",
+    "sha256": "c72ee78137ab198a0d5d6e0d3b534520253db16f637dc9589baf3f99235605ac",
+    "responsibility": "Provider-neutral music benchmark foundation.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/music/ace_step.py",
+    "sha256": "4d1c8bba12eb45b5d72f6ef714a2bbc172c50cd183bf68cbf8c645bb9e6f7c92",
+    "responsibility": "ACE-Step 1.5 local REST adapter; no ACE-Step package or model dependency.",
+    "definitions": [
+      "AceStepLocalProvider"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.music.audio",
+      "tovitunes.music.models",
+      "tovitunes.music.providers"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/analysis.py",
+    "sha256": "eb5d2714b4b79f1872d8a9fa5a238b3251c18568ec6a7ce1c54a546a18b02dfb",
+    "responsibility": "Offline measurements; provider text and generation prompts are never observations.",
+    "definitions": [
+      "AnalysisConfig",
+      "configuration_sha",
+      "analyzer_configuration",
+      "normalized_words",
+      "compare_lyrics",
+      "technical_measurements",
+      "_provenance",
+      "_version",
+      "_aligned_words",
+      "_prepare_alignment_resources",
+      "_asr_revision",
+      "_alignment_revision",
+      "transcribe_and_align",
+      "_canonical_production_alignment",
+      "_transcribe_and_align_impl",
+      "timing_admission_evidence",
+      "build_timing",
+      "analyze_audio"
+    ],
+    "dependencies": [
+      "tovitunes.music.analysis_models",
+      "tovitunes.music.analysis_runtime",
+      "tovitunes.music.audio",
+      "tovitunes.music.models",
+      "tovitunes.music.timing_runtime"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/analysis_models.py",
+    "sha256": "1f3c005548afe4553700419345b1bd30f1f945469d402a08256a12b90110dce2",
+    "responsibility": "Versioned, SHA-bound observations from local music analysis.",
+    "definitions": [
+      "AnalysisModel",
+      "AnalyzerProvenance",
+      "AnalysisThresholds",
+      "TechnicalMetrics",
+      "RecognizedWord",
+      "TranscriptionEvidence",
+      "EditOperation",
+      "LyricComparison",
+      "RhythmEvidence",
+      "AlignmentEvidence",
+      "AudioAnalysis"
+    ],
+    "dependencies": [
+      "tovitunes.music.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/analysis_runtime.py",
+    "sha256": "31d056184401929810c44ddfe0870fcfc66dab1d6f335ff5932ca1224bf331b2",
+    "responsibility": "Operator-owned analysis assets and cache-only runtime checks; no persistence/providers.",
+    "definitions": [
+      "RuntimeFailure",
+      "diagnostic",
+      "package_versions",
+      "ffmpeg_status",
+      "_files_present",
+      "asr_files",
+      "asr_snapshot",
+      "tokenizer_ready",
+      "vad_asset",
+      "cache_status",
+      "require_cache",
+      "model_environment",
+      "tokenizer_environment",
+      "prepare_tokenizer",
+      "runtime_doctor",
+      "_hash_file",
+      "prepare_models"
+    ],
+    "dependencies": [
+      "tovitunes.music.timing_runtime"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/audio.py",
+    "sha256": "399f3246d2402b6d0c1e82cbb9974b74eb589208acf7032a30298a87ea3c7165",
+    "responsibility": "Inspect original audio bytes without replacing or transcoding them.",
+    "definitions": [
+      "AudioInfo",
+      "_inspect_wav",
+      "inspect_audio"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/music/benchmark.py",
+    "sha256": "f3ad4f30ada8720a0e2d7edda1e265939ee352989c5d2f6eee81c9ccb08ae1ea",
+    "responsibility": "Offline planning and durable, fail-closed music execution.",
+    "definitions": [
+      "_WavRecovery",
+      "now",
+      "lyric_hash",
+      "json_hash",
+      "PlannedMusicRequest",
+      "plan",
+      "inspect_wav_metadata",
+      "inspect_wav",
+      "MusicBenchmark"
+    ],
+    "dependencies": [
+      "tovitunes.errors",
+      "tovitunes.music.ace_step",
+      "tovitunes.music.analysis",
+      "tovitunes.music.analysis_models",
+      "tovitunes.music.audio",
+      "tovitunes.music.models",
+      "tovitunes.music.providers",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/models.py",
+    "sha256": "00c5014c9d338690f749955419d3b294c3186bda55b6018c83d59d057266a142",
+    "responsibility": "Canonical song inputs, review rubric and editable timing artifact.",
+    "definitions": [
+      "StrictModel",
+      "MusicBrief",
+      "LyricLine",
+      "LyricCandidate",
+      "CanonicalMusicSpec",
+      "fingerprint",
+      "MusicRubric",
+      "MusicReview",
+      "TimeRange",
+      "TimedText",
+      "TimingAnalysis",
+      "load_brief",
+      "load_lyrics",
+      "load_rubric"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/music/providers.py",
+    "sha256": "1d39911122777649a0bf5dc6e0b0a81fafa114571f3266003d5bcb15018d13a9",
+    "responsibility": "Music provider contract and deterministic offline test adapter.",
+    "definitions": [
+      "MusicCapabilities",
+      "MusicResult",
+      "MusicFailure",
+      "MusicTaskPending",
+      "MusicProvider",
+      "FakeMusicProvider"
+    ],
+    "dependencies": [
+      "tovitunes.music.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/timing_runtime.py",
+    "sha256": "3ca8decdcfd13ab589d1761dcbcb94fb074a02efd1a5ac5de13ed3756ebce5bb",
+    "responsibility": "Optional Beat This 1.1.0 adapter and explicitly provisioned local final0 asset.",
+    "definitions": [
+      "installed_version",
+      "checkpoint_path",
+      "_inventory",
+      "require_checkpoint",
+      "_load_detector",
+      "_download",
+      "prepare_timing",
+      "timing_doctor",
+      "_pcm_signal",
+      "measured_rhythm",
+      "analyze_rhythm"
+    ],
+    "dependencies": [
+      "tovitunes.music.analysis_models",
+      "tovitunes.music.analysis_runtime"
+    ]
+  },
+  {
+    "path": "src/tovitunes/music/vertex_lyria.py",
+    "sha256": "b2c619067ca5a4d529671ea2f202a7c2f88c39b10911e54ce814e55b463f6714",
+    "responsibility": "Vertex AI Interactions adapter for Lyria 3 Pro Preview.",
+    "definitions": [
+      "TimedLyric",
+      "LyricsTimeline",
+      "_timestamp",
+      "_default_credentials",
+      "VertexLyriaProvider"
+    ],
+    "dependencies": [
+      "tovitunes.music.models",
+      "tovitunes.music.providers"
+    ]
+  },
+  {
+    "path": "src/tovitunes/orchestrator.py",
+    "sha256": "d645a7ee77268d6c33c1b3dde1acd170e0ce94b2da841f50d34c2a2cff29120f",
+    "responsibility": "Canonical MPT application lifecycle specialized for ToviTunes domain stages.",
+    "definitions": [
+      "ProductionReference",
+      "Orchestrator",
+      "build_orchestrator"
+    ],
+    "dependencies": [
+      "tovitunes.benchmark.providers",
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.creative.director",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.service",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.errors",
+      "tovitunes.execution",
+      "tovitunes.music.providers",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.targets",
+      "tovitunes.progress",
+      "tovitunes.publication.service",
+      "tovitunes.render.episode_assets",
+      "tovitunes.render.models",
+      "tovitunes.render.production",
+      "tovitunes.run_history",
+      "tovitunes.services.context",
+      "tovitunes.services.music",
+      "tovitunes.services.render",
+      "tovitunes.services.visual"
+    ]
+  },
+  {
+    "path": "src/tovitunes/persistence/__init__.py",
+    "sha256": "e9c368bb146d94eb59caf3dee5789d41391fb19f9079e48fde4e41d6e6464524",
+    "responsibility": "SQLite persistence and migrations.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/persistence/creative_reconciliation.py",
+    "sha256": "f3e1785e60fed0840d03a4b16da6e84ab5dcb106466377019e9a3d948b1ead2f",
+    "responsibility": "Read-only access to immutable historical PR40 operator evidence.",
+    "definitions": [
+      "CreativeReconciliations"
+    ],
+    "dependencies": [
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/persistence/db.py",
+    "sha256": "c305dcd32fd9d7e303417d5a9885ba58e047a119f3a372b37f2c098fe044b9a8",
+    "responsibility": "Small transactional SQLite store for pinned episode identity.",
+    "definitions": [
+      "_sql_statements",
+      "Database"
+    ],
+    "dependencies": [
+      "tovitunes.catalog",
+      "tovitunes.creative.director",
+      "tovitunes.domain.episode",
+      "tovitunes.errors",
+      "tovitunes.execution"
+    ]
+  },
+  {
+    "path": "src/tovitunes/persistence/leases.py",
+    "sha256": "8ba8cfc9c7b812f95af4677559e7e460bad6119f651a9aa1f7564d0152083b11",
+    "responsibility": "Per-resource SQLite leases with owner-token fencing.",
+    "definitions": [
+      "Lease",
+      "LeaseHeld",
+      "LeaseLost",
+      "LeaseStore"
+    ],
+    "dependencies": [
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/persistence/migrations/__init__.py",
+    "sha256": "8a5e60022f5028ff871c7f1a463f89e84c3271d3f460e6325927e82fc80dd7fb",
+    "responsibility": "Numbered, checksum-verified SQLite migrations.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/persistence/requests.py",
+    "sha256": "848d051aba4ea254d263d210a5526380ec757fd3c19d5f642042b000d4bea826",
+    "responsibility": "Durable identity for expensive generation requests and ambiguous outcomes.",
+    "definitions": [
+      "GenerationRequest",
+      "InvalidRequestTransition",
+      "RequestLedger",
+      "CreativeRequestLedger"
+    ],
+    "dependencies": [
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/pipeline/__init__.py",
+    "sha256": "37283210f8c6d0da8bdfb0029ad311f32d7edf114ce539292c9aadf9b03960ad",
+    "responsibility": "Requirement graph and side-effect-free continuation planning.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/pipeline/creative.py",
+    "sha256": "52bd1880336ef0b360986628bb18ef1fa8e50da79ef3e721343652b226b182a3",
+    "responsibility": "Review-gated creative drafts through a replaceable typed generator boundary.",
+    "definitions": [
+      "GeneratedDraft",
+      "DraftGenerator",
+      "FakeDraftGenerator",
+      "CreativeDraftService"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.creative.director",
+      "tovitunes.creative.topic_memory",
+      "tovitunes.creative.validation",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.review"
+    ]
+  },
+  {
+    "path": "src/tovitunes/pipeline/duration_source.py",
+    "sha256": "658828020d22928692efd9c0bef9f81767e5ce66e5c3ebc16895ff2d447d7523",
+    "responsibility": "Strict original-music admission for the duration-only local production path.",
+    "definitions": [
+      "uses_duration_path",
+      "admit_duration_source"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.music.analysis",
+      "tovitunes.music.analysis_models",
+      "tovitunes.music.audio",
+      "tovitunes.music.models",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/pipeline/music_adapter.py",
+    "sha256": "ff74b41944055fcd4f9b467c9111b1d290c8f8c30000ea9a2625079e1b04c61c",
+    "responsibility": "Lossless deterministic adapter from selected creative evidence to canonical music.",
+    "definitions": [
+      "creative_music_spec"
+    ],
+    "dependencies": [
+      "tovitunes.creative.validation",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.music.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/pipeline/production.py",
+    "sha256": "4174b56c183b0dce970ff62c45893307613784bbd5e9d5128bda673015e3ea70",
+    "responsibility": "Historical V1 evidence import and shared domain-evidence extraction.",
+    "definitions": [
+      "production_analysis_config",
+      "production_analysis_version",
+      "canonical_bytes",
+      "AcceptedSource",
+      "_source",
+      "accept_episode_source",
+      "_episode",
+      "extract_alignment",
+      "extract_beats",
+      "HandoffPlan",
+      "plan_handoff",
+      "ProductionHandoff"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.review",
+      "tovitunes.domain.storyboard",
+      "tovitunes.music.analysis",
+      "tovitunes.music.analysis_models",
+      "tovitunes.music.audio",
+      "tovitunes.music.models",
+      "tovitunes.persistence.db",
+      "tovitunes.persistence.leases"
+    ]
+  },
+  {
+    "path": "src/tovitunes/pipeline/targets.py",
+    "sha256": "a68ce82063a920f4c38b531bc5ba62def6c02532bf9b0ea0b48ada328f127db9",
+    "responsibility": "Stop boundaries and real milestones for the single production workflow.",
+    "definitions": [
+      "ProductionTarget",
+      "stages_for",
+      "steps_for"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/preflight.py",
+    "sha256": "bcdb1609dfcae0f57cd21b7589e5440a028ceb5ed29d58bacb43d46c504cdb14",
+    "responsibility": "Read-only production prerequisite inspection, without migration or generation.",
+    "definitions": [
+      "production_preflight"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.character_intake",
+      "tovitunes.artifacts.character_lock",
+      "tovitunes.artifacts.media",
+      "tovitunes.benchmark.providers",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.render.ffmpeg"
+    ]
+  },
+  {
+    "path": "src/tovitunes/progress.py",
+    "sha256": "71a672c1af631b9a710dc64e5e40262c7732e59d34b13e0d91658e47a8663cb4",
+    "responsibility": "MPT-derived observational milestones; reporting cannot affect production.",
+    "definitions": [
+      "PipelineProgress",
+      "report_progress"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/publication/__init__.py",
+    "sha256": "6680b1a2418da2f8dea57ecd77b2917e5cb39fba0e4a98404872860fd3473124",
+    "responsibility": "Durable release and YouTube publication services.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/publication/models.py",
+    "sha256": "5881a20ab729a3baf5df3009d5f892da18ec113d3c05d7d9adf6dd4f158bb065",
+    "responsibility": "MPT publication lifecycle mapped onto retained ToviTunes receipt storage.",
+    "definitions": [
+      "PublicationState",
+      "publication_state"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/publication/preflight.py",
+    "sha256": "450c1c88fbb9031c78d4172c3dd4fe3e1c2be23dccf7a36efc94f38b90f47d3f",
+    "responsibility": "Provider-free, read-only release gate over selected immutable evidence.",
+    "definitions": [
+      "Check",
+      "ReleasePreflight",
+      "_selected",
+      "_latest",
+      "evaluate_release"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.creative.models",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.persistence.db",
+      "tovitunes.publication.rights_policy",
+      "tovitunes.render.admission_v3",
+      "tovitunes.render.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/publication/rights.py",
+    "sha256": "bff2e24658012e71905657e6e4e3bc6f555c8826cfdef2eef55d7f787e3576af",
+    "responsibility": "Explicit append-only commercial rights closeout for a reviewed release graph.",
+    "definitions": [
+      "reviewed_graph_template",
+      "closeout_rights",
+      "main"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.domain.review",
+      "tovitunes.persistence.db",
+      "tovitunes.publication.preflight",
+      "tovitunes.publication.rights_policy"
+    ]
+  },
+  {
+    "path": "src/tovitunes/publication/rights_policy.py",
+    "sha256": "1e82bd57c95fbffb1fcfff49e7b7ab3020ba08560f76c6b15075871babfb3c49",
+    "responsibility": "Commercial-rights applicability and dependency inheritance policy.",
+    "definitions": [
+      "is_direct_rights_root",
+      "InheritedRights",
+      "evaluate_inherited_rights"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store"
+    ]
+  },
+  {
+    "path": "src/tovitunes/publication/service.py",
+    "sha256": "5199b0dc26f5bc21db7c704063d8fe66ffd37bc37de1a569683e5df56538335a",
+    "responsibility": "Lease-fenced publication attempts with durable remote-start evidence.",
+    "definitions": [
+      "_now",
+      "_row_dict",
+      "PublicationService"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.creative.models",
+      "tovitunes.errors",
+      "tovitunes.execution",
+      "tovitunes.persistence.db",
+      "tovitunes.publication.models",
+      "tovitunes.publication.preflight",
+      "tovitunes.youtube.client"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/__init__.py",
+    "sha256": "36c6681ae0632846175832a31e18e864652972aec68992f2f5967a0294198e56",
+    "responsibility": "Local, provider-free sprite rendering. MoviePy is optional.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/render/admission_v3.py",
+    "sha256": "706ef1f80676dfc45a16dc5b0e0ba841ff8dccdaffd342045384dff927d593ec",
+    "responsibility": "Renderer V3 storyboard admission verifies compilation, media and immutable receipts.",
+    "definitions": [
+      "load_v3_evidence"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.pipeline.duration_source",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.render.environment_recovery",
+      "tovitunes.render.environment_sets",
+      "tovitunes.render.visual_evidence"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/character.py",
+    "sha256": "8c84cf33eb54fd3d94cba425547f648180de08fda29487eaa167259418e775c7",
+    "responsibility": "Approved pose mapping, uniform layout and measured-beat position functions.",
+    "definitions": [
+      "pose_keyframe",
+      "pose_position",
+      "attach_poses",
+      "animation_plan",
+      "position",
+      "_performance_position",
+      "_position",
+      "validate_layout"
+    ],
+    "dependencies": [
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.render.composition",
+      "tovitunes.render.layout",
+      "tovitunes.render.models",
+      "tovitunes.render.motion"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/composer.py",
+    "sha256": "8b0e080a273ee83c0815ececcf1a1c6db308395fe57cf41e574a3ba309ea7e72",
+    "responsibility": "Optional MoviePy composition in an isolated, deadline-bounded worker process.",
+    "definitions": [
+      "ball_position",
+      "prop_position",
+      "build_scene",
+      "build_dynamic_scene",
+      "encode_worker"
+    ],
+    "dependencies": [
+      "tovitunes.render.character",
+      "tovitunes.render.composition",
+      "tovitunes.render.environment",
+      "tovitunes.render.layout",
+      "tovitunes.render.models",
+      "tovitunes.render.motion",
+      "tovitunes.render.props"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/composition.py",
+    "sha256": "e94f11878e6fbbd7f476055374b3887fa38d24160d4277cf9cb94c70dc47ee1e",
+    "responsibility": "Deterministic staging policy; no curriculum, vocabulary or pixel coordinates.",
+    "definitions": [
+      "ActionMetadata",
+      "PropDefinition",
+      "CompositionRequest",
+      "PropPlacement",
+      "OutroPhase",
+      "SceneComposition",
+      "resolve_composition",
+      "validate_composition"
+    ],
+    "dependencies": [
+      "tovitunes.domain.storyboard",
+      "tovitunes.render.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/environment.py",
+    "sha256": "f857336137408accce7aa2463caf4337ef0175272df5ceb1c8461c7059007644",
+    "responsibility": "Reusable Pillow meadow assets, drawn once per scene rather than once per frame.",
+    "definitions": [
+      "background_plate",
+      "ambient_sprite",
+      "halo_sprite"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/render/environment_recovery.py",
+    "sha256": "4d69668bc9144303eb64c80723f64855a57a45fc9eddb1ad482eb0f12510b1bb",
+    "responsibility": "Explicit, provider-free admission of a returned environment source after local repair.",
+    "definitions": [
+      "reconciled_row",
+      "reconcile_environment_source"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.execution",
+      "tovitunes.persistence.db",
+      "tovitunes.render.environment_sets"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/environment_sets.py",
+    "sha256": "4764b0777f2436c32f384d8a23f37385ccb8036ba1faf7237588a3b5c69ed96e",
+    "responsibility": "Reviewed, immutable environment plates consumed without provider calls by render.",
+    "definitions": [
+      "EnvironmentPlate",
+      "EnvironmentSet",
+      "_now",
+      "_store",
+      "_configured_provider",
+      "_provider_settings",
+      "_supports_reference_images",
+      "_generation_fingerprint",
+      "_qwen_profile",
+      "_set_id",
+      "_request_fingerprint",
+      "_spec",
+      "plan",
+      "_validate_image",
+      "_response_metadata",
+      "_transition",
+      "generate_set",
+      "contact_sheet",
+      "export_contact_sheet",
+      "comparison_sheet",
+      "inspect_set",
+      "decide_set",
+      "select_set",
+      "selected_set"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.benchmark.providers",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.review",
+      "tovitunes.domain.storyboard",
+      "tovitunes.errors",
+      "tovitunes.persistence.db",
+      "tovitunes.render.environment_recovery"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/episode_assets.py",
+    "sha256": "d3940788911df46cd55d94c760de233353b4e6911cfdea4395ad787c1ff2ca3f",
+    "responsibility": "Plan-driven episode images using the existing Qwen adapter and normalization contract.",
+    "definitions": [
+      "swatch",
+      "image_spec",
+      "persist_file",
+      "ImageStageBlocked",
+      "generate_assets"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.benchmark.providers",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.errors",
+      "tovitunes.persistence.requests",
+      "tovitunes.render.image_recovery",
+      "tovitunes.render.lesson_objects",
+      "tovitunes.render.props"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/ffmpeg.py",
+    "sha256": "0b0828a779303ed7394ada4737a1d56d1c5237a197636437d460e44050996df6",
+    "responsibility": "Narrow donor-adapted discovery, bounded process execution and two-stage mux.",
+    "definitions": [
+      "resolve_binary",
+      "run_process",
+      "doctor",
+      "probe",
+      "mux_command"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/render/image_recovery.py",
+    "sha256": "13185295c9a305829d42f211e9ddfaac7987c5174a2b81bd0733f81ce46154d2",
+    "responsibility": "Explicit new image identities; native crashes require exceptional, retained evidence.",
+    "definitions": [
+      "authorize_image_retry",
+      "_retained_image_checks",
+      "recheck_native_image_successor",
+      "_native_crash_checks"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.execution",
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/layout.py",
+    "sha256": "42c6639ce8dadf144865af6eb42a11d8c2cbbd9f047d54e743b70b5520d5d920",
+    "responsibility": "Pure geometry helper for fitting a source video onto a canvas.\n\nComputes crop + resize boxes for ``cover`` (fill canvas, crop overflow)\nand ``contain`` (letterbox, no crop) modes. No MoviePy/ffmpeg dependency \u00e2\u20ac\u201d\npure arithmetic so it is trivially unit-testable.",
+    "definitions": [
+      "visible_alpha_bounds",
+      "LayoutBox",
+      "compute_fit_box"
+    ],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/render/lesson_objects.py",
+    "sha256": "7bbb7d7fb3170cd0a1c2950dfdec7cf6cd45d5b5d96cefcb7d1c4266a55c98ae",
+    "responsibility": "Reviewed lesson-object generation, normalization, resolution, and review export.",
+    "definitions": [
+      "ReviewedChoice",
+      "LessonObjectAsset",
+      "LessonObjectCandidate",
+      "_store",
+      "_provider",
+      "_spec",
+      "plan",
+      "_validate_transparent_source",
+      "_prepare_qwen_white_background",
+      "_png_bytes",
+      "_prepared_source",
+      "normalize",
+      "_pending",
+      "generate",
+      "_candidate_slot",
+      "_source_dimensions",
+      "_request_audit_entry",
+      "generate_candidates",
+      "_current_review_state",
+      "_checked_review_choice",
+      "_approve_visual_use",
+      "finalize_review",
+      "resolve_reviewed_assets",
+      "contact_sheet",
+      "asset_sha"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.models",
+      "tovitunes.benchmark.providers",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.review",
+      "tovitunes.domain.storyboard",
+      "tovitunes.persistence.db",
+      "tovitunes.render.composition",
+      "tovitunes.render.props"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/models.py",
+    "sha256": "c584393de8bd0b5604894270ababe2e823b9d2e94821460477f07da745c4fc07",
+    "responsibility": "Immutable data at the MoviePy adapter boundary.",
+    "definitions": [
+      "PoseKeyframe",
+      "CharacterAnimation",
+      "SceneRender",
+      "RenderManifest",
+      "RenderManifestV2",
+      "parse_manifest"
+    ],
+    "dependencies": [
+      "tovitunes.domain.storyboard",
+      "tovitunes.render"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/motion.py",
+    "sha256": "17a321be769821ab20e7ad3d24dbfeba77c8808343f440a069229daef643d59f",
+    "responsibility": "Compact deterministic motion grammar built only from admitted immutable evidence.\n\nCoordinates are normalized; event times are local except keyword word_start/end,\nwhich retain the exact admitted audio interval. No MoviePy objects enter this model.",
+    "definitions": [
+      "smooth",
+      "canonical_word",
+      "CameraTrack",
+      "camera_state",
+      "camera_box",
+      "PoseCue",
+      "MotionEvent",
+      "PropTrack",
+      "AmbientTrack",
+      "KeywordEmphasisEvent",
+      "ActivityEvent",
+      "SceneMotionPlan",
+      "_camera",
+      "plan_motion",
+      "prop_state",
+      "activity_diagnostics",
+      "validate_motion"
+    ],
+    "dependencies": [
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.render",
+      "tovitunes.render.character",
+      "tovitunes.render.composition",
+      "tovitunes.render.models",
+      "tovitunes.render.story"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/production.py",
+    "sha256": "117bbdf460d8d84bec50382d8915dc9bdc81484998185762637035456fb1c73b",
+    "responsibility": "One narrow production command, using selected immutable artifacts exclusively.",
+    "definitions": [
+      "timing_ids",
+      "canonical",
+      "RenderInputs",
+      "load_inputs",
+      "validate_manifest",
+      "ProductionRenderer"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.character",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.review",
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.persistence.db",
+      "tovitunes.render",
+      "tovitunes.render.admission_v3",
+      "tovitunes.render.character",
+      "tovitunes.render.composition",
+      "tovitunes.render.environment_sets",
+      "tovitunes.render.ffmpeg",
+      "tovitunes.render.layout",
+      "tovitunes.render.lesson_objects",
+      "tovitunes.render.models",
+      "tovitunes.render.motion",
+      "tovitunes.render.props",
+      "tovitunes.render.qa",
+      "tovitunes.render.story"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/props.py",
+    "sha256": "106e29eff652f880886a594460d6ec8f0f0f91e546fa68d6240772b2f1d5afd8",
+    "responsibility": "Shared supersampled preschool prop style and composition-driven scene artwork.",
+    "definitions": [
+      "dotted_circle_brushing",
+      "soft_shape",
+      "soft_shadow",
+      "sphere_shading",
+      "soft_highlight",
+      "leaf_shape",
+      "deterministic_swatch",
+      "_reviewed_asset",
+      "prop_image",
+      "scene_art",
+      "png_info",
+      "validate_props"
+    ],
+    "dependencies": [
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.render",
+      "tovitunes.render.composition",
+      "tovitunes.render.environment",
+      "tovitunes.render.models"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/qa.py",
+    "sha256": "8f96e438e3b10f8c9cafb7bdb4fe8c8f26d05eabb5cdc6483ed791bef87f412d",
+    "responsibility": "Fail-closed donor ffprobe QA, narrowed to the portrait pilot contract.",
+    "definitions": [
+      "check_probe",
+      "media_qa"
+    ],
+    "dependencies": [
+      "tovitunes.render.ffmpeg"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/story.py",
+    "sha256": "8d4380f442fc354f526d37af317570e2a1ba14fccd72d1997cca8f712c02ede1",
+    "responsibility": "Semantic visual events between composition and the existing motion grammar.",
+    "definitions": [
+      "StoryPhase",
+      "VisualStoryPlan",
+      "EpisodeVisualStoryPlan",
+      "_phases",
+      "plan_story",
+      "stage_composition",
+      "display_intent",
+      "stage_visual_quality",
+      "occupancy"
+    ],
+    "dependencies": [
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.render.composition"
+    ]
+  },
+  {
+    "path": "src/tovitunes/render/visual_evidence.py",
+    "sha256": "833f3f3740c125a0b4b717a684c1b5471331518479df54fd411be7a22152c595",
+    "responsibility": "Admission of immutable model evidence and compiled scene assets.",
+    "definitions": [
+      "validate_visual_receipt"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.domain.visual_draft"
+    ]
+  },
+  {
+    "path": "src/tovitunes/run_history.py",
+    "sha256": "192fb81e6ca2c4b8ec24d6e85ea501039bcba78ee1b77f3a10b8707862f4f8b8",
+    "responsibility": "MPT-derived best-effort diagnostics; never consulted by continuation.",
+    "definitions": [
+      "RunHistory"
+    ],
+    "dependencies": [
+      "tovitunes.persistence.db"
+    ]
+  },
+  {
+    "path": "src/tovitunes/services/__init__.py",
+    "sha256": "147382dac21e072fd94d4af7adc2dfd0ea598158c099e350d5d0ae67180cca63",
+    "responsibility": "ToviTunes domain services plugged into the canonical application orchestrator.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/services/context.py",
+    "sha256": "d214aa906ab0a66e5d883cf3c0f38671084874c5db3539663442eedad7748f18",
+    "responsibility": "Domain service dependencies. Storage helpers contain no continuation decisions.",
+    "definitions": [
+      "StageContext"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.benchmark.providers",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.creative.factory",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.service",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.domain.episode",
+      "tovitunes.execution",
+      "tovitunes.music.providers",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.render.episode_assets"
+    ]
+  },
+  {
+    "path": "src/tovitunes/services/music.py",
+    "sha256": "f98eb3c0fa248aaedb2cfeb12dfb3eea95d6842f50ef55eb9caf33782b11b983",
+    "responsibility": "ToviTunes music algorithms; application lifecycle belongs to Orchestrator.",
+    "definitions": [
+      "MusicService"
+    ],
+    "dependencies": [
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.errors",
+      "tovitunes.music.ace_step",
+      "tovitunes.music.benchmark",
+      "tovitunes.pipeline.duration_source",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.pipeline.production",
+      "tovitunes.render.episode_assets",
+      "tovitunes.services.context"
+    ]
+  },
+  {
+    "path": "src/tovitunes/services/render.py",
+    "sha256": "8cb8d8d5d8c8d3a4f1aa03a9326975b37d816c4a7e4ad67929af9a68eeea8221",
+    "responsibility": "ToviTunes render algorithms; application lifecycle belongs to Orchestrator.",
+    "definitions": [
+      "RenderService"
+    ],
+    "dependencies": [
+      "tovitunes.creative.metadata",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.storyboard",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.errors",
+      "tovitunes.pipeline.duration_source",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.pipeline.production",
+      "tovitunes.render.production",
+      "tovitunes.services.context"
+    ]
+  },
+  {
+    "path": "src/tovitunes/services/visual.py",
+    "sha256": "0ca464b84b326c100e0b42bc321528d6e5d3558c4f48382f3bd0f60d44f62c53",
+    "responsibility": "ToviTunes visual algorithms; application lifecycle belongs to Orchestrator.",
+    "definitions": [
+      "VisualService"
+    ],
+    "dependencies": [
+      "tovitunes.benchmark.providers",
+      "tovitunes.creative.director",
+      "tovitunes.creative.prompts",
+      "tovitunes.creative.provider",
+      "tovitunes.creative.visual_recovery",
+      "tovitunes.domain.artifact",
+      "tovitunes.domain.creative",
+      "tovitunes.domain.episode",
+      "tovitunes.domain.production_v3",
+      "tovitunes.domain.visual_draft",
+      "tovitunes.domain.visual_plan",
+      "tovitunes.errors",
+      "tovitunes.render.environment_sets",
+      "tovitunes.render.visual_evidence",
+      "tovitunes.services.context"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/__init__.py",
+    "sha256": "43c3c3bcad89d98d63e03b9e81f9ddc175a3ceada27d365a02883de507db04d7",
+    "responsibility": "Local operator dashboard for durable ToviTunes services.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/web/__main__.py",
+    "sha256": "dee3851293c416100f0a61f3dc0bd41bbb375dc066ff6e602fb4ef5502fc7ac9",
+    "responsibility": "Start the localhost operator dashboard.",
+    "definitions": [
+      "main"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.web.app"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/app.py",
+    "sha256": "2c05fe5e0c6a290da932dfbbd09fa8d41b266f99faf456d63fe103c95a881e95",
+    "responsibility": "FastAPI localhost control surface over ToviTunes services.",
+    "definitions": [
+      "PublicationAction",
+      "create_app"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.errors",
+      "tovitunes.orchestrator",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.targets",
+      "tovitunes.publication.preflight",
+      "tovitunes.web.diagnostics",
+      "tovitunes.web.jobs",
+      "tovitunes.web.services",
+      "tovitunes.web.studio",
+      "tovitunes.web.supervisor",
+      "tovitunes.youtube.client"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/diagnostics.py",
+    "sha256": "195a2d5f69c8a6105ea3169df8259d94594881d4f1c9f4ade2d6e6dbfd09a353",
+    "responsibility": "Read-only, typed creative diagnostics. Provider prose and receipts never cross the API.",
+    "definitions": [
+      "model_label",
+      "studio_job"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.creative.provider",
+      "tovitunes.errors",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.targets",
+      "tovitunes.web.jobs",
+      "tovitunes.web.studio"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/jobs.py",
+    "sha256": "93aea1d459abed2c3c6c41058bab28c9043772b902c4286570533981a0b5cd70",
+    "responsibility": "One in-process heavy worker; durable results live in production services.",
+    "definitions": [
+      "_now",
+      "Job",
+      "JobBusy",
+      "safe_error",
+      "JobManager"
+    ],
+    "dependencies": [
+      "tovitunes.errors",
+      "tovitunes.orchestrator",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.targets",
+      "tovitunes.progress"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/launcher.py",
+    "sha256": "38d312304e3488d4240e854f9ae97f25328d5faae35d0ecec51e4de4c90e1022",
+    "responsibility": "One-click entry point: claim the UI port, supervise local services, open Studio.",
+    "definitions": [
+      "resolve_config",
+      "open_when_ready",
+      "launch",
+      "main"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.web.app",
+      "tovitunes.web.supervisor"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/services.py",
+    "sha256": "034a74e2dd51d2ad9ecbba3ec88fb70af723396c6038026cc0ce5e7e342d8551",
+    "responsibility": "Read-only episode and system projections from authoritative persistence.",
+    "definitions": [
+      "_selected",
+      "episode_detail",
+      "episodes",
+      "system_status"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.catalog",
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.persistence.db",
+      "tovitunes.publication.preflight",
+      "tovitunes.publication.service"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/studio.py",
+    "sha256": "71cd0819c72832f80fe5602b3dcf499b384bb407fad1efe623248fb9ff757e06",
+    "responsibility": "Product actions, durable library and bounded operator recovery projections.",
+    "definitions": [
+      "CreateAction",
+      "ContinueAction",
+      "library",
+      "safe_production_result",
+      "studio_router"
+    ],
+    "dependencies": [
+      "tovitunes.artifacts.store",
+      "tovitunes.config",
+      "tovitunes.continuation",
+      "tovitunes.creative.learning",
+      "tovitunes.creative.service",
+      "tovitunes.domain.creative_drafts",
+      "tovitunes.errors",
+      "tovitunes.orchestrator",
+      "tovitunes.persistence.db",
+      "tovitunes.pipeline.music_adapter",
+      "tovitunes.pipeline.targets",
+      "tovitunes.publication.preflight",
+      "tovitunes.publication.service",
+      "tovitunes.web.diagnostics",
+      "tovitunes.web.jobs"
+    ]
+  },
+  {
+    "path": "src/tovitunes/web/supervisor.py",
+    "sha256": "2ae72f8b962ef630af6cb03a2103a6c8d036416748044c75fd16cfafa0a677fc",
+    "responsibility": "Small local process supervisor. Only processes created here are owned here.",
+    "definitions": [
+      "healthy",
+      "LocalServiceSupervisor"
+    ],
+    "dependencies": [
+      "tovitunes.config"
+    ]
+  },
+  {
+    "path": "src/tovitunes/youtube/__init__.py",
+    "sha256": "dda4d8713650fae9ac21381ac98b65553c20d4fb957f1b1af96f20777c428ccc",
+    "responsibility": "Official YouTube API adapter; imported lazily by the local operator app.",
+    "definitions": [],
+    "dependencies": []
+  },
+  {
+    "path": "src/tovitunes/youtube/client.py",
+    "sha256": "b218342701ca631a93b9b5b6e1b4a31fcb5e3da0a901bf3a1be09abbfce59122",
+    "responsibility": "Local OAuth and one-session resumable private YouTube upload.",
+    "definitions": [
+      "YouTubeClient"
+    ],
+    "dependencies": [
+      "tovitunes.config",
+      "tovitunes.creative.models",
+      "tovitunes.errors"
+    ]
+  }
+]

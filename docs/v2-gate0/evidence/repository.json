@@ -1,0 +1,271 @@
+{
+  "base_sha": "790da5502a966675b94a32838e303a97fb16503e",
+  "branch": "codex/v2-gate0-baseline",
+  "prs": [
+    {
+      "baseRefName": "main",
+      "headRefName": "refactor/creative-production-v3",
+      "headRefOid": "f78dcdf1ebb19865552748023b8c9a91bf4829ba",
+      "isDraft": true,
+      "number": 44,
+      "state": "OPEN",
+      "title": "Compile flexible creative drafts and verify complete local production",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/44"
+    },
+    {
+      "baseRefName": "refactor/creative-production-v3",
+      "headRefName": "codex/visual-quality-v1",
+      "headRefOid": "e68f696d03e68263dbe60a04c4f67d1031f3d408",
+      "isDraft": true,
+      "number": 45,
+      "state": "OPEN",
+      "title": "Polish approved-pose performance in opt-in visual previews",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/45"
+    },
+    {
+      "baseRefName": "refactor/creative-production-v3",
+      "headRefName": "codex/studio-reliability-v1",
+      "headRefOid": "9592ba1ee686f8a6a0ea5ac79684f5875291633c",
+      "isDraft": true,
+      "number": 46,
+      "state": "OPEN",
+      "title": "Studio Reliability V1: truthful readiness, retained progress and video review",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/46"
+    },
+    {
+      "baseRefName": "refactor/creative-production-v3",
+      "headRefName": "codex/production-integration-v1",
+      "headRefOid": "2ff081c03668aaba2d434546f97febd084dfb6c9",
+      "isDraft": true,
+      "number": 47,
+      "state": "OPEN",
+      "title": "Integrate production, Visual Quality r3 and Studio Reliability V1",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/47"
+    },
+    {
+      "baseRefName": "codex/production-integration-v1",
+      "headRefName": "codex/qwen-art-quality-v1",
+      "headRefOid": "6b2898a34be85555c996c08a690d47bfd833767b",
+      "isDraft": true,
+      "number": 48,
+      "state": "OPEN",
+      "title": "Repair Qwen world prompt conflicts and pale artwork extraction",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/48"
+    },
+    {
+      "baseRefName": "codex/qwen-art-quality-v1",
+      "headRefName": "fix/native-comfy-crash-recovery",
+      "headRefOid": "790da5502a966675b94a32838e303a97fb16503e",
+      "isDraft": true,
+      "number": 49,
+      "state": "OPEN",
+      "title": "Add evidenced native ComfyUI crash abandonment",
+      "url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/49"
+    }
+  ],
+  "ancestry": [
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 44,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 45,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 46,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 47,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 48,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 44,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 44,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 45,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 46,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 47,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 48,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 45,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 44,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 45,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 46,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 47,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 48,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 46,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 44,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 45,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 46,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 47,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 48,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 47,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 44,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 45,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 46,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 47,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 48,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 48,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 44,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 45,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 46,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 47,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 48,
+      "is_ancestor": false
+    },
+    {
+      "ancestor_pr": 49,
+      "descendant_pr": 49,
+      "is_ancestor": true
+    }
+  ],
+  "integration_merge_parents": {
+    "245a475": [
+      "f78dcdf1ebb19865552748023b8c9a91bf4829ba",
+      "e68f696d03e68263dbe60a04c4f67d1031f3d408"
+    ],
+    "501f407": [
+      "245a47508b607e1396943fb556783d83f78a79fb",
+      "9592ba1ee686f8a6a0ea5ac79684f5875291633c"
+    ]
+  },
+  "hashes": {
+    "pyproject.toml": "350083b8915f1724de0e8d09b3a89c62d2939f90b87a0ea34d225d380b36af8a",
+    "uv.lock": "f0cc2e6f93ddaf991c3a3615ce858455292455de4acab5a1c48ebc488ab2b70b",
+    "config.example.yaml": "1af47243f81f76f21f30495919b0267649b0f93d88c4a98f523e6e87bad4d4ba",
+    "workflows/qwen_image_2_1_t2i_api.json": "fafd7fbc8bc2488e57bfe1b0a7e3a313804acd2798eabc6625e10f7550c5fa9e",
+    "brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml": "1945ab690b5c9039ce1e9bc80cb9f5c3d4212d53494af0e2e553ac52571f4417",
+    "docs/v2-gate0/LOCKED_ROADMAP_V1.0.md": "7484d7769e34e20b5299e680e7fd6e0ab23bcb024e58f0eddfab883bb8066ebd"
+  },
+  "main": {
+    "sha": "e0c6cb989264ececf5dd52192ff84de08e08486d",
+    "is_ancestor_of_baseline": true,
+    "contains_baseline": false
+  }
+}

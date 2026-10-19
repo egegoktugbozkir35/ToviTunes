@@ -1,0 +1,116 @@
+[
+  {
+    "name": "dependencies",
+    "command": [
+      "uv",
+      "pip",
+      "freeze"
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:36:36.700395+00:00",
+    "seconds": 0.235,
+    "exit_code": 0,
+    "log_sha256": "84424693183ef87557d7cbc95b52033f482cb4a482b01d89c4d79c4e9364b7eb"
+  },
+  {
+    "name": "ruff",
+    "command": [
+      "uv",
+      "run",
+      "--locked",
+      "ruff",
+      "check",
+      "."
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:36:36.938396+00:00",
+    "seconds": 0.406,
+    "exit_code": 0,
+    "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+  },
+  {
+    "name": "mypy",
+    "command": [
+      "uv",
+      "run",
+      "--locked",
+      "mypy",
+      "src"
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:36:37.347970+00:00",
+    "seconds": 14.281,
+    "exit_code": 0,
+    "log_sha256": "7a657fb734f82b9f4569eccbf4a96baf5946830493bf79a3ea42219cd083a5df"
+  },
+  {
+    "name": "character-pack",
+    "command": [
+      "uv",
+      "run",
+      "--locked",
+      "python",
+      "-m",
+      "tovitunes.cli",
+      "--config",
+      "config.example.yaml",
+      "character-pack",
+      "validate-lock",
+      "--recipe",
+      "brands/tovitunes/characters/tovi/packs/v1/intake.yaml",
+      "--lock",
+      "brands/tovitunes/characters/tovi/packs/v1/artifact-lock.yaml"
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:36:51.622122+00:00",
+    "seconds": 3.703,
+    "exit_code": 0,
+    "log_sha256": "132fc536f0736e01bb3cf4222926cb1afc8c3a10382dd18a542507054616292b"
+  },
+  {
+    "name": "native-crash",
+    "command": [
+      "uv",
+      "run",
+      "--locked",
+      "pytest",
+      "-q",
+      "tests/test_creative_production_v3.py",
+      "-k",
+      "native_crash",
+      "-o",
+      "faulthandler_timeout=120",
+      "--basetemp",
+      "<GATE0_ROOT>\\work\\native-crash-test-data",
+      "--junitxml",
+      "<GATE0_ROOT>\\outputs\\validation\\native-crash.xml"
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:36:55.330081+00:00",
+    "seconds": 129.86,
+    "exit_code": 0,
+    "log_sha256": "430bf5c8eab54011e586a608a2014a02f815e9c97306c9a2d4c339dda87fbc59"
+  },
+  {
+    "name": "offline-suite",
+    "command": [
+      "uv",
+      "run",
+      "--locked",
+      "pytest",
+      "-q",
+      "-o",
+      "faulthandler_timeout=120",
+      "--basetemp",
+      "<GATE0_ROOT>\\work\\offline-test-data",
+      "--junitxml",
+      "<GATE0_ROOT>\\outputs\\validation\\offline-suite.xml",
+      "--durations=15"
+    ],
+    "cwd": "<GATE0_ROOT>/work/ToviTunes-v2-gate0",
+    "started_at_utc": "2026-10-19T08:39:05.180813+00:00",
+    "seconds": 1495.656,
+    "exit_code": 0,
+    "log_sha256": "34b935e8340d05bd38d25cf6373b6efddc3cb1a6046aa84a7bbf5d90c9770e86"
+  }
+]
