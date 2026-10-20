@@ -320,3 +320,155 @@ def test_historical_foreground_reuse_never_reinterprets_or_resends(
     assert request_after["input_fingerprint"] == request_before["input_fingerprint"]
     if not crash_before_normalization:
         assert receipt_before == receipt_after and request_before == request_after
+
+def test_scene_v2_prompt_identity_remains_frozen():
+    from tovitunes.render.environment_sets import LEGACY_EPISODE_PROMPT_VERSION
+
+    spec = _spec(
+        'meadow_wide', 'brand', 1, None, scene_brief='A cozy indoor playroom',
+        prompt_version=LEGACY_EPISODE_PROMPT_VERSION,
+    )
+    assert spec.fingerprint() == '70fdff48746ef3648e69fde33f76787dbdf9df20237b08e9f7f60c84f2ff8d33'
+
+
+def test_shared_art_direction_changes_environment_identity_without_resubmission(runtime, episode):
+    from tovitunes.render.lesson_objects import ART_DIRECTION_V1
+
+    provider = FakeProvider()
+    kwargs = dict(
+        confirmed=True, provider=provider, episode_id=episode.episode_id,
+        role_briefs=dict.fromkeys(ROLES, 'One quiet classroom'), assert_owner=lambda: None,
+        visual_direction='Soft watercolor texture with cool shadows.',
+    )
+    result = generate_set(runtime, **kwargs)
+    with closing(Database(runtime.database_path).connect()) as conn:
+        row = conn.execute('SELECT spec_json FROM environment_requests LIMIT 1').fetchone()
+    prompt = json.loads(row[0])
+    assert ART_DIRECTION_V1 in prompt['common_brief']
+    assert kwargs['visual_direction'] in prompt['common_brief']
+    assert generate_set(runtime, **kwargs)['manifest_artifact_id'] == result['manifest_artifact_id']
+    kwargs['visual_direction'] = 'Soft chalk texture.'
+    with pytest.raises(ValueError, match='explicit reconciliation'):
+        generate_set(runtime, **kwargs)
+    assert provider.calls == 4
+
+
+@pytest.mark.parametrize('shape', ['streak', 'square'])
+def test_extraction_v3_refuses_connected_specks_that_v2_mistakes_for_contours(shape):
+    from tovitunes.render.lesson_objects import WHITE_BACKGROUND_V3
+
+    source = Image.new('RGB', (128, 128), 'white')
+    draw = ImageDraw.Draw(source)
+    draw.ellipse((24, 24, 103, 80), fill='#dddddd')
+    draw.rectangle((60, 115, 61, 115 if shape == 'streak' else 116), fill='#dddddd')
+    old = extract(source, WHITE_BACKGROUND_V2)
+    assert old.getchannel('A').getbbox()[3] >= 116
+    with pytest.raises(ValueError, match='detached backdrop specks control trim'):
+        extract(source, WHITE_BACKGROUND_V3)
+
+
+def test_extraction_v3_keeps_pale_details_diagonal_tips_and_meaningful_detached_parts():
+    from tovitunes.render.lesson_objects import WHITE_BACKGROUND_V3
+
+    source = Image.new('RGB', (128, 128), 'white')
+    draw = ImageDraw.Draw(source)
+    draw.ellipse((24, 24, 103, 90), fill='white', outline='#f7f7f7', width=4)
+    # Deliberately detached, visible illustration detail; a multi-part subject is valid.
+    draw.ellipse((40, 100, 51, 111), fill='#eeeeee')
+    source.putpixel((64, 91), (247, 247, 247))
+    result = extract(source, WHITE_BACKGROUND_V3)
+    assert result.getpixel((64, 50)) == (255, 255, 255, 255)
+    assert result.getpixel((64, 91)) == (247, 247, 247, 255)
+    assert result.getpixel((45, 105)) == (238, 238, 238, 255)
+    assert result.tobytes() == extract(source, WHITE_BACKGROUND_V2).tobytes()
+
+
+def test_new_environment_contract_refuses_local_alpha_hole_hidden_by_frame_average():
+    from tovitunes.render.environment_sets import ENVIRONMENT_ALPHA_V2, _validate_image
+
+    source = Image.new('RGBA', (144, 256), '#a5def0')
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((0, 180, 143, 255), fill='#7ac977')
+    draw.rectangle((70, 100, 81, 111), fill=(255, 255, 255, 0))
+    # Historical average-opacity behavior is retained explicitly.
+    assert _validate_image(
+        png(source), source.size, allow_near_opaque_alpha=True,
+    ).size == (1080, 1920)
+    with pytest.raises(ValueError, match='local transparency'):
+        _validate_image(
+            png(source), source.size, allow_near_opaque_alpha=True,
+            normalization_version=ENVIRONMENT_ALPHA_V2,
+        )
+    draw.rectangle((70, 100, 81, 111), fill=(165, 222, 240, 245))
+    assert _validate_image(
+        png(source), source.size, allow_near_opaque_alpha=True,
+        normalization_version=ENVIRONMENT_ALPHA_V2,
+    ).size == (1080, 1920)
+
+
+@pytest.mark.parametrize('swap', ['owner', 'role', 'source'])
+def test_environment_admission_refuses_swapped_owner_role_or_raw_source(
+    runtime, episode, tmp_path, swap,
+):
+    from tovitunes.artifacts.store import InputDependency
+    from tovitunes.domain.artifact import Provenance
+    from tovitunes.render.visual_evidence import validate_environment_assets
+
+    generated = generate_set(
+        runtime, confirmed=True, provider=FakeProvider(), episode_id=episode.episode_id,
+        role_briefs=dict.fromkeys(ROLES, 'One indoor classroom'), assert_owner=lambda: None,
+    )
+    store = AssetStore(runtime.data_root, Database(runtime.database_path))
+    aid = generated['manifest_artifact_id']
+    environment = validate_environment_assets(store, aid, episode.episode_id, shared=False)
+    if swap == 'owner':
+        with pytest.raises(ValueError, match='different owner'):
+            validate_environment_assets(store, aid, 'another-episode', shared=False)
+        return
+    first, second = environment.plates[:2]
+    changes = (
+        {'artifact_id': second.artifact_id, 'sha256': second.sha256} if swap == 'role' else
+        {'source_artifact_id': second.source_artifact_id, 'source_sha256': second.source_sha256}
+    )
+    forged = environment.model_copy(update={
+        'plates': (first.model_copy(update=changes), *environment.plates[1:]),
+    })
+    path = tmp_path / 'forged.json'
+    path.write_text(forged.model_dump_json(), encoding='utf-8')
+    record = store.ingest(
+        path, owner_scope='episode', owner_id=episode.episode_id,
+        kind='environment_set', slot_key='main', provenance=Provenance.manual('test', 'test://forged'),
+        dependencies=[InputDependency(aid, 'environment_plate')
+                      for aid in dict.fromkeys(p.artifact_id for p in forged.plates)],
+    )
+    with pytest.raises(ValueError, match='mismatched'):
+        validate_environment_assets(
+            store, record.identity.artifact_id, episode.episode_id, shared=False,
+        )
+
+
+def test_extraction_v3_preserves_diagonal_one_pixel_tip():
+    from tovitunes.render.lesson_objects import WHITE_BACKGROUND_V3
+
+    source = Image.new('RGB', (128, 128), 'white')
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((24, 24, 90, 90), fill='#dddddd')
+    source.putpixel((91, 91), (221, 221, 221))
+    result = extract(source, WHITE_BACKGROUND_V3)
+    assert result.getchannel('A').getbbox() == (24, 24, 92, 92)
+    assert result.getpixel((91, 91)) == (221, 221, 221, 255)
+
+
+def test_environment_receipt_must_match_planned_setting(runtime, episode):
+    from tovitunes.render.visual_evidence import validate_environment_assets
+
+    generated = generate_set(
+        runtime, confirmed=True, provider=FakeProvider(), episode_id=episode.episode_id,
+        role_briefs=dict.fromkeys(ROLES, 'One indoor classroom'), assert_owner=lambda: None,
+    )
+    store = AssetStore(runtime.data_root, Database(runtime.database_path))
+    with pytest.raises(ValueError, match='original planned setting'):
+        validate_environment_assets(
+            store, generated['manifest_artifact_id'], episode.episode_id, shared=False,
+            role_briefs=dict.fromkeys(ROLES, 'An unrelated outdoor garden'),
+        )

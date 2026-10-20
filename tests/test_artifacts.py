@@ -232,3 +232,35 @@ def test_immutable_db_rows_and_blocked_rights(tmp_path: Path, catalog: BrandCata
     with pytest.raises(ValueError, match="blocked"):
         store.selected("episode", episode.episode_id, "image", "scene_1")
 
+
+
+def test_truncated_image_with_valid_signature_is_never_registered(tmp_path, catalog):
+    from PIL import Image
+
+    store, db, episode = _setup(tmp_path, catalog)
+    source = tmp_path / 'truncated.png'
+    Image.new('RGB', (128, 128), '#eeeeee').save(source)
+    original = source.read_bytes()[:48]
+    source.write_bytes(original)
+    with pytest.raises(InvalidMedia, match='fully decoded'):
+        store.ingest(
+            source, owner_scope='episode', owner_id=episode.episode_id,
+            kind='visual_asset_source', slot_key='cup',
+            provenance=Provenance.manual('test', 'test://truncated'),
+        )
+    assert source.read_bytes() == original
+    with db.connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM artifact_versions').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM artifact_selections').fetchone()[0] == 0
+
+
+def test_animated_image_cannot_be_admitted_as_static_art(tmp_path):
+    from PIL import Image
+
+    from tovitunes.artifacts.media import validate_media
+
+    path = tmp_path / 'animated.png'
+    frames = [Image.new('RGB', (16, 16), color) for color in ('red', 'blue')]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    with pytest.raises(InvalidMedia, match='animated image is unsupported'):
+        validate_media(path)

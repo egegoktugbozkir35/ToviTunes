@@ -267,6 +267,20 @@ def _validate_transparent_source(data: bytes, mime_type: str) -> Image.Image:
 
 WHITE_BACKGROUND_V1 = "qwen_white_exterior_v1"
 WHITE_BACKGROUND_V2 = "qwen_white_exterior_v2"
+WHITE_BACKGROUND_V3 = "qwen_white_exterior_v3"
+
+# Shared direction describes the visual language, never an episode location,
+# anatomy, subject inventory or camera layout. Frozen historical prompts do not
+# consume it. The episode foreground consumer awaits Gate 1's whole-file release.
+ART_DIRECTION_V1 = (
+    "Preschool 2D illustration: rounded forms, soft tonal contours, gentle "
+    "dimensional shading, warm even light and a bright controlled palette."
+)
+
+
+def art_direction(direction: str = "") -> str:
+    return ART_DIRECTION_V1 + (" Episode art direction: " + direction.strip() if direction.strip()
+                               else "")
 
 
 def _prepare_qwen_white_background(
@@ -274,11 +288,11 @@ def _prepare_qwen_white_background(
 ) -> Image.Image:
     """Key the exterior only; V1 remains the historical normalization contract.
 
-    V2 matches the measured border color range instead of
+    V2/V3 match the measured border color range instead of
     treating the whole 240..255 range as background. No dilation, filling or blur.
     A white subject indistinguishable from its backdrop cannot be recovered here.
     """
-    if version not in {WHITE_BACKGROUND_V1, WHITE_BACKGROUND_V2}:
+    if version not in {WHITE_BACKGROUND_V1, WHITE_BACKGROUND_V2, WHITE_BACKGROUND_V3}:
         raise ValueError("unknown Qwen white-background extraction version")
     if mime_type != "image/png":
         raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: source is not PNG")
@@ -304,7 +318,7 @@ def _prepare_qwen_white_background(
     edges += [(width - 1, y) for y in range(1, height - 1)]
     if sum(near_white(x, y) for x, y in edges) < len(edges) * 0.995:
         raise ValueError("LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: border is not uniformly white")
-    if version == WHITE_BACKGROUND_V2:
+    if version in {WHITE_BACKGROUND_V2, WHITE_BACKGROUND_V3}:
         border = [cast(tuple[int, int, int, int], pixels[x, y]) for x, y in edges]
         backdrop = tuple((min(p[c] for p in border), max(p[c] for p in border)) for c in range(3))
         if not all(near_white(x, y) for x, y in edges) or any(
@@ -373,7 +387,58 @@ def _prepare_qwen_white_background(
                         "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: isolated pixels control trim "
                         "bounds; inspect backdrop artifacts and supply a clean padded source"
                     )
+    if version == WHITE_BACKGROUND_V3:
+        _validate_exterior_components(image)
     return _validate_transparent_source(_png_bytes(image), "image/png")
+
+
+def _validate_exterior_components(image: Image.Image) -> None:
+    """Refuse detached specks controlling trim; do not delete or repaint them.
+
+    V2's immediate-neighbor test accepts a two-pixel streak or a 2x2 VAE speck.
+    Inspect complete connected components instead, preserving attached thin tips
+    and meaningful detached parts. Four pixels is a source-noise guard, not a
+    semantic/mobile quality score. Historical V1/V2 output stays unchanged.
+    """
+    width, height = image.size
+    alpha = image.getchannel("A")
+    bounds = alpha.getbbox()
+    if bounds is None:
+        return
+    left, top, right, bottom = bounds
+    pixels = alpha.tobytes()
+    visited = bytearray(width * height)
+    supported = [False] * 4
+    for y in range(top, bottom):
+        for x in range(left, right):
+            start = y * width + x
+            if not pixels[start] or visited[start]:
+                continue
+            queue = deque([start])
+            visited[start] = 1
+            count = 0
+            edges = [False] * 4
+            while queue:
+                index = queue.popleft()
+                py, px = divmod(index, width)
+                count += 1
+                for i, at_edge in enumerate((px == left, py == top,
+                                             px == right - 1, py == bottom - 1)):
+                    edges[i] |= at_edge
+                # Eight-connectivity keeps diagonal antennae, tails and thin tips.
+                for ny in range(max(top, py - 1), min(bottom, py + 2)):
+                    for nx in range(max(left, px - 1), min(right, px + 2)):
+                        neighbor = ny * width + nx
+                        if pixels[neighbor] and not visited[neighbor]:
+                            visited[neighbor] = 1
+                            queue.append(neighbor)
+            if count > 4:
+                supported = [a or b for a, b in zip(supported, edges, strict=True)]
+    if not all(supported):
+        raise ValueError(
+            "LESSON_OBJECT_WHITE_BACKGROUND_UNSAFE: detached backdrop specks control trim "
+            "bounds; inspect retained source and supply clean padding; no pixels were repaired"
+        )
 
 
 def _png_bytes(image: Image.Image) -> bytes:

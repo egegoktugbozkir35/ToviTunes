@@ -199,7 +199,8 @@ class AssetStore:
                         (
                             str(uuid4()),
                             identity.artifact_id,
-                            "file-signature-v1",
+                            "file-image-decode-v2"
+                            if "image_decode" in facts else "file-signature-v1",
                             "passed",
                             digest.hexdigest(),
                             json.dumps(facts, sort_keys=True),
@@ -435,7 +436,8 @@ class AssetStore:
                             (
                                 str(uuid4()),
                                 identity.artifact_id,
-                                "file-signature-v1",
+                                "file-image-decode-v2"
+                                if "image_decode" in facts else "file-signature-v1",
                                 "passed",
                                 expected_sha256,
                                 json.dumps(facts, sort_keys=True),
