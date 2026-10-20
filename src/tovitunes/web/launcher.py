@@ -55,6 +55,7 @@ def launch(config_path: Path, port: int = 8766) -> None:
         config = load_config(resolve_config(config_path))
         supervisor = LocalServiceSupervisor(config)
         app = create_app(config, supervisor=supervisor)
+        # Only configured CPU-side helpers warm up. Production owns GPU stage admission.
         supervisor.start_background()
         threading.Thread(target=open_when_ready, args=(url,), daemon=True).start()
         try:

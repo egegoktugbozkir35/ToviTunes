@@ -129,6 +129,21 @@ class RequestLedger:
                 ).fetchone()
                 if row is None:
                     raise KeyError(request_id)
+                if (
+                    provider_request_id
+                    and row["provider_request_id"]
+                    and provider_request_id != row["provider_request_id"]
+                ):
+                    raise InvalidRequestTransition(
+                        "remote identity cannot replace a retained request"
+                    )
+                if connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='image_native_crash_abandonments'"
+                ).fetchone() and connection.execute(
+                    "SELECT 1 FROM image_native_crash_abandonments WHERE request_id=?",
+                    (request_id,),
+                ).fetchone():
+                    raise InvalidRequestTransition("abandoned ambiguous request is immutable")
                 prior: RequestStatus = row["status"]
                 valid = status in allowed[prior]
                 if prior == "remote_started" and status == "failed" and definitive_remote_failure:

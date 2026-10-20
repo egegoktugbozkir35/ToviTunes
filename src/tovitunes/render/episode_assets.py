@@ -20,6 +20,7 @@ from tovitunes.domain.visual_draft import EpisodeVisualPlanV2
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
+from tovitunes.render.image_recovery import retain_image_response, returned_image_response
 from tovitunes.render.lesson_objects import (
     WHITE_BACKGROUND_V1,
     WHITE_BACKGROUND_V2,
@@ -213,6 +214,7 @@ def generate_assets(
     *,
     image_prompt: str = IMAGE_PROMPT,
     progress: Callable[[str, str], None] | None = None,
+    before_submit: Callable[[], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
     if not visual.required_assets:
@@ -240,25 +242,45 @@ def generate_assets(
                 raise ValueError("existing visual asset belongs to a different plan")
             with closing(store.database.connect()) as db:
                 pending = db.execute(
-                    "SELECT r.request_id,r.status,p.source_artifact_id FROM generation_requests r "
+                    "SELECT r.request_id,r.status,r.provider_request_id,p.source_artifact_id "
+                    "FROM generation_requests r "
                     "JOIN production_image_receipts p ON p.request_id=r.request_id "
                     "WHERE r.episode_id=? AND r.slot_key=? AND r.kind='visual_asset' "
                     "AND r.status!='succeeded' ORDER BY r.rowid DESC LIMIT 1",
                     (episode.episode_id, slot),
                 ).fetchone()
-                if pending and pending["source_artifact_id"]:
-                    source = store.get(pending["source_artifact_id"])
+                recovered_source = db.execute(
+                    "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
+                    "AND kind='visual_asset_source' AND slot_key=? "
+                    "AND json_extract(provenance_json,'$.local_request_id')=?",
+                    (episode.episode_id, slot, pending["request_id"]),
+                ).fetchone() if pending else None
+                source_id = (pending["source_artifact_id"] or (
+                    recovered_source[0] if recovered_source else None
+                )) if pending else None
+                if pending and source_id:
+                    source = store.get(source_id)
                     source_dep = db.execute(
                         "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
                         "AND input_artifact_id=? AND input_sha256=?",
                         (existing.identity.artifact_id, source.identity.artifact_id, source.sha256),
                     ).fetchone()
-                    if not source_dep or pending["status"] not in {"remote_started", "ambiguous"}:
+                    if (
+                        not source_dep or pending["status"] not in {"remote_started", "ambiguous"}
+                        or pending["provider_request_id"] not in {
+                            None, source.provenance.request_id,
+                        }
+                        or source.provenance.local_request_id != pending["request_id"]
+                        or not store.inspect(source.identity.artifact_id).valid
+                    ):
                         raise ImageStageBlocked("BLOCKED", pending["request_id"])
+                    assert_owner()
                     db.execute(
-                        "UPDATE production_image_receipts SET normalized_artifact_id=? "
+                        "UPDATE production_image_receipts SET normalized_artifact_id=?, "
+                        "source_artifact_id=?,response_sha256=?,provider_request_id=? "
                         "WHERE request_id=?",
-                        (existing.identity.artifact_id, pending["request_id"]),
+                        (existing.identity.artifact_id, source.identity.artifact_id,
+                         source.sha256, source.provenance.request_id, pending["request_id"]),
                     )
                     db.commit()
                     ledger.transition(
@@ -345,18 +367,42 @@ def generate_assets(
                 "AND json_extract(provenance_json,'$.local_request_id')=?",
                 (episode.episode_id, slot, request_id),
             ).fetchone()
-        source_record = store.get(source[0]) if source else None
+        source_record = store.get(receipt["source_artifact_id"] or source[0]) if (
+            receipt["source_artifact_id"] or source
+        ) else None
+        if source_record is not None and (
+            source_record.identity.owner_id != episode.episode_id
+            or source_record.identity.kind != "visual_asset_source"
+            or source_record.identity.slot_key != slot
+            or source_record.provenance.local_request_id != request_id
+            or source_record.provenance.provider != provider.provider
+            or source_record.provenance.model != provider.model
+            or prior and prior["provider_request_id"] not in {
+                None, source_record.provenance.request_id,
+            }
+            or receipt["provider_request_id"] not in {None, source_record.provenance.request_id}
+            or receipt["response_sha256"] not in {None, source_record.sha256}
+            or not store.inspect(source_record.identity.artifact_id).valid
+        ):
+            raise ImageStageBlocked("BLOCKED", request_id, "retained_source_invalid")
         if source_record is None:
-            if prior and prior["status"] != "prepared":
+            with closing(store.database.connect()) as db:
+                current = db.execute(
+                    "SELECT * FROM generation_requests WHERE request_id=?", (request_id,),
+                ).fetchone()
+            result = returned_image_response(config, current)
+            if result is None and prior and prior["status"] != "prepared":
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if prior["status"] in {"remote_started", "ambiguous"} else "FAILED",
                     request_id,
                     prior["error_kind"],
                 )
-            started = False
+            started = result is not None
 
             def remote_start() -> None:
                 nonlocal started
+                if started:
+                    raise ValueError("provider started the same request twice")
                 assert_owner()
                 from tovitunes.render.image_recovery import recheck_native_image_successor
 
@@ -370,20 +416,28 @@ def generate_assets(
                 ledger.transition(request_id, "remote_started")
                 started = True
 
+            if result is None and before_submit is not None:
+                # Startup failure must leave the prepared request reusable.
+                before_submit()
+                assert_owner()
             try:
-                result = (
-                    provider.generate(
-                        spec,
-                        (),
-                        on_remote_start=remote_start,
-                        on_task_accepted=lambda task: ledger.identity(request_id, task),
+                if result is None:
+                    result = (
+                        provider.generate(
+                            spec,
+                            (),
+                            on_remote_start=remote_start,
+                            on_task_accepted=lambda task: ledger.identity(request_id, task),
+                        )
+                        if isinstance(provider, QwenComfyUIImageProvider)
+                        else provider.generate(spec, (), on_remote_start=remote_start)
                     )
-                    if isinstance(provider, QwenComfyUIImageProvider)
-                    else provider.generate(spec, (), on_remote_start=remote_start)
-                )
                 if not started:
                     raise ValueError("image provider omitted remote-start tracking")
-                source_path = working / f"{slot}_source.png"
+                if current["status"] == "prepared":
+                    retain_image_response(config, store.database, request_id, result)
+                assert_owner()
+                source_path = working / f"{request_id}_source.png"
                 source_path.write_bytes(result.image_bytes)
                 source_record = store.ingest(
                     source_path,
@@ -426,7 +480,7 @@ def generate_assets(
             except ImageStageBlocked:
                 raise
             except ExecutionOwnershipError:
-                if started:
+                if started and current["status"] == "prepared":
                     ledger.transition(request_id, "ambiguous")
                 raise
             except Exception as exc:
@@ -443,16 +497,17 @@ def generate_assets(
                             "response_metadata_json=? WHERE request_id=?",
                             (exc.provider_request_id, json.dumps(exc.diagnostics), request_id),
                         )
-                ledger.transition(
-                    request_id,
-                    "ambiguous" if started and outcome != "terminal_failure" else "failed",
-                    provider_request_id=exc.provider_request_id
-                    if isinstance(exc, ProviderFailure)
-                    else None,
-                    definitive_remote_failure=outcome == "terminal_failure",
-                    error_kind=category,
-                    error_reason="Image operation failed; see protected local provider evidence",
-                )
+                if current["status"] == "prepared":
+                    ledger.transition(
+                        request_id,
+                        "ambiguous" if started and outcome != "terminal_failure" else "failed",
+                        provider_request_id=exc.provider_request_id
+                        if isinstance(exc, ProviderFailure)
+                        else None,
+                        definitive_remote_failure=outcome == "terminal_failure",
+                        error_kind=category,
+                        error_reason="Image operation failed; inspect protected provider evidence",
+                    )
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if started and outcome != "terminal_failure" else "FAILED",
                     request_id,
@@ -488,14 +543,17 @@ def generate_assets(
             path,
             (plan_id, source_record.identity.artifact_id),
         )
+        assert_owner()
         with closing(store.database.connect()) as db:
             db.execute(
                 "UPDATE production_image_receipts SET source_artifact_id=?,response_sha256=?,"
-                "normalized_artifact_id=? WHERE request_id=?",
+                "normalized_artifact_id=?,provider_request_id=COALESCE(provider_request_id,?) "
+                "WHERE request_id=?",
                 (
                     source_record.identity.artifact_id,
                     source_record.sha256,
                     record.identity.artifact_id,
+                    source_record.provenance.request_id,
                     request_id,
                 ),
             )
@@ -504,6 +562,7 @@ def generate_assets(
             ).fetchone()[0]
             db.commit()
         if state != "succeeded":
+            assert_owner()
             ledger.transition(
                 request_id,
                 "succeeded",

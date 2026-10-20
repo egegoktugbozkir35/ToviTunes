@@ -414,8 +414,9 @@ def test_comfy_desktop_discovery_maps_installed_shared_models(context, tmp_path,
 
     supervisor = LocalServiceSupervisor(
         context[0],
-        probe=lambda _: next(ready),
+        probe=lambda url: next(ready, False) if url.endswith("/system_stats") else False,
         spawn=lambda *a, **k: calls.append((a, k)) or Process(),
+        queue_probe=lambda _: True,
     )
     command, _ = supervisor.discover("comfyui")
     assert "--extra-model-paths-config" in command
@@ -452,7 +453,8 @@ def test_launcher_starts_missing_service_and_cleans_up_only_owned(context, name,
         return process
 
     monkeypatch.setenv("NVIDIA_API_KEY", "secret-value")
-    supervisor = LocalServiceSupervisor(config, probe=lambda _: bool(spawned), spawn=spawn)
+    supervisor = LocalServiceSupervisor(config, probe=lambda _: bool(spawned), spawn=spawn,
+                                        queue_probe=lambda _: True)
     supervisor.start(name)
     supervisor.start(name)
     assert len(spawned) == 1 and supervisor.status(refresh=False)[name]["status"] == "ready"
@@ -526,7 +528,8 @@ def test_launcher_serves_ui_even_when_service_startup_fails(context, monkeypatch
     for thread in supervisor._threads:
         thread.join(2)
     assert all(
-        s["status"] in {"failed", "disabled"} for s in supervisor.status(refresh=False).values()
+        s["status"] in {"failed", "disabled", "unavailable"}
+        for s in supervisor.status(refresh=False).values()
     )
 
 
@@ -575,6 +578,176 @@ def test_startup_timeout_does_not_spawn_a_second_live_process(context, monkeypat
     assert len(spawned) == 1
     supervisor.close()
     assert terminated == [True]
+
+
+def gpu_fixture(config, monkeypatch, *, fail_stop=False):
+    resident, events = set(), []
+
+    class Process:
+        def __init__(self, name):
+            self.name, self.running = name, True
+
+        def poll(self):
+            return None if self.running else 0
+
+        def terminate(self):
+            events.append(("stop", self.name))
+            if fail_stop:
+                raise OSError("private shutdown diagnostic")
+            self.running = False
+            resident.discard(self.name)
+
+        def wait(self, timeout):
+            return 0
+
+    def spawn(command, **kwargs):
+        name = command[0]
+        assert not resident
+        resident.add(name)
+        events.append(("start", name))
+        return Process(name)
+
+    manager = LocalServiceSupervisor(config, probe=lambda url: any(
+        manager.urls[name] == url for name in resident
+    ), spawn=spawn, profile_probe=lambda _: True, queue_probe=lambda _: True)
+    monkeypatch.setattr(manager, "discover", lambda name: ([name], config.data_root))
+    return manager, resident, events
+
+
+def test_gpu_handoff_requires_admitted_music_and_preserves_external_services(context, monkeypatch):
+    from tovitunes.errors import ProductionStop
+
+    manager, resident, events = gpu_fixture(context[0], monkeypatch)
+    manager.prepare_gpu("ace_step", assert_owner=lambda: None)
+    with pytest.raises(ProductionStop, match="admitted"):
+        manager.prepare_gpu("comfyui", assert_owner=lambda: None)
+    assert resident == {"ace_step"}
+    manager.prepare_gpu(
+        "comfyui", assert_owner=lambda: None,
+        admit_music=lambda: events.append(("admitted", "music")),
+    )
+    assert events == [("start", "ace_step"), ("admitted", "music"),
+                      ("stop", "ace_step"), ("start", "comfyui")]
+    manager.prepare_gpu("comfyui", assert_owner=lambda: None, admit_music=lambda: None)
+    assert events.count(("start", "comfyui")) == 1
+    manager.close()
+    assert not resident
+
+    external, resident, events = gpu_fixture(context[0], monkeypatch)
+    resident.add("ace_step")  # Reachable, but there is no owned process handle.
+    with pytest.raises(ProductionStop, match="released safely"):
+        external.prepare_gpu("comfyui", assert_owner=lambda: None, admit_music=lambda: None)
+    external.close()
+    assert resident == {"ace_step"} and events == []
+
+
+def test_gpu_shutdown_failure_and_lease_loss_block_handoff(context, monkeypatch):
+    from tovitunes.errors import ExecutionOwnershipLostError, ProductionStop
+
+    manager, resident, events = gpu_fixture(context[0], monkeypatch, fail_stop=True)
+    manager.start("ace_step")
+    with pytest.raises(ProductionStop, match="released safely"):
+        manager.prepare_gpu("comfyui", assert_owner=lambda: None, admit_music=lambda: None)
+    assert resident == {"ace_step"} and ("start", "comfyui") not in events
+    assert manager.status()["ace_step"]["status"] == "failed"
+    assert "private" not in json.dumps(manager.status(refresh=False))
+
+    def lost():
+        raise ExecutionOwnershipLostError("lost")
+
+    before = list(events)
+    with pytest.raises(ExecutionOwnershipLostError):
+        manager.prepare_gpu("comfyui", assert_owner=lost, admit_music=lambda: None)
+    assert events == before
+
+
+def test_gpu_startup_is_deferred_and_dead_handles_are_not_ownership(context, monkeypatch):
+    manager, resident, events = gpu_fixture(context[0], monkeypatch)
+    manager.start_background()
+    for thread in manager._threads:
+        thread.join(2)
+    assert not any(n in {"ace_step", "comfyui"} for _, n in events)
+    manager.start("ace_step")
+    manager._processes["ace_step"].running = False
+    manager.start("ace_step")
+    assert manager.status(refresh=False)["ace_step"] == {"status": "ready", "owned": False}
+    manager.close()
+    assert resident == {"ace_step"}  # A replacement endpoint is not ours to kill.
+
+
+def test_comfy_conservative_flags_are_discovered_without_running_it(context, tmp_path, monkeypatch):
+    root = tmp_path / "ComfyUI"
+    (root / "comfy").mkdir(parents=True)
+    (root / "comfy/cli_args.py").write_text("--disable-dynamic-vram --lowvram")
+    (root / "main.py").touch()
+    executable = root / ".venv/Scripts/python.exe"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    monkeypatch.setenv("TOVITUNES_COMFYUI_HOME", str(root))
+    manager = LocalServiceSupervisor(context[0], spawn=lambda *a, **k: pytest.fail("spawned"))
+    command, _ = manager.discover("comfyui")
+    assert {"--disable-dynamic-vram", "--lowvram"} <= set(command)
+
+
+def test_unverified_external_comfy_profile_blocks_submission_without_stopping_it(
+    context, monkeypatch,
+):
+    from tovitunes.errors import ProductionStop
+
+    manager, resident, events = gpu_fixture(context[0], monkeypatch)
+    resident.add("comfyui")
+    manager.profile_probe = lambda _: False
+    with pytest.raises(ProductionStop, match="profile is unverified"):
+        manager.prepare_gpu("comfyui", assert_owner=lambda: None, admit_music=lambda: None)
+    assert resident == {"comfyui"} and events == []
+    manager.close()
+    assert resident == {"comfyui"}
+
+
+def test_busy_owned_comfyui_is_not_terminated_for_music(context, monkeypatch):
+    from tovitunes.errors import ProductionStop
+
+    manager, resident, events = gpu_fixture(context[0], monkeypatch)
+    manager.start("comfyui")
+    manager.queue_probe = lambda _: False
+    with pytest.raises(ProductionStop, match="released safely"):
+        manager.prepare_gpu("ace_step", assert_owner=lambda: None)
+    assert resident == {"comfyui"} and events == [("start", "comfyui")]
+    manager.queue_probe = lambda _: True
+    manager.close()
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows process ownership")
+def test_windows_shutdown_uses_owned_job_handles_and_preserves_unrelated_cpu_child(
+    context, tmp_path,
+):
+    import sys
+
+    marker = tmp_path / "service-started"
+    command = (sys.executable, "-c", (
+        "from pathlib import Path; import time; "
+        f"Path({str(marker)!r}).touch(); time.sleep(90)"
+    ))
+    config = context[0].model_copy(update={"local_services": LocalServicesConfig(
+        ace_step=LocalServiceLaunchConfig(command=command, startup_timeout_seconds=0.1),
+    )})
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"],
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+    manager = LocalServiceSupervisor(config, probe=lambda _: False)
+    try:
+        manager.start("ace_step")  # CPU-only sentinel; intentionally has no HTTP endpoint.
+        deadline = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists()
+        job = manager._jobs["ace_step"]
+        assert job.active()
+        assert manager.stop("ace_step")
+        assert not manager._processes and unrelated.poll() is None
+    finally:
+        manager.close()
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
 
 
 def test_ollama_required_only_for_configured_fallback_or_embeddings(context):
