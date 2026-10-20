@@ -29,6 +29,8 @@ and uncommitted work are not incorporated.
   a conservative technical opacity guard, not a new aesthetic acceptance score.
   RGB/palette transparency and static-image restrictions cannot bypass the check.
   Raw sources remain byte-identical and available for inspection.
+  Final scene-v3 admission rechecks the raw source contract, so a derivative from
+  explicit recovery using an older normalizer cannot hide an unsafe alpha hole.
 - `qwen_white_exterior_v3` is an explicit independent extraction primitive. Like V2,
   it removes only border-connected backdrop colors, preserves RGB and retained alpha,
   and never grows masks, paints contours or deletes specks. V2's neighbor check can
@@ -42,6 +44,8 @@ and uncommitted work are not incorporated.
   facts are recorded as `file-image-decode-v2`. Old validation records are not rewritten;
   reinspection verifies bytes without re-normalizing them. Corrupt source files are
   not selected or described as usable merely because their PNG header is valid.
+  Rejected provider source bytes are retained in the existing quarantine directory,
+  with their path in the rejection diagnostic, without registration or selection.
 - Environment admission checks manifest owner, exact ordered roles, each plate's
   owner/kind/slot/hash and its manifest dependency, and each retained source's
   owner/kind/slot/hash and derivative dependency. Episode request specs must still

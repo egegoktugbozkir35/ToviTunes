@@ -472,3 +472,43 @@ def test_environment_receipt_must_match_planned_setting(runtime, episode):
             store, generated['manifest_artifact_id'], episode.episode_id, shared=False,
             role_briefs=dict.fromkeys(ROLES, 'An unrelated outdoor garden'),
         )
+
+
+def test_old_environment_normalizer_cannot_bypass_scene_v3_source_admission(
+    runtime, episode, monkeypatch,
+):
+    from test_visual_story import picture
+
+    from tovitunes.benchmark.providers import ProviderResult
+    from tovitunes.render import environment_sets
+    from tovitunes.render.visual_evidence import validate_environment_assets
+
+    source = Image.open(io.BytesIO(picture())).convert('RGBA')
+    ImageDraw.Draw(source).rectangle((320, 500, 339, 519), fill=(255, 255, 255, 0))
+
+    class OldSourceProvider(FakeProvider):
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            self.calls += 1
+            if on_remote_start:
+                on_remote_start()
+            return ProviderResult(
+                image_bytes=png(source), mime_type='image/png',
+                provider_request_id='old-normalizer-source',
+            )
+
+    validate = environment_sets._validate_image
+
+    def old_normalizer(data, dimensions, **kwargs):
+        return validate(data, dimensions, allow_near_opaque_alpha=True)
+
+    monkeypatch.setattr(environment_sets, '_validate_image', old_normalizer)
+    generated = generate_set(
+        runtime, confirmed=True, provider=OldSourceProvider(), episode_id=episode.episode_id,
+        role_briefs=dict.fromkeys(ROLES, 'One indoor classroom'), assert_owner=lambda: None,
+    )
+    monkeypatch.setattr(environment_sets, '_validate_image', validate)
+    store = AssetStore(runtime.data_root, Database(runtime.database_path))
+    with pytest.raises(ValueError, match='local transparency'):
+        validate_environment_assets(
+            store, generated['manifest_artifact_id'], episode.episode_id, shared=False,
+        )

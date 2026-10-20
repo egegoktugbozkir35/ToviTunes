@@ -247,6 +247,20 @@ class AssetStore:
                 mime_type=mime_type,
                 provenance=provenance,
             )
+        except InvalidMedia as exc:
+            if (
+                staging.exists() and provenance.source_kind == "provider"
+                and kind in {"visual_asset_source", "environment_source_plate"}
+                and suffix in {".png", ".jpg", ".jpeg", ".webp"}
+            ):
+                # A rejected provider source is evidence, never an admitted image.
+                # Preserve exact bytes even when the caller's temporary directory
+                # is cleaned up; no artifact/selection/retry is created for it.
+                relative = f"quarantine/invalid-{identity.artifact_id}{suffix}"
+                quarantine = self._trusted_path(relative, must_exist=False)
+                os.replace(staging, quarantine)
+                raise InvalidMedia(f"{exc}; raw provider bytes retained at {relative}") from exc
+            raise
         finally:
             if not finalized and staging.exists():
                 staging.unlink()

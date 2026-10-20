@@ -264,3 +264,28 @@ def test_animated_image_cannot_be_admitted_as_static_art(tmp_path):
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=100, loop=0)
     with pytest.raises(InvalidMedia, match='animated image is unsupported'):
         validate_media(path)
+
+
+def test_invalid_provider_artwork_remains_raw_quarantine_evidence(tmp_path, catalog):
+    from PIL import Image
+
+    store, db, episode = _setup(tmp_path, catalog)
+    store = AssetStore(store.root, db, generated_source_roots=[tmp_path])
+    source = tmp_path / 'broken.png'
+    Image.new('RGB', (64, 64), 'white').save(source)
+    raw = source.read_bytes()[:48]
+    source.write_bytes(raw)
+    with pytest.raises(InvalidMedia, match='raw provider bytes retained at quarantine/'):
+        store.ingest(
+            source, owner_scope='episode', owner_id=episode.episode_id,
+            kind='visual_asset_source', slot_key='cup',
+            provenance=Provenance(
+                source_kind='provider', provider='offline-fixture', model='fixture',
+                request_id='fixture-request', acquired_at=datetime.now(UTC),
+            ),
+        )
+    retained = list((store.root / 'quarantine').iterdir())
+    assert len(retained) == 1 and retained[0].read_bytes() == raw
+    with db.connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM artifact_versions').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM artifact_selections').fetchone()[0] == 0

@@ -6,7 +6,13 @@ from hashlib import sha256
 
 from tovitunes.artifacts.store import AssetStore
 from tovitunes.domain.visual_draft import CreativeVisualDraft, EpisodeVisualPlanV2
-from tovitunes.render.environment_sets import ROLES, EnvironmentSet
+from tovitunes.render.environment_sets import (
+    ENVIRONMENT_ALPHA_V2,
+    EPISODE_PROMPT_VERSION,
+    ROLES,
+    EnvironmentSet,
+    _validate_image,
+)
 
 
 def validate_environment_assets(
@@ -26,6 +32,10 @@ def validate_environment_assets(
         raise ValueError("environment manifest must contain each original role exactly once")
     with closing(store.database.connect()) as db:
         for plate in environment.plates:
+            if environment.prompt_version == EPISODE_PROMPT_VERSION and (
+                plate.source_artifact_id is None or plate.source_dimensions is None
+            ):
+                raise ValueError(f"environment role {plate.role} lacks its scene-v3 raw source")
             record = store.get(plate.artifact_id)
             if (
                 record.identity.owner_scope != owner.owner_scope
@@ -69,6 +79,8 @@ def validate_environment_assets(
                     or source.identity.kind != "environment_source_plate"
                     or source.identity.slot_key != plate.role
                     or source.sha256 != plate.source_sha256
+                    or source.provenance.local_request_id != plate.local_request_id
+                    or record.provenance.local_request_id != plate.local_request_id
                     or not store.inspect(plate.source_artifact_id).valid
                     or db.execute(
                         "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
@@ -77,6 +89,17 @@ def validate_environment_assets(
                     ).fetchone() is None
                 ):
                     raise ValueError(f"environment role {plate.role} has mismatched source binding")
+                if environment.prompt_version == EPISODE_PROMPT_VERSION:
+                    # Explicit recovery can retain a derivative produced under an
+                    # older contract. Recheck the new source contract at admission;
+                    # do not let an older normalizer hide a local alpha hole.
+                    # This creates no artifact and never processes historical V1/V2 sets.
+                    _validate_image(
+                        store.path_for(plate.source_artifact_id).read_bytes(),
+                        plate.source_dimensions,
+                        allow_near_opaque_alpha=True,
+                        normalization_version=ENVIRONMENT_ALPHA_V2,
+                    )
     return environment
 
 
