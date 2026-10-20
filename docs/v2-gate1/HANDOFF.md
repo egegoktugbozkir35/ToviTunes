@@ -5,10 +5,13 @@ Gate 1 branch: `codex/v2-gate1-reliability`.
 
 Exact implementation / shared-file handoff candidate:
 `971140a28b3c2ca8eb74d8aa1e42b854640d058b`.
+`episode_assets.py` has not changed after this commit. The supplemental supervisor
+ownership/readiness correction and its Studio regression are in
+`7659510428f6b9c4a7f77c4506b595fa569de9bf`; include that commit as well.
 
 **Release rule:** Gate 2 waits for the final Gate 1 delivery report to release this
 candidate after full offline and exact-head hosted Windows checks. The final
-report must confirm this remains the latest implementation of the shared files.
+report must confirm these remain the latest implementations of the named files.
 An intermediate candidate is not authorization for concurrent edits. After release,
 Gate 1 stops editing these files. The unresolved live memory-fit criterion does
 not grant any provider-call authority to the next owner.
@@ -33,8 +36,9 @@ Gate 2's adapter, workflow, prompts and artwork-processing modules, including
 `lesson_objects.py`, `artifacts/store.py` and `artifacts/media.py`, were not edited.
 No dependency manifests, fixtures, character assets or Gate 0 records changed.
 
-Incorporate by verified ancestry/cherry-pick, never by uncommitted file copying.
-The handoff commit includes the interacting supervisor/ledger/continuation changes;
+Incorporate the branch through `7659510428f6b9c4a7f77c4506b595fa569de9bf` by verified
+ancestry, or cherry-pick both implementation commits in order, never by uncommitted
+file copying. The handoff includes the interacting supervisor/ledger/continuation changes;
 do not copy `episode_assets.py` alone. Preserve the successful-source receipt's
 native identity and dependencies when applying Gate 2's normalization changes.
 Run the added source interruption and repeated recovery tests, native-crash tests,

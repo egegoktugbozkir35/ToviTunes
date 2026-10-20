@@ -46,5 +46,8 @@ three-category acceptance batch or new editorial/visual-quality evidence.
 
 See [service lifecycle](SERVICE_LIFECYCLE.md) and [sequential shared-file handoff](HANDOFF.md).
 The final report pins the delivery head, exact Windows CI run and handoff release.
+The final ownership refresh also clears stale `owned=true` after a service exits;
+its focused lifecycle/CPU-sentinel checks pass at the supplemental commit recorded
+in the handoff.
 No episode was repaired, resumed or rendered in authoritative production data.
 No PR is merged, no media is published, and no later gate is started.

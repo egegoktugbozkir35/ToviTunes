@@ -7,5 +7,6 @@
   "approved": true,
   "owner_paid_inference_budget_usd": 0,
   "gate1_live_generation_request_authorization": 0,
-  "implementation_handoff_candidate": "971140a28b3c2ca8eb74d8aa1e42b854640d058b"
+  "implementation_handoff_candidate": "971140a28b3c2ca8eb74d8aa1e42b854640d058b",
+  "supplemental_lifecycle_commit": "7659510428f6b9c4a7f77c4506b595fa569de9bf"
 }

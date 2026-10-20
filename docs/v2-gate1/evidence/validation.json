@@ -65,6 +65,13 @@
       "passed": 1,
       "deselected": 89,
       "seconds": 42.69
+    },
+    {
+      "name": "Final ownership/readiness refresh and lifecycle regression",
+      "result": "PASS",
+      "passed": 16,
+      "deselected": 24,
+      "head": "7659510428f6b9c4a7f77c4506b595fa569de9bf"
     }
   ],
   "counts_note": "Focused commands overlap; counts are per invocation and must not be added as unique coverage.",
