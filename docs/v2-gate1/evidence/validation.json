@@ -1,0 +1,78 @@
+{
+  "checks": [
+    {
+      "name": "Ruff",
+      "result": "PASS",
+      "command": "uv run --locked ruff check ."
+    },
+    {
+      "name": "Strict Mypy",
+      "result": "PASS",
+      "modules": 121,
+      "command": "uv run --locked mypy src"
+    },
+    {
+      "name": "Character pack lock",
+      "result": "PASS",
+      "artifacts": 48
+    },
+    {
+      "name": "Native crash regressions",
+      "result": "PASS",
+      "passed": 32,
+      "deselected": 62,
+      "seconds": 181.39,
+      "head": "971140a28b3c2ca8eb74d8aa1e42b854640d058b"
+    },
+    {
+      "name": "Supervisor lifecycle/ownership/Windows CPU sentinels",
+      "result": "PASS",
+      "passed": 16,
+      "deselected": 24,
+      "seconds": 3.05
+    },
+    {
+      "name": "Returned illustration/environment interruption matrix",
+      "result": "PASS",
+      "passed": 7,
+      "deselected": 82,
+      "seconds": 261.89
+    },
+    {
+      "name": "Repeated source/selection interruption and environment recovery",
+      "result": "PASS",
+      "passed": 3,
+      "deselected": 89,
+      "seconds": 92.96
+    },
+    {
+      "name": "Tampered response and immutable native parent",
+      "result": "PASS",
+      "passed": 2,
+      "deselected": 90,
+      "seconds": 10.38
+    },
+    {
+      "name": "Native pending-task shutdown preservation",
+      "result": "PASS",
+      "passed": 2,
+      "deselected": 92,
+      "seconds": 7.33
+    },
+    {
+      "name": "Simulated native music-to-image handoff with failed startup recovery",
+      "result": "PASS",
+      "passed": 1,
+      "deselected": 89,
+      "seconds": 42.69
+    }
+  ],
+  "counts_note": "Focused commands overlap; counts are per invocation and must not be added as unique coverage.",
+  "full_offline_suite": "Required; complete delivery results in draft PR and final report",
+  "exact_head_hosted_windows_ci": "Required; complete delivery results in draft PR and final report; baseline CI is not delivery CI",
+  "provider_generation_requests": 0,
+  "gpu_inference_services_started": 0,
+  "cpu_only_process_sentinels": true,
+  "historical_fixtures_disabled": 0,
+  "changed_model_or_workflow_parameters": false
+}

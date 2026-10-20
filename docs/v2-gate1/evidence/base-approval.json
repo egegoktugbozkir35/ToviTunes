@@ -1,0 +1,11 @@
+{
+  "approved_gate0_head": "ea3495ae44f2f21018e06db19c90ab49f94c70ca",
+  "latest_remote_gate0_head": "ea3495ae44f2f21018e06db19c90ab49f94c70ca",
+  "base_code_head": "790da5502a966675b94a32838e303a97fb16503e",
+  "diff_scope": "docs/v2-gate0 only",
+  "approval_url": "https://github.com/egegoktugbozkir35/ToviTunes/pull/50#issuecomment-6270140245",
+  "approved": true,
+  "owner_paid_inference_budget_usd": 0,
+  "gate1_live_generation_request_authorization": 0,
+  "implementation_handoff_candidate": "971140a28b3c2ca8eb74d8aa1e42b854640d058b"
+}
