@@ -444,6 +444,14 @@ class LocalServiceSupervisor:
             if refresh and self.clock() - self._checked >= 5:
                 self._checked = self.clock()
                 for name, url in self.urls.items():
+                    try:
+                        self._states[name]["owned"] = self._owned(name)
+                    except OSError:
+                        self._states[name] = {
+                            "status": "failed", "owned": False,
+                            "message": "Service process ownership could not be verified.",
+                        }
+                        continue
                     if self._states[name]["status"] not in {"starting", "failed"}:
                         if self.probe(url):
                             self._states[name] = {

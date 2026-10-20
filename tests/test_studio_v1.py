@@ -673,6 +673,12 @@ def test_gpu_startup_is_deferred_and_dead_handles_are_not_ownership(context, mon
     assert manager.status(refresh=False)["ace_step"] == {"status": "ready", "owned": False}
     manager.close()
     assert resident == {"ace_step"}  # A replacement endpoint is not ours to kill.
+    manager, resident, _ = gpu_fixture(context[0], monkeypatch)
+    manager.start("ace_step")
+    manager._processes["ace_step"].running = False
+    resident.clear()
+    assert manager.status()["ace_step"] == {"status": "unavailable", "owned": False}
+    manager.close()
 
 
 def test_comfy_conservative_flags_are_discovered_without_running_it(context, tmp_path, monkeypatch):
