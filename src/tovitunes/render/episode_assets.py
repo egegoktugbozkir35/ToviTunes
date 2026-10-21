@@ -20,17 +20,26 @@ from tovitunes.domain.visual_draft import EpisodeVisualPlanV2
 from tovitunes.domain.visual_plan import COLORS_V1, EpisodeVisualPlan, VisualRequirement
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.requests import RequestLedger
+from tovitunes.render.image_recovery import retain_image_response, returned_image_response
 from tovitunes.render.lesson_objects import (
     WHITE_BACKGROUND_V1,
     WHITE_BACKGROUND_V2,
+    WHITE_BACKGROUND_V3,
     _prepare_qwen_white_background,
     _provider,
+    art_direction,
     normalize,
 )
 from tovitunes.render.props import dotted_circle_brushing
 
 LEGACY_IMAGE_PROMPT = "episode_illustration_v2"
-IMAGE_PROMPT = "episode_illustration_v3"
+PREVIOUS_IMAGE_PROMPT = "episode_illustration_v3"
+IMAGE_PROMPT = "episode_illustration_v4"
+NORMALIZATION_VERSIONS = {
+    LEGACY_IMAGE_PROMPT: WHITE_BACKGROUND_V1,
+    PREVIOUS_IMAGE_PROMPT: WHITE_BACKGROUND_V2,
+    IMAGE_PROMPT: WHITE_BACKGROUND_V3,
+}
 
 
 def swatch(color: str, size: int = 1024) -> Image.Image:
@@ -62,7 +71,7 @@ def image_spec(
     visual_direction: str,
     *, prompt_version: str = IMAGE_PROMPT,
 ) -> CanonicalImageSpec:
-    if prompt_version not in {LEGACY_IMAGE_PROMPT, IMAGE_PROMPT}:
+    if prompt_version not in NORMALIZATION_VERSIONS:
         raise ValueError("unsupported episode illustration prompt version")
     spec = CanonicalImageSpec(
         benchmark_version="episode_visual_assets_v1",
@@ -109,7 +118,7 @@ def image_spec(
     )
     if prompt_version == LEGACY_IMAGE_PROMPT:
         return spec
-    return spec.model_copy(update={
+    spec = spec.model_copy(update={
         "scene_brief": requirement.description,
         "teaching_check": (
             f"Illustrate exactly this subject: {requirement.semantic_label}. "
@@ -135,6 +144,17 @@ def image_spec(
         ),
         "negative_constraints": (
             "No photorealism, plastic 3D, dramatic lighting or franchise imitation.",
+        ),
+    })
+    if prompt_version == PREVIOUS_IMAGE_PROMPT:
+        return spec
+    return spec.model_copy(update={
+        "common_brief": art_direction(visual_direction) + (
+            " Use natural proportions and a complete, simple readable silhouette. "
+            "Keep essential subject details distinct at phone size."
+        ),
+        "identity_rules": (
+            "Exactly the complete described subject, isolated on removable plain white padding.",
         ),
     })
 
@@ -213,8 +233,11 @@ def generate_assets(
     *,
     image_prompt: str = IMAGE_PROMPT,
     progress: Callable[[str, str], None] | None = None,
+    before_submit: Callable[[], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
+    if image_prompt not in NORMALIZATION_VERSIONS:
+        raise ValueError("unsupported episode illustration prompt version")
     if not visual.required_assets:
         assert_owner()
         return {}
@@ -240,25 +263,45 @@ def generate_assets(
                 raise ValueError("existing visual asset belongs to a different plan")
             with closing(store.database.connect()) as db:
                 pending = db.execute(
-                    "SELECT r.request_id,r.status,p.source_artifact_id FROM generation_requests r "
+                    "SELECT r.request_id,r.status,r.provider_request_id,p.source_artifact_id "
+                    "FROM generation_requests r "
                     "JOIN production_image_receipts p ON p.request_id=r.request_id "
                     "WHERE r.episode_id=? AND r.slot_key=? AND r.kind='visual_asset' "
                     "AND r.status!='succeeded' ORDER BY r.rowid DESC LIMIT 1",
                     (episode.episode_id, slot),
                 ).fetchone()
-                if pending and pending["source_artifact_id"]:
-                    source = store.get(pending["source_artifact_id"])
+                recovered_source = db.execute(
+                    "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
+                    "AND kind='visual_asset_source' AND slot_key=? "
+                    "AND json_extract(provenance_json,'$.local_request_id')=?",
+                    (episode.episode_id, slot, pending["request_id"]),
+                ).fetchone() if pending else None
+                source_id = (pending["source_artifact_id"] or (
+                    recovered_source[0] if recovered_source else None
+                )) if pending else None
+                if pending and source_id:
+                    source = store.get(source_id)
                     source_dep = db.execute(
                         "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
                         "AND input_artifact_id=? AND input_sha256=?",
                         (existing.identity.artifact_id, source.identity.artifact_id, source.sha256),
                     ).fetchone()
-                    if not source_dep or pending["status"] not in {"remote_started", "ambiguous"}:
+                    if (
+                        not source_dep or pending["status"] not in {"remote_started", "ambiguous"}
+                        or pending["provider_request_id"] not in {
+                            None, source.provenance.request_id,
+                        }
+                        or source.provenance.local_request_id != pending["request_id"]
+                        or not store.inspect(source.identity.artifact_id).valid
+                    ):
                         raise ImageStageBlocked("BLOCKED", pending["request_id"])
+                    assert_owner()
                     db.execute(
-                        "UPDATE production_image_receipts SET normalized_artifact_id=? "
+                        "UPDATE production_image_receipts SET normalized_artifact_id=?, "
+                        "source_artifact_id=?,response_sha256=?,provider_request_id=? "
                         "WHERE request_id=?",
-                        (existing.identity.artifact_id, pending["request_id"]),
+                        (existing.identity.artifact_id, source.identity.artifact_id,
+                         source.sha256, source.provenance.request_id, pending["request_id"]),
                     )
                     db.commit()
                     ledger.transition(
@@ -299,22 +342,83 @@ def generate_assets(
         provider = provider or _provider(config)
         if provider.provider != "qwen_comfyui":
             raise ValueError("production illustrations require the existing Qwen adapter")
-        spec = image_spec(episode, requirement, visual_direction, prompt_version=image_prompt)
-        translated = provider.translate(spec)  # Local workflow loading only; never network.
-        profile: dict[str, Any] = {
-            "canonical": spec.model_dump(mode="json"),
-            "translated": translated.model_dump(mode="json"),
-        }
-        if image_prompt == IMAGE_PROMPT:
-            profile["normalization_version"] = WHITE_BACKGROUND_V2
-        fingerprint = sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
         with closing(store.database.connect()) as db:
             prior = db.execute(
                 "SELECT * FROM generation_requests WHERE episode_id=? "
                 "AND kind='visual_asset' AND slot_key=? ORDER BY rowid DESC LIMIT 1",
                 (episode.episode_id, slot),
             ).fetchone()
-        if prior and prior["input_fingerprint"] != fingerprint:
+            historical = db.execute(
+                "SELECT spec_json,provider_profile_json FROM production_image_receipts "
+                "WHERE request_id=?",
+                (prior["request_id"],),
+            ).fetchone() if prior else None
+            authorized_parent = db.execute(
+                "SELECT parent.* FROM image_retry_authorizations a "
+                "JOIN generation_requests parent ON parent.request_id=a.failed_request_id "
+                "WHERE a.new_request_id=? AND parent.request_id=? AND "
+                "(parent.status='failed' OR (parent.status='ambiguous' AND EXISTS "
+                "(SELECT 1 FROM image_native_crash_abandonments n "
+                "WHERE n.request_id=parent.request_id)))",
+                (prior["request_id"], prior["parent_request_id"]),
+            ).fetchone() if prior else None
+            authorized_retry = bool(
+                authorized_parent is not None and prior is not None
+                and prior["attempt"] == authorized_parent["attempt"] + 1
+                and all(prior[key] == authorized_parent[key] for key in (
+                    "episode_id", "run_id", "kind", "slot_key", "provider", "model",
+                    "input_fingerprint",
+                ))
+            )
+            if authorized_retry and historical is None:
+                # Definitive-failure grants keep their receipt on the immutable parent;
+                # native-crash grants also copy it to the successor. Neither is a new spec.
+                assert authorized_parent is not None
+                historical = db.execute(
+                    "SELECT spec_json,provider_profile_json FROM production_image_receipts "
+                    "WHERE request_id=?", (authorized_parent["request_id"],),
+                ).fetchone()
+            retained_plan_source = db.execute(
+                "SELECT 1 FROM artifact_versions v JOIN artifact_dependencies d "
+                "ON d.consumer_artifact_id=v.artifact_id WHERE v.episode_id=? "
+                "AND v.kind='visual_asset_source' AND v.slot_key=? "
+                "AND json_extract(v.provenance_json,'$.local_request_id')=? "
+                "AND d.input_artifact_id=? AND d.input_sha256=?",
+                (episode.episode_id, slot, prior["request_id"], plan_id, store.get(plan_id).sha256),
+            ).fetchone() if prior else None
+        effective_prompt = image_prompt
+        if (
+            image_prompt == IMAGE_PROMPT and prior and historical and (
+                retained_plan_source
+                and prior["status"] in {"remote_started", "ambiguous", "succeeded"}
+                or authorized_retry
+            )
+        ):
+            stored_spec = json.loads(historical["spec_json"])
+            stored_version = (
+                stored_spec.get("prompt_version") if isinstance(stored_spec, dict) else None
+            )
+            if stored_version in {LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT}:
+                # Retained sources need their original plan. An explicitly authorized
+                # successor instead retains its immutable parent's complete profile;
+                # Gate 1's native-crash recheck still runs at the actual POST boundary.
+                effective_prompt = stored_version
+        normalization_version = NORMALIZATION_VERSIONS[effective_prompt]
+        spec = image_spec(episode, requirement, visual_direction, prompt_version=effective_prompt)
+        translated = provider.translate(spec)  # Local workflow loading only; never network.
+        profile: dict[str, Any] = {
+            "canonical": spec.model_dump(mode="json"),
+            "translated": translated.model_dump(mode="json"),
+        }
+        if effective_prompt != LEGACY_IMAGE_PROMPT:
+            profile["normalization_version"] = normalization_version
+        if effective_prompt == IMAGE_PROMPT:
+            profile["visual_plan"] = {"artifact_id": plan_id, "sha256": store.get(plan_id).sha256}
+        fingerprint = sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
+        if prior and (
+            prior["input_fingerprint"] != fingerprint
+            or prior["provider"] != provider.provider or prior["model"] != provider.model
+        ):
             raise ValueError("image request inputs changed; explicit reconciliation required")
         request_id = (
             prior["request_id"]
@@ -328,6 +432,11 @@ def generate_assets(
                 fingerprint,
             ).request_id
         )
+        if authorized_retry and historical is not None and (
+            historical["spec_json"] != spec.canonical_json()
+            or json.loads(historical["provider_profile_json"]) != profile
+        ):
+            raise ImageStageBlocked("BLOCKED", request_id, "retained_request_profile_invalid")
         with closing(store.database.connect()) as db:
             db.execute(
                 "INSERT OR IGNORE INTO production_image_receipts "
@@ -338,6 +447,11 @@ def generate_assets(
             receipt = db.execute(
                 "SELECT * FROM production_image_receipts WHERE request_id=?", (request_id,)
             ).fetchone()
+            if (
+                receipt["spec_json"] != spec.canonical_json()
+                or json.loads(receipt["provider_profile_json"]) != profile
+            ):
+                raise ImageStageBlocked("BLOCKED", request_id, "retained_request_profile_invalid")
             # Recover ingest-before-receipt crashes from provenance, without another call.
             source = db.execute(
                 "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
@@ -345,18 +459,51 @@ def generate_assets(
                 "AND json_extract(provenance_json,'$.local_request_id')=?",
                 (episode.episode_id, slot, request_id),
             ).fetchone()
-        source_record = store.get(source[0]) if source else None
+            source_plan = db.execute(
+                "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                "AND input_artifact_id=? AND input_sha256=?",
+                (receipt["source_artifact_id"] or (source[0] if source else None),
+                 plan_id, store.get(plan_id).sha256),
+            ).fetchone()
+        source_record = store.get(receipt["source_artifact_id"] or source[0]) if (
+            receipt["source_artifact_id"] or source
+        ) else None
+        if source_record is not None and (
+            not source_plan
+            or source_record.identity.owner_scope != "episode"
+            or source_record.identity.owner_id != episode.episode_id
+            or source_record.identity.kind != "visual_asset_source"
+            or source_record.identity.slot_key != slot
+            or source_record.provenance.local_request_id != request_id
+            or source_record.provenance.prompt_version != effective_prompt
+            or source_record.provenance.provider != provider.provider
+            or source_record.provenance.model != provider.model
+            or prior and prior["provider_request_id"] not in {
+                None, source_record.provenance.request_id,
+            }
+            or receipt["provider_request_id"] not in {None, source_record.provenance.request_id}
+            or receipt["response_sha256"] not in {None, source_record.sha256}
+            or not store.inspect(source_record.identity.artifact_id).valid
+        ):
+            raise ImageStageBlocked("BLOCKED", request_id, "retained_source_invalid")
         if source_record is None:
-            if prior and prior["status"] != "prepared":
+            with closing(store.database.connect()) as db:
+                current = db.execute(
+                    "SELECT * FROM generation_requests WHERE request_id=?", (request_id,),
+                ).fetchone()
+            result = returned_image_response(config, current)
+            if result is None and prior and prior["status"] != "prepared":
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if prior["status"] in {"remote_started", "ambiguous"} else "FAILED",
                     request_id,
                     prior["error_kind"],
                 )
-            started = False
+            started = result is not None
 
             def remote_start() -> None:
                 nonlocal started
+                if started:
+                    raise ValueError("provider started the same request twice")
                 assert_owner()
                 from tovitunes.render.image_recovery import recheck_native_image_successor
 
@@ -370,20 +517,29 @@ def generate_assets(
                 ledger.transition(request_id, "remote_started")
                 started = True
 
+            if result is None and before_submit is not None:
+                # Startup failure must leave the prepared request reusable.
+                before_submit()
+                assert_owner()
             try:
-                result = (
-                    provider.generate(
-                        spec,
-                        (),
-                        on_remote_start=remote_start,
-                        on_task_accepted=lambda task: ledger.identity(request_id, task),
+                if result is None:
+                    result = (
+                        provider.generate(
+                            spec,
+                            (),
+                            on_remote_start=remote_start,
+                            on_task_accepted=lambda task: ledger.identity(request_id, task),
+                        )
+                        if isinstance(provider, QwenComfyUIImageProvider)
+                        else provider.generate(spec, (), on_remote_start=remote_start)
                     )
-                    if isinstance(provider, QwenComfyUIImageProvider)
-                    else provider.generate(spec, (), on_remote_start=remote_start)
-                )
                 if not started:
                     raise ValueError("image provider omitted remote-start tracking")
-                source_path = working / f"{slot}_source.png"
+                if current["status"] == "prepared":
+                    retain_image_response(config, store.database, request_id, result)
+                # Preserve immutable returned evidence even after lease loss. The existing
+                # ownership fence below still forbids admission, normalization and selection.
+                source_path = working / f"{request_id}_source.png"
                 source_path.write_bytes(result.image_bytes)
                 source_record = store.ingest(
                     source_path,
@@ -398,7 +554,7 @@ def generate_assets(
                         model=provider.model,
                         local_request_id=request_id,
                         request_id=result.provider_request_id,
-                        prompt_version=image_prompt,
+                        prompt_version=effective_prompt,
                         input_artifact_ids=(plan_id,),
                     ),
                     dependencies=[InputDependency(plan_id, "visual_plan")],
@@ -426,7 +582,7 @@ def generate_assets(
             except ImageStageBlocked:
                 raise
             except ExecutionOwnershipError:
-                if started:
+                if started and current["status"] == "prepared":
                     ledger.transition(request_id, "ambiguous")
                 raise
             except Exception as exc:
@@ -443,42 +599,44 @@ def generate_assets(
                             "response_metadata_json=? WHERE request_id=?",
                             (exc.provider_request_id, json.dumps(exc.diagnostics), request_id),
                         )
-                ledger.transition(
-                    request_id,
-                    "ambiguous" if started and outcome != "terminal_failure" else "failed",
-                    provider_request_id=exc.provider_request_id
-                    if isinstance(exc, ProviderFailure)
-                    else None,
-                    definitive_remote_failure=outcome == "terminal_failure",
-                    error_kind=category,
-                    error_reason="Image operation failed; see protected local provider evidence",
-                )
+                if current["status"] == "prepared":
+                    ledger.transition(
+                        request_id,
+                        "ambiguous" if started and outcome != "terminal_failure" else "failed",
+                        provider_request_id=exc.provider_request_id
+                        if isinstance(exc, ProviderFailure)
+                        else None,
+                        definitive_remote_failure=outcome == "terminal_failure",
+                        error_kind=category,
+                        error_reason="Image operation failed; inspect protected provider evidence",
+                    )
                 raise ImageStageBlocked(
                     "AMBIGUOUS" if started and outcome != "terminal_failure" else "FAILED",
                     request_id,
                     category,
                 ) from exc
         assert_owner()
-        store.admit_preview(source_record.identity.artifact_id)
         try:
             image = normalize(
                 _prepare_qwen_white_background(
                     store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png",
-                    version=WHITE_BACKGROUND_V2
-                    if image_prompt == IMAGE_PROMPT else WHITE_BACKGROUND_V1,
+                    version=normalization_version,
                 )
             )
         except (ValueError, OSError) as exc:
             blocked = ImageStageBlocked("BLOCKED", request_id, "image_processing_failure")
-            blocked.evidence["diagnostic"] = (
+            blocked.evidence["diagnostic"] = str(exc) + ". " + (
                 "Inspect the retained raw image, white padding and isolated backdrop artifacts. "
                 "A pale subject needs "
                 "a distinct continuous contour; an indistinguishable white subject cannot "
                 "be extracted safely. Any new source requires explicit operator approval."
             )
             blocked.evidence["source_artifact_id"] = source_record.identity.artifact_id
+            blocked.evidence["normalization_version"] = normalization_version
             raise blocked from exc
         image.save(path)
+        assert_owner()
+        store.admit_preview(source_record.identity.artifact_id)
         assert_owner()
         record = persist_file(
             store,
@@ -488,14 +646,17 @@ def generate_assets(
             path,
             (plan_id, source_record.identity.artifact_id),
         )
+        assert_owner()
         with closing(store.database.connect()) as db:
             db.execute(
                 "UPDATE production_image_receipts SET source_artifact_id=?,response_sha256=?,"
-                "normalized_artifact_id=? WHERE request_id=?",
+                "normalized_artifact_id=?,provider_request_id=COALESCE(provider_request_id,?) "
+                "WHERE request_id=?",
                 (
                     source_record.identity.artifact_id,
                     source_record.sha256,
                     record.identity.artifact_id,
+                    source_record.provenance.request_id,
                     request_id,
                 ),
             )
@@ -504,6 +665,7 @@ def generate_assets(
             ).fetchone()[0]
             db.commit()
         if state != "succeeded":
+            assert_owner()
             ledger.transition(
                 request_id,
                 "succeeded",

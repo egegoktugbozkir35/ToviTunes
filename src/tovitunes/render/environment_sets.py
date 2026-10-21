@@ -30,9 +30,12 @@ from tovitunes.domain.review import ApprovalDecision
 from tovitunes.domain.storyboard import ProductionModel
 from tovitunes.errors import ExecutionOwnershipError
 from tovitunes.persistence.db import Database
+from tovitunes.render.lesson_objects import art_direction
 
 PROMPT_VERSION = "environment_world_v1"
-EPISODE_PROMPT_VERSION = "environment_scene_v2"
+LEGACY_EPISODE_PROMPT_VERSION = "environment_scene_v2"
+EPISODE_PROMPT_VERSION = "environment_scene_v3"
+ENVIRONMENT_ALPHA_V2 = "environment_opaque_noise_v2"
 THEME = "preschool-world-v1"
 ROLES = ("meadow_wide", "lesson_garden", "play_path", "celebration_meadow")
 ROLE_BRIEFS = {
@@ -82,6 +85,7 @@ class EnvironmentPlate(ProductionModel):
     source_artifact_id: str | None = None
     source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     source_dimensions: tuple[int, int] | None = None
+    normalization_version: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class EnvironmentSet(ProductionModel):
@@ -205,11 +209,48 @@ def _request_fingerprint(spec: CanonicalImageSpec, generation_fingerprint: str) 
 def _spec(
     role: str, brand_id: str, attempt: int, reference: ReferenceImage | None,
     *, scene_brief: str | None = None,
+    prompt_version: str | None = None,
+    visual_direction: str = "",
 ) -> CanonicalImageSpec:
     if scene_brief is not None:
+        prompt_version = prompt_version or EPISODE_PROMPT_VERSION
+        if prompt_version not in {LEGACY_EPISODE_PROMPT_VERSION, EPISODE_PROMPT_VERSION}:
+            raise ValueError("unsupported scene environment prompt version")
+        if prompt_version == EPISODE_PROMPT_VERSION:
+            return CanonicalImageSpec(
+                benchmark_version="production_environment_v1",
+                prompt_version=prompt_version,
+                case_id=role,
+                attempt=attempt,
+                scene_brief=scene_brief,
+                teaching_check="Setting only; teaching subjects are composited separately.",
+                common_brief=art_direction(visual_direction) + (
+                    " Depict only the described setting as one continuous physical space "
+                    "from a single viewpoint. Match the episode's separately illustrated "
+                    "subjects in material, light and contour style. Keep the middle and "
+                    "lower stage quiet and open, with depth behind the focus plane."
+                ),
+                composition_brief=(
+                    "One portrait 9:16 scene filling the frame; consistent perspective "
+                    "and safe padding for gentle camera moves."
+                ),
+                reference_instructions=(
+                    "Style continuity only; depict this scene's setting."
+                    if reference else "Shared textual art direction only; no image reference."
+                ),
+                pack_revision_id="environment-only",
+                brand_revision_id=brand_id,
+                references=(reference,) if reference else (),
+                palette={},
+                identity_rules=("Characters and teaching subjects are separate render layers.",),
+                forbidden_changes=("No characters, prominent teaching subjects, text or logos.",),
+                negative_constraints=(
+                    "No collage, stacked views, panels, photorealism or franchise imitation.",
+                ),
+            )
         return CanonicalImageSpec(
             benchmark_version="production_environment_v1",
-            prompt_version=EPISODE_PROMPT_VERSION,
+            prompt_version=LEGACY_EPISODE_PROMPT_VERSION,
             case_id=role,
             attempt=attempt,
             scene_brief=scene_brief,
@@ -340,10 +381,18 @@ def plan(config: RuntimeConfig, *, theme: str = THEME, attempt: int = 1) -> dict
 def _validate_image(
     data: bytes, expected_source_dimensions: tuple[int, int] | None = None,
     *, allow_near_opaque_alpha: bool = False,
+    normalization_version: str | None = None,
 ) -> Image.Image:
+    if normalization_version not in {None, ENVIRONMENT_ALPHA_V2}:
+        raise ValueError("unknown environment normalization version")
     with Image.open(io.BytesIO(data)) as opened:
         opened.load()
         image = ImageOps.exif_transpose(opened)
+        if normalization_version == ENVIRONMENT_ALPHA_V2:
+            if getattr(opened, "n_frames", 1) != 1:
+                raise ValueError("environment source is animated; supply one static setting")
+            if "transparency" in image.info:
+                image = image.convert("RGBA")
         if expected_source_dimensions is not None and image.size != expected_source_dimensions:
             raise ValueError(
                 "provider image dimensions differ from the requested image contract: "
@@ -357,6 +406,11 @@ def _validate_image(
             raise ValueError("provider image is not portrait 9:16")
         if "A" in image.getbands():
             alpha = ImageStat.Stat(image.getchannel("A"))
+            if normalization_version == ENVIRONMENT_ALPHA_V2 and alpha.extrema[0][0] < 200:
+                raise ValueError(
+                    "environment source contains local transparency beyond bounded Qwen "
+                    "opacity noise; inspect retained source, no opaque plate was admitted"
+                )
             if (
                 alpha.mean[0] < 250 if allow_near_opaque_alpha
                 else alpha.extrema[0][0] != 255
@@ -449,6 +503,7 @@ def generate_set(
     episode_id: str | None = None,
     role_briefs: dict[str, str] | None = None,
     prompt_version: str | None = None,
+    visual_direction: str = "",
     assert_owner: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     if episode_id is not None and assert_owner is None:
@@ -467,10 +522,13 @@ def generate_set(
     prompt_version = prompt_version or (
         EPISODE_PROMPT_VERSION if role_briefs is not None else PROMPT_VERSION
     )
-    if prompt_version not in {PROMPT_VERSION, EPISODE_PROMPT_VERSION} or (
-        prompt_version == EPISODE_PROMPT_VERSION and role_briefs is None
+    scene_versions = {LEGACY_EPISODE_PROMPT_VERSION, EPISODE_PROMPT_VERSION}
+    if prompt_version not in {PROMPT_VERSION, *scene_versions} or (
+        prompt_version in scene_versions and role_briefs is None
     ):
         raise ValueError("unsupported environment prompt version or missing scene descriptions")
+    if visual_direction and prompt_version != EPISODE_PROMPT_VERSION:
+        raise ValueError("episode art direction requires environment_scene_v3")
     if isinstance(provider, GeminiImageProvider):
         provider.preflight()
     provider_name, model, location, image_size = _provider_settings(config, provider)
@@ -479,15 +537,16 @@ def generate_set(
         prompt_version=prompt_version,
     )
     if episode_id is not None or role_briefs is not None:
+        scene_identity: dict[str, object] = {
+            "generation": generation_fingerprint,
+            "episode_id": episode_id,
+            "role_briefs": role_briefs,
+        }
+        if prompt_version == EPISODE_PROMPT_VERSION:
+            scene_identity["visual_direction"] = visual_direction
+            scene_identity["normalization_version"] = ENVIRONMENT_ALPHA_V2
         generation_fingerprint = sha256(
-            json.dumps(
-                {
-                    "generation": generation_fingerprint,
-                    "episode_id": episode_id,
-                    "role_briefs": role_briefs,
-                },
-                sort_keys=True,
-            ).encode()
+            json.dumps(scene_identity, sort_keys=True).encode()
         ).hexdigest()
     set_id = _set_id(theme, generation_fingerprint)
     expected_source_dimensions = (
@@ -531,7 +590,9 @@ def generate_set(
             spec = _spec(
                 role, brand_id, attempt, reference,
                 scene_brief=role_briefs[role]
-                if role_briefs is not None and prompt_version == EPISODE_PROMPT_VERSION else None,
+                if role_briefs is not None and prompt_version in scene_versions else None,
+                prompt_version=prompt_version,
+                visual_direction=visual_direction,
             )
             if role_briefs is not None and prompt_version == PROMPT_VERSION:
                 spec = spec.model_copy(
@@ -607,6 +668,7 @@ def generate_set(
                                 source_artifact_id=stored_metadata.get("source_artifact_id"),
                                 source_sha256=stored_metadata.get("response_sha256"),
                                 source_dimensions=stored_metadata.get("source_dimensions"),
+                                normalization_version=stored_metadata.get("normalization_version"),
                             )
                         )
                         continue
@@ -692,7 +754,11 @@ def generate_set(
                 image = _validate_image(
                     result.image_bytes, expected_source_dimensions,
                     allow_near_opaque_alpha=isinstance(provider, QwenComfyUIImageProvider),
+                    normalization_version=ENVIRONMENT_ALPHA_V2
+                    if prompt_version == EPISODE_PROMPT_VERSION else None,
                 )
+                if prompt_version == EPISODE_PROMPT_VERSION:
+                    response_metadata["normalization_version"] = ENVIRONMENT_ALPHA_V2
                 response_metadata["normalized_dimensions"] = list(image.size)
                 response_metadata["technical_validation"] = "passed"
                 path = stage / f"{role}.png"
@@ -745,6 +811,8 @@ def generate_set(
                         ),
                         source_sha256=sha256(result.image_bytes).hexdigest(),
                         source_dimensions=source_dimensions,
+                        normalization_version=ENVIRONMENT_ALPHA_V2
+                        if prompt_version == EPISODE_PROMPT_VERSION else None,
                     )
                 )
             except ExecutionOwnershipError:
@@ -792,7 +860,7 @@ def generate_set(
             theme=theme,
             visual_theme=(
                 "rounded preschool 2D, soft tonal contours, warm even light"
-                if prompt_version == EPISODE_PROMPT_VERSION
+                if prompt_version in scene_versions
                 else EnvironmentSet.model_fields["visual_theme"].default
             ),
             plates=tuple(plates),

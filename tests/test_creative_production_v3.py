@@ -265,6 +265,241 @@ def retain_music(new):
     return request, inputs
 
 
+@pytest.mark.parametrize("service", ["ace_step", "comfyui"])
+def test_supervisor_shutdown_keeps_uncertain_native_tasks_available(new_case, monkeypatch, service):
+    from test_studio_v1 import gpu_fixture
+
+    new = new_case
+    manager, resident, events = gpu_fixture(new["config"], monkeypatch)
+    manager.start(service)
+    if service == "ace_step":
+        new["music_behavior"]["state"] = "pending"
+        result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+        assert result["status"] == "PENDING_PROVIDER"
+    else:
+        new["image_behavior"]["interrupt_after_accept"] = True
+        with pytest.raises(SystemExit):
+            new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    manager.close()
+    assert resident == {service} and events == [("start", service)]
+    assert manager.status(refresh=False)[service]["status"] == "failed"
+
+
+def test_native_stage_handoff_recovers_failed_startup_without_repeating_music(
+    new_case, monkeypatch,
+):
+    from test_studio_v1 import gpu_fixture
+
+    from tovitunes.orchestrator import build_orchestrator
+
+    new = new_case
+    manager, resident, events = gpu_fixture(new["config"], monkeypatch)
+    spawn = manager.spawn
+    failed = True
+
+    def flaky_start(command, **kwargs):
+        if failed and command[0] == "comfyui":
+            raise OSError("simulated executable failure")
+        return spawn(command, **kwargs)
+
+    monkeypatch.setattr(manager, "spawn", flaky_start)
+    monkeypatch.setattr("tovitunes.services.music.AceStepLocalProvider", lambda _: new["music"])
+    monkeypatch.setattr("tovitunes.render.episode_assets._provider", lambda _: new["image"])
+
+    def workflow():
+        return build_orchestrator(new["config"], creative_provider=DurableStructuredGenerator(
+            new["store"].database, new["fake"],
+        ))
+
+    result = workflow().resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["status"] == "BLOCKED" and result["current_stage"] == "VISUAL_ASSETS"
+    assert new["music_events"].count("/release_task") == 1 and not new["image_events"]
+    master = new["store"].selected("episode", new["episode"].episode_id, "audio_master", "main")
+    assert master is not None and not resident
+    with closing(new["store"].database.connect()) as db:
+        request = dict(db.execute(
+            "SELECT * FROM generation_requests WHERE kind='visual_asset'"
+        ).fetchone())
+    assert request["status"] == "prepared" and request["provider_request_id"] is None
+    failed = False
+    assert workflow().resume(new["episode"].external_key,
+                              ProductionTarget.RENDER)["target_complete"]
+    assert new["music_events"].count("/release_task") == 1
+    assert events == [("start", "ace_step"), ("stop", "ace_step"),
+                      ("start", "comfyui"), ("stop", "comfyui")]
+    assert not resident
+    assert new["store"].selected("episode", new["episode"].episode_id, "audio_master", "main")\
+        .identity.artifact_id == master.identity.artifact_id
+    with closing(new["store"].database.connect()) as db:
+        row = db.execute("SELECT * FROM generation_requests WHERE request_id=?",
+                          (request["request_id"],)).fetchone()
+        assert row["status"] == "succeeded"
+        assert row["input_fingerprint"] == request["input_fingerprint"]
+
+
+@pytest.mark.parametrize("checkpoint", [
+    "before_ingest", "after_ingest", "before_normalize", "after_selection", "ownership_loss",
+    "tampered",
+])
+def test_returned_illustration_survives_interrupted_ingestion_without_resubmission(
+    new_case, monkeypatch, checkpoint,
+):
+    from tovitunes.artifacts.store import AssetStore
+    from tovitunes.render import episode_assets
+
+    new = new_case
+    original_ingest = AssetStore.ingest
+    original_normalize = episode_assets.normalize
+    original_persist = episode_assets.persist_file
+    armed = True
+
+    def ingest(self, *args, **kwargs):
+        nonlocal armed
+        if armed and kwargs["kind"] == "visual_asset_source":
+            armed = False
+            if checkpoint in {"before_ingest", "tampered"}:
+                raise KeyboardInterrupt("returned before registration")
+            if checkpoint == "ownership_loss":
+                raise ExecutionOwnershipLostError("worker lost its lease after response")
+            result = original_ingest(self, *args, **kwargs)
+            if checkpoint == "after_ingest":
+                raise KeyboardInterrupt("registered before receipt")
+            return result
+        return original_ingest(self, *args, **kwargs)
+
+    def normalize(*args, **kwargs):
+        if checkpoint == "before_normalize":
+            raise KeyboardInterrupt("source receipt committed before normalization")
+        return original_normalize(*args, **kwargs)
+
+    def persist(store, episode, kind, *args, **kwargs):
+        record = original_persist(store, episode, kind, *args, **kwargs)
+        if checkpoint == "after_selection" and kind == "visual_asset":
+            raise KeyboardInterrupt("selected before normalized receipt")
+        return record
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AssetStore, "ingest", ingest)
+        patch.setattr(episode_assets, "normalize", normalize)
+        patch.setattr(episode_assets, "persist_file", persist)
+        with pytest.raises((KeyboardInterrupt, ExecutionOwnershipLostError)):
+            new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    with closing(new["store"].database.connect()) as db:
+        request = dict(db.execute(
+            "SELECT * FROM generation_requests WHERE kind='visual_asset' ORDER BY rowid LIMIT 1"
+        ).fetchone())
+    if checkpoint == "tampered":
+        from tovitunes.render.image_recovery import _response_path
+
+        path = _response_path(new["config"], request["request_id"])
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["input_fingerprint"] = "e" * 64
+        path.write_text(json.dumps(value), encoding="utf-8")
+        before = list(new["image_events"])
+        result = new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+        assert result["status"] == "BLOCKED"
+        assert new["image_events"] == before
+        return
+    if checkpoint == "after_ingest":
+        # Also prove legacy provenance recovery independently of the new response envelope.
+        from tovitunes.render.image_recovery import _response_path
+
+        _response_path(new["config"], request["request_id"]).unlink()
+    master = new["store"].selected("episode", new["episode"].episode_id, "audio_master", "main")
+    assert master is not None
+    plan = plan_continuation(new["config"], new["episode"].external_key,
+                             target=ProductionTarget.RENDER)
+    assert plan["allowed"] and plan["next_stage"] == "VISUAL_ASSETS"
+    # Reconstruct every application dependency from durable state, like a new worker.
+    restarted = connect_offline(new["config"], new["episode"], new["ids"], new["fake"],
+                                monkeypatch, new["red"], new["socket_connect"])
+    if checkpoint == "after_ingest":
+        # A second interruption must also recover selection-before-receipt, without an envelope.
+        def interrupt_again(store, episode, kind, *args, **kwargs):
+            record = original_persist(store, episode, kind, *args, **kwargs)
+            if kind == "visual_asset":
+                raise KeyboardInterrupt("second interruption after local selection")
+            return record
+
+        with monkeypatch.context() as patch:
+            patch.setattr(episode_assets, "persist_file", interrupt_again)
+            with pytest.raises(KeyboardInterrupt):
+                restarted["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    result = restarted["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    assert result["target_complete"], result.get("blocker")
+    assert restarted["music_events"] == []
+    assert restarted["image_events"].count("/prompt") == (
+        restarted["environment_events"].count("/prompt")
+    )
+    assert new["music_events"].count("/release_task") == 1
+    assert restarted["store"].selected(
+        "episode", new["episode"].episode_id, "audio_master", "main"
+    ).identity.artifact_id == master.identity.artifact_id
+    with closing(new["store"].database.connect()) as db:
+        retained = db.execute("SELECT * FROM generation_requests WHERE request_id=?",
+                              (request["request_id"],)).fetchone()
+        assert retained["status"] == "succeeded"
+        assert retained["provider_request_id"] == request["provider_request_id"]
+        assert db.execute("SELECT count(*) FROM generation_requests WHERE kind='visual_asset'")\
+            .fetchone()[0] == 1
+    before = list(restarted["image_events"])
+    assert restarted["flow"].resume(new["episode"].external_key,
+                                    ProductionTarget.RENDER)["target_complete"]
+    assert restarted["image_events"] == before
+
+
+@pytest.mark.parametrize("kind", ["environment_source_plate", "environment_plate"])
+def test_interrupted_environment_ingestion_reuses_sources_and_immutable_request(
+    new_case, monkeypatch, kind,
+):
+    from tovitunes.artifacts.store import AssetStore
+    from tovitunes.render.environment_recovery import reconcile_environment_source
+
+    new = new_case
+    original = AssetStore.ingest
+
+    def interrupt(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        if kwargs["kind"] == kind:
+            raise KeyboardInterrupt("environment returned before request receipt")
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AssetStore, "ingest", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            new["flow"].resume(new["episode"].external_key, ProductionTarget.RENDER)
+    with closing(new["store"].database.connect()) as db:
+        row = db.execute("SELECT * FROM environment_requests ORDER BY rowid LIMIT 1").fetchone()
+        before = tuple(row)
+        source = db.execute(
+            "SELECT artifact_id FROM artifact_versions WHERE kind='environment_source_plate' "
+            "AND json_extract(provenance_json,'$.local_request_id')=?", (row["request_id"],),
+        ).fetchone()[0]
+    posts = new["environment_events"].count("/prompt")
+    if kind == "environment_plate":
+        plan = plan_continuation(new["config"], new["episode"].external_key,
+                                 target=ProductionTarget.RENDER)
+        assert plan["allowed"]  # Retained bytes are a local recovery, not a new provider call.
+        assert new["flow"].resume(new["episode"].external_key,
+                                  ProductionTarget.RENDER)["target_complete"]
+    recovered = reconcile_environment_source(
+        new["config"], row["request_id"], new["store"].path_for(source),
+        actor="offline-operator", reason="returned image survived worker exit",
+    )
+    assert reconcile_environment_source(
+        new["config"], row["request_id"], new["store"].path_for(source),
+        actor="offline-operator", reason="repeat recovery",
+    ) == recovered
+    assert new["flow"].resume(new["episode"].external_key,
+                              ProductionTarget.RENDER)["target_complete"]
+    assert new["environment_events"].count("/prompt") == posts + 3
+    with closing(new["store"].database.connect()) as db:
+        assert tuple(db.execute("SELECT * FROM environment_requests WHERE request_id=?",
+                                 (row["request_id"],)).fetchone()) == before
+        assert db.execute("SELECT count(*) FROM environment_source_reconciliations")\
+            .fetchone()[0] == 1
+
+
 def test_definitive_image_retry_preserves_old_request_and_renders(new_case):
     from tovitunes.persistence.requests import RequestLedger
     from tovitunes.render.image_recovery import authorize_image_retry
@@ -415,6 +650,23 @@ def native_grant(case, monkeypatch, *, confirmed=True, actor="operator"):
             reason="abandon evidenced native crash, accept one distinct successor",
             native_crash_evidence=path,
         )
+
+
+def test_native_crash_parent_and_accepted_task_identity_cannot_be_rewritten(
+    native_crash_case, monkeypatch,
+):
+    from tovitunes.persistence.requests import InvalidRequestTransition, RequestLedger
+
+    new, original, _, _, _ = native_crash_case
+    ledger = RequestLedger(new["store"].database)
+    with pytest.raises(InvalidRequestTransition, match="remote identity"):
+        ledger.transition(original["request_id"], "succeeded", provider_request_id="replacement")
+    native_grant(native_crash_case, monkeypatch)
+    with pytest.raises(InvalidRequestTransition, match="immutable"):
+        ledger.transition(original["request_id"], "succeeded")
+    with closing(new["store"].database.connect()) as db:
+        assert dict(db.execute("SELECT * FROM generation_requests WHERE request_id=?",
+                                (original["request_id"],)).fetchone()) == original
 
 
 def test_native_crash_successor_is_durable_idempotent_and_reuses_music(

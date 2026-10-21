@@ -232,3 +232,60 @@ def test_immutable_db_rows_and_blocked_rights(tmp_path: Path, catalog: BrandCata
     with pytest.raises(ValueError, match="blocked"):
         store.selected("episode", episode.episode_id, "image", "scene_1")
 
+
+
+def test_truncated_image_with_valid_signature_is_never_registered(tmp_path, catalog):
+    from PIL import Image
+
+    store, db, episode = _setup(tmp_path, catalog)
+    source = tmp_path / 'truncated.png'
+    Image.new('RGB', (128, 128), '#eeeeee').save(source)
+    original = source.read_bytes()[:48]
+    source.write_bytes(original)
+    with pytest.raises(InvalidMedia, match='fully decoded'):
+        store.ingest(
+            source, owner_scope='episode', owner_id=episode.episode_id,
+            kind='visual_asset_source', slot_key='cup',
+            provenance=Provenance.manual('test', 'test://truncated'),
+        )
+    assert source.read_bytes() == original
+    with db.connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM artifact_versions').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM artifact_selections').fetchone()[0] == 0
+
+
+def test_animated_image_cannot_be_admitted_as_static_art(tmp_path):
+    from PIL import Image
+
+    from tovitunes.artifacts.media import validate_media
+
+    path = tmp_path / 'animated.png'
+    frames = [Image.new('RGB', (16, 16), color) for color in ('red', 'blue')]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100, loop=0)
+    with pytest.raises(InvalidMedia, match='animated image is unsupported'):
+        validate_media(path)
+
+
+def test_invalid_provider_artwork_remains_raw_quarantine_evidence(tmp_path, catalog):
+    from PIL import Image
+
+    store, db, episode = _setup(tmp_path, catalog)
+    store = AssetStore(store.root, db, generated_source_roots=[tmp_path])
+    source = tmp_path / 'broken.png'
+    Image.new('RGB', (64, 64), 'white').save(source)
+    raw = source.read_bytes()[:48]
+    source.write_bytes(raw)
+    with pytest.raises(InvalidMedia, match='raw provider bytes retained at quarantine/'):
+        store.ingest(
+            source, owner_scope='episode', owner_id=episode.episode_id,
+            kind='visual_asset_source', slot_key='cup',
+            provenance=Provenance(
+                source_kind='provider', provider='offline-fixture', model='fixture',
+                request_id='fixture-request', acquired_at=datetime.now(UTC),
+            ),
+        )
+    retained = list((store.root / 'quarantine').iterdir())
+    assert len(retained) == 1 and retained[0].read_bytes() == raw
+    with db.connect() as conn:
+        assert conn.execute('SELECT COUNT(*) FROM artifact_versions').fetchone()[0] == 0
+        assert conn.execute('SELECT COUNT(*) FROM artifact_selections').fetchone()[0] == 0

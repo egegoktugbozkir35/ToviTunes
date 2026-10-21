@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from PIL import Image
+
 
 class InvalidMedia(ValueError):
     pass
@@ -44,6 +46,22 @@ def validate_media(path: Path) -> tuple[str, str, dict[str, str | int]]:
         raise InvalidMedia("invalid MP3 signature")
     if suffix == ".mp4" and header[4:8] != b"ftyp":
         raise InvalidMedia("invalid MP4 signature")
+    facts: dict[str, str | int] = {"size": size, "signature_check": "passed"}
+    if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+        # A valid header alone can admit a truncated, unrenderable provider result.
+        # Verify the container, then reopen for a full pixel decode (verify cannot
+        # be followed by load on the same Pillow object). Never rewrite the source.
+        try:
+            with Image.open(path) as image:
+                image.verify()
+            with Image.open(path) as image:
+                image.load()
+                frames = getattr(image, "n_frames", 1)
+                facts.update(width=image.width, height=image.height, image_decode="passed")
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise InvalidMedia("image cannot be fully decoded; retain and inspect source") from exc
+        if frames != 1:
+            raise InvalidMedia("animated image is unsupported for a static art asset")
     if suffix == ".json":
         try:
             json.loads(path.read_text(encoding="utf-8"))
@@ -54,5 +72,5 @@ def validate_media(path: Path) -> tuple[str, str, dict[str, str | int]]:
             path.read_text(encoding="utf-8")
         except UnicodeError as exc:
             raise InvalidMedia("invalid UTF-8 text") from exc
-    return mime, suffix, {"size": size, "signature_check": "passed"}
+    return mime, suffix, facts
 

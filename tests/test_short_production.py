@@ -399,6 +399,7 @@ def connect_offline(config, episode, ids, fake, monkeypatch, red=None, socket_co
         plan=plan,
         store=creative.store,
         music=music,
+        image=qwen,
         music_events=music_events,
         music_behavior=music_behavior,
         image_events=image_events,

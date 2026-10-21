@@ -26,10 +26,12 @@ from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
 from tovitunes.errors import ProductionStop
 from tovitunes.render.environment_sets import (
     EPISODE_PROMPT_VERSION,
-    EnvironmentSet,
+    LEGACY_EPISODE_PROMPT_VERSION,
+    PROMPT_VERSION,
     generate_set,
     selected_set,
 )
+from tovitunes.render.visual_evidence import validate_environment_assets
 from tovitunes.services.context import StageContext
 
 
@@ -210,9 +212,22 @@ class VisualService(StageContext):
             payload = self.store.read_json(selected.identity.artifact_id)
             if not isinstance(payload, dict) or payload["visual_plan_artifact_id"] != plan_id:
                 raise ValueError("episode environment binding differs from current visual plan")
+            if payload.get("visual_plan_sha256", self.store.get(plan_id).sha256) != (
+                self.store.get(plan_id).sha256
+            ):
+                raise ValueError("episode environment visual plan bytes differ")
             aid = str(payload["environment_set_artifact_id"])
+            shared_binding = payload.get("ownership") == "shared_selected"
         else:
+            role_briefs: dict[str, str] = {
+                env.role: env.description for env in visual.environments
+            }
+            environment_prompt = EPISODE_PROMPT_VERSION
             with closing(self.database.connect()) as db:
+                retained_requests = db.execute(
+                    "SELECT role,spec_json FROM environment_requests WHERE episode_id=?",
+                    (episode.episode_id,),
+                ).fetchall()
                 unresolved = db.execute(
                     "SELECT status,request_id FROM environment_requests "
                     "WHERE episode_id=? "
@@ -221,6 +236,18 @@ class VisualService(StageContext):
                     "environment_source_reconciliations) ORDER BY rowid LIMIT 1",
                     (episode.episode_id,),
                 ).fetchone()
+            if retained_requests:
+                specs = [(row["role"], json.loads(row["spec_json"])) for row in retained_requests]
+                versions = {spec["prompt_version"] for _, spec in specs}
+                if len(versions) != 1 or not versions <= {
+                    PROMPT_VERSION, LEGACY_EPISODE_PROMPT_VERSION, EPISODE_PROMPT_VERSION,
+                } or any(
+                    spec["scene_brief"] != role_briefs.get(role) for role, spec in specs
+                ):
+                    raise ValueError(
+                        "retained environment differs from the original planned setting"
+                    )
+                environment_prompt = versions.pop()
             if unresolved:
                 raise ProductionStop(
                     "AMBIGUOUS"
@@ -255,8 +282,10 @@ class VisualService(StageContext):
                         self.config,
                         confirmed=True,
                         episode_id=episode.episode_id,
-                        role_briefs={env.role: env.description for env in visual.environments},
-                        prompt_version=EPISODE_PROMPT_VERSION,
+                        role_briefs=role_briefs,
+                        prompt_version=environment_prompt,
+                        visual_direction=self.catalog.creative_bible.visual_direction
+                        if environment_prompt == EPISODE_PROMPT_VERSION else "",
                         assert_owner=self.ownership.assert_owned,
                     )
                 except ProviderFailure as exc:
@@ -280,7 +309,11 @@ class VisualService(StageContext):
                     ) from exc
                 aid = str(result["manifest_artifact_id"])
             self.ownership.assert_owned()
-            environment = EnvironmentSet.model_validate(self.store.read_json(aid))
+            shared_binding = shared is not None
+            environment = validate_environment_assets(
+                self.store, aid, episode.episode_id, shared=shared_binding,
+                role_briefs={env.role: env.description for env in visual.environments},
+            )
             for plate in environment.plates:
                 if plate.source_artifact_id:
                     self.ownership.assert_owned()
@@ -294,16 +327,16 @@ class VisualService(StageContext):
                 "episode_environment",
                 {
                     "visual_plan_artifact_id": plan_id,
+                    "visual_plan_sha256": self.store.get(plan_id).sha256,
                     "environment_set_artifact_id": aid,
                     "ownership": "shared_selected" if shared else "episode",
                 },
                 (plan_id, aid),
             )
-        environment = EnvironmentSet.model_validate(self.store.read_json(aid))
+        environment = validate_environment_assets(
+            self.store, aid, episode.episode_id, shared=shared_binding,
+            role_briefs={env.role: env.description for env in visual.environments},
+        )
         if environment.theme != visual.world_contract:
             raise ValueError("environment world differs from admitted visual plan")
-        for plate in environment.plates:
-            record = self.store.get(plate.artifact_id)
-            if record.sha256 != plate.sha256 or not self.store.inspect(plate.artifact_id).valid:
-                raise ValueError("environment plate failed immutable validation")
         return aid
