@@ -7,6 +7,8 @@ from hashlib import sha256
 
 import pytest
 from PIL import Image, ImageDraw
+from test_creative_production_v3 import case as case
+from test_creative_production_v3 import new_case as new_case
 from test_lesson_objects import FakeReviewedQwen
 from test_visual_story import FakeProvider
 from test_visual_story import runtime as runtime
@@ -752,3 +754,62 @@ def test_retained_source_refuses_contradictory_request_receipt(
         generate_assets(*args, assert_owner=lambda: None)
     assert blocked.value.evidence['error_kind'] == 'retained_request_profile_invalid'
     assert provider.calls == ['cup']
+
+
+def _historical_first_request(monkeypatch, version):
+    """Create old evidence, then exercise the production default on every resume."""
+    from tovitunes import orchestrator
+
+    original = orchestrator.generate_assets
+    first = True
+
+    def generate(*args, **kwargs):
+        nonlocal first
+        if first:
+            first = False
+            kwargs['image_prompt'] = version
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(orchestrator, 'generate_assets', generate)
+
+
+@pytest.mark.parametrize('version', [LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT])
+def test_historical_native_crash_successor_keeps_original_contract(
+    new_case, tmp_path, monkeypatch, version,
+):
+    from test_creative_production_v3 import (
+        native_crash_case,
+        test_native_crash_successor_is_durable_idempotent_and_reuses_music,
+    )
+
+    _historical_first_request(monkeypatch, version)
+    retained = native_crash_case.__wrapped__(new_case, tmp_path)
+    # Run every original Gate 1 assertion unchanged against the historical contract.
+    test_native_crash_successor_is_durable_idempotent_and_reuses_music(retained, monkeypatch)
+
+
+@pytest.mark.parametrize('version', [LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT])
+@pytest.mark.parametrize('changed', ['queue', 'receipt'])
+def test_historical_native_crash_successor_still_rechecks_before_post(
+    new_case, tmp_path, monkeypatch, version, changed,
+):
+    from test_creative_production_v3 import (
+        native_crash_case,
+        test_native_crash_successor_rechecks_before_post,
+    )
+
+    _historical_first_request(monkeypatch, version)
+    retained = native_crash_case.__wrapped__(new_case, tmp_path)
+    test_native_crash_successor_rechecks_before_post(retained, monkeypatch, changed)
+
+
+@pytest.mark.parametrize('version', [LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT])
+def test_historical_definitive_failure_retry_keeps_original_contract(
+    new_case, monkeypatch, version,
+):
+    from test_creative_production_v3 import (
+        test_definitive_image_retry_preserves_old_request_and_renders,
+    )
+
+    _historical_first_request(monkeypatch, version)
+    test_definitive_image_retry_preserves_old_request_and_renders(new_case)

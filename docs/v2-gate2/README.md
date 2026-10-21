@@ -60,6 +60,15 @@ and legacy prepared requests cannot be silently converted into a new request.
 V2 illustrations retain exterior V1; V3 illustrations retain exterior V2; new V4
 illustrations use exterior V3. No old production data is rewritten or reselected.
 
+An explicit immutable Gate 1 retry authorization also retains its parent's V2/V3
+contract, including a definitive-failure retry or an exceptionally authorized native
+crash successor. Parent/successor identity, attempt and complete stored profile must
+agree. This does not grant a retry or alter the parent; the original ownership,
+returned-evidence and fresh native-crash rechecks still run at the submission
+boundary. Ungranted legacy prepared/unknown requests remain blocked. Regressions
+exercise the original Gate 1 assertions with old V2/V3 requests, including stale
+queue/receipt rejection before any new POST.
+
 The original Gate 1 flow still retains raw returned bytes before ingestion and the
 lease fence, preserving evidence even after ownership loss. Normalization, preview
 admission, selection and final receipt changes remain fenced. `before_submit`

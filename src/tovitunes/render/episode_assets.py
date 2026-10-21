@@ -349,9 +349,35 @@ def generate_assets(
                 (episode.episode_id, slot),
             ).fetchone()
             historical = db.execute(
-                "SELECT spec_json FROM production_image_receipts WHERE request_id=?",
+                "SELECT spec_json,provider_profile_json FROM production_image_receipts "
+                "WHERE request_id=?",
                 (prior["request_id"],),
             ).fetchone() if prior else None
+            authorized_parent = db.execute(
+                "SELECT parent.* FROM image_retry_authorizations a "
+                "JOIN generation_requests parent ON parent.request_id=a.failed_request_id "
+                "WHERE a.new_request_id=? AND parent.request_id=? AND "
+                "(parent.status='failed' OR (parent.status='ambiguous' AND EXISTS "
+                "(SELECT 1 FROM image_native_crash_abandonments n "
+                "WHERE n.request_id=parent.request_id)))",
+                (prior["request_id"], prior["parent_request_id"]),
+            ).fetchone() if prior else None
+            authorized_retry = bool(
+                authorized_parent is not None and prior is not None
+                and prior["attempt"] == authorized_parent["attempt"] + 1
+                and all(prior[key] == authorized_parent[key] for key in (
+                    "episode_id", "run_id", "kind", "slot_key", "provider", "model",
+                    "input_fingerprint",
+                ))
+            )
+            if authorized_retry and historical is None:
+                # Definitive-failure grants keep their receipt on the immutable parent;
+                # native-crash grants also copy it to the successor. Neither is a new spec.
+                assert authorized_parent is not None
+                historical = db.execute(
+                    "SELECT spec_json,provider_profile_json FROM production_image_receipts "
+                    "WHERE request_id=?", (authorized_parent["request_id"],),
+                ).fetchone()
             retained_plan_source = db.execute(
                 "SELECT 1 FROM artifact_versions v JOIN artifact_dependencies d "
                 "ON d.consumer_artifact_id=v.artifact_id WHERE v.episode_id=? "
@@ -362,16 +388,20 @@ def generate_assets(
             ).fetchone() if prior else None
         effective_prompt = image_prompt
         if (
-            image_prompt == IMAGE_PROMPT and prior and historical and retained_plan_source
-            and prior["status"] in {"remote_started", "ambiguous", "succeeded"}
+            image_prompt == IMAGE_PROMPT and prior and historical and (
+                retained_plan_source
+                and prior["status"] in {"remote_started", "ambiguous", "succeeded"}
+                or authorized_retry
+            )
         ):
             stored_spec = json.loads(historical["spec_json"])
             stored_version = (
                 stored_spec.get("prompt_version") if isinstance(stored_spec, dict) else None
             )
             if stored_version in {LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT}:
-                # Reuse only a source bound to this exact original plan. The full
-                # old profile is recomputed below; no changed input is grandfathered.
+                # Retained sources need their original plan. An explicitly authorized
+                # successor instead retains its immutable parent's complete profile;
+                # Gate 1's native-crash recheck still runs at the actual POST boundary.
                 effective_prompt = stored_version
         normalization_version = NORMALIZATION_VERSIONS[effective_prompt]
         spec = image_spec(episode, requirement, visual_direction, prompt_version=effective_prompt)
@@ -402,6 +432,11 @@ def generate_assets(
                 fingerprint,
             ).request_id
         )
+        if authorized_retry and historical is not None and (
+            historical["spec_json"] != spec.canonical_json()
+            or json.loads(historical["provider_profile_json"]) != profile
+        ):
+            raise ImageStageBlocked("BLOCKED", request_id, "retained_request_profile_invalid")
         with closing(store.database.connect()) as db:
             db.execute(
                 "INSERT OR IGNORE INTO production_image_receipts "
