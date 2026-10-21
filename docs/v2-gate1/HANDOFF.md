@@ -4,10 +4,14 @@ Accepted Gate 0 base: `ea3495ae44f2f21018e06db19c90ab49f94c70ca`.
 Gate 1 branch: `codex/v2-gate1-reliability`.
 
 Exact implementation / shared-file handoff candidate:
-`971140a28b3c2ca8eb74d8aa1e42b854640d058b`.
-`episode_assets.py` has not changed after this commit. The supplemental supervisor
-ownership/readiness correction and its Studio regression are in
-`7659510428f6b9c4a7f77c4506b595fa569de9bf`; include that commit as well.
+`e4431a1a5daac60fe578c73551aa3d0b8a8ec966`.
+This is the latest change to `episode_assets.py`, the supervisor and its Studio
+regression. It includes the original implementation
+`971140a28b3c2ca8eb74d8aa1e42b854640d058b` and ownership/readiness correction
+`7659510428f6b9c4a7f77c4506b595fa569de9bf` by ancestry. The earlier candidate is
+superseded: the unchanged lost-lease regression required raw evidence registration
+before the admission fence; the final correction preserves that behavior. The
+Windows bootstrap also uses the base interpreter to avoid an early venv child.
 
 **Release rule:** Gate 2 waits for the final Gate 1 delivery report to release this
 candidate after full offline and exact-head hosted Windows checks. The final
@@ -36,8 +40,8 @@ Gate 2's adapter, workflow, prompts and artwork-processing modules, including
 `lesson_objects.py`, `artifacts/store.py` and `artifacts/media.py`, were not edited.
 No dependency manifests, fixtures, character assets or Gate 0 records changed.
 
-Incorporate the branch through `7659510428f6b9c4a7f77c4506b595fa569de9bf` by verified
-ancestry, or cherry-pick both implementation commits in order, never by uncommitted
+Incorporate the branch through `e4431a1a5daac60fe578c73551aa3d0b8a8ec966` by verified
+ancestry, or cherry-pick all three implementation commits above in order, never by uncommitted
 file copying. The handoff includes the interacting supervisor/ledger/continuation changes;
 do not copy `episode_assets.py` alone. Preserve the successful-source receipt's
 native identity and dependencies when applying Gate 2's normalization changes.

@@ -49,5 +49,10 @@ The final report pins the delivery head, exact Windows CI run and handoff releas
 The final ownership refresh also clears stale `owned=true` after a service exits;
 its focused lifecycle/CPU-sentinel checks pass at the supplemental commit recorded
 in the handoff.
+The first full local and hosted runs each found one lost-lease regression (1,205
+passed, one failed). The final correction restores immutable raw-source registration
+before the ownership fence while keeping admission/normalization/selection fenced.
+The original regression is unchanged and passes; final complete checks must cover
+the corrected head before the handoff is released.
 No episode was repaired, resumed or rendered in authoritative production data.
 No PR is merged, no media is published, and no later gate is started.

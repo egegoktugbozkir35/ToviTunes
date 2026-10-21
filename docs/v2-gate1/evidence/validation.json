@@ -72,6 +72,21 @@
       "passed": 16,
       "deselected": 24,
       "head": "7659510428f6b9c4a7f77c4506b595fa569de9bf"
+    },
+    {
+      "name": "Original lost-lease regression after raw-evidence fence correction",
+      "result": "PASS",
+      "passed": 1,
+      "seconds": 4.21,
+      "head": "e4431a1a5daac60fe578c73551aa3d0b8a8ec966"
+    },
+    {
+      "name": "Delayed Windows bootstrap ownership and lifecycle matrix",
+      "result": "PASS",
+      "passed": 16,
+      "deselected": 24,
+      "seconds": 3.18,
+      "head": "e4431a1a5daac60fe578c73551aa3d0b8a8ec966"
     }
   ],
   "counts_note": "Focused commands overlap; counts are per invocation and must not be added as unique coverage.",
@@ -81,5 +96,15 @@
   "gpu_inference_services_started": 0,
   "cpu_only_process_sentinels": true,
   "historical_fixtures_disabled": 0,
-  "changed_model_or_workflow_parameters": false
+  "changed_model_or_workflow_parameters": false,
+  "first_complete_candidate": {
+    "head": "770600489963dff0f8ceae19c025c4b888e9556f",
+    "hosted_run": "https://github.com/egegoktugbozkir35/ToviTunes/actions/runs/39468611359",
+    "result": "FAIL",
+    "passed": 1205,
+    "failed": 1,
+    "regression": "test_lost_lease_during_image_stage_prevents_further_submissions_and_selection",
+    "correction": "e4431a1a5daac60fe578c73551aa3d0b8a8ec966",
+    "test_unchanged": true
+  }
 }

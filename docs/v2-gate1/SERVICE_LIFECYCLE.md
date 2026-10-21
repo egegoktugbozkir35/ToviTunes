@@ -29,7 +29,10 @@
 
 No PID discovery or process-name matching grants ownership. On Windows an inert
 Python bootstrap is assigned to a private OS Job Object before it may launch the
-service. Descendants inherit that process boundary; shutdown uses its retained
+service. The bootstrap runs in the base interpreter because a Windows venv
+redirector could create an early child before assignment. A delayed-assignment
+CPU regression verifies the actual service child exits and an unrelated sentinel
+survives. Descendants inherit that process boundary; shutdown uses its retained
 handle, not `taskkill` or a PID lookup. The unrelated sentinel regression verifies
 isolation. This OS process grouping is not a production/job ledger. It adds no
 scheduler and owns no request state. A restarted application has no old handles:
@@ -78,7 +81,8 @@ On Resume, the system validates the envelope or discovers an already ingested ra
 artifact by exact request provenance. It then runs the existing normalization and
 admission code locally. A selected-before-receipt interruption repairs the same
 source/native/normalized receipt and dependency graph. Lease loss may retain
-returned evidence, but only a valid lease may admit it. Corruption or identity
+returned evidence, including registering the immutable raw source and its receipt,
+but only a valid lease may admit, normalize or select it. Corruption or identity
 mismatch blocks continuation without another provider submission.
 
 Environment recovery uses the existing immutable reconciliation table. A retained,
