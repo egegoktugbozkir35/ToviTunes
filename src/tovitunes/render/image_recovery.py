@@ -1,7 +1,10 @@
 """Explicit new image identities; native crashes require exceptional, retained evidence."""
 
+import base64
 import json
+import os
 import sqlite3
+import tempfile
 import time
 from contextlib import closing
 from datetime import UTC, datetime
@@ -14,9 +17,102 @@ from uuid import uuid4
 
 import httpx
 
+from tovitunes.benchmark.providers import ProviderResult
 from tovitunes.config import RuntimeConfig
 from tovitunes.execution import ProductionExecutionOwnership
 from tovitunes.persistence.db import Database
+
+
+def _response_path(config: RuntimeConfig, request_id: str) -> Path:
+    # Ledger identities are UUIDs; never use an unchecked identifier as a path.
+    from uuid import UUID
+
+    return config.data_root / ".short-production/returned-images" / f"{UUID(request_id)}.json"
+
+
+def returned_image_response(
+    config: RuntimeConfig, row: sqlite3.Row,
+) -> ProviderResult | None:
+    """Read a complete returned response, without contacting a provider or mutating state."""
+    path = _response_path(config, row["request_id"])
+    if not path.exists():
+        return None
+    value = json.loads(path.read_text(encoding="utf-8"))
+    data = base64.b64decode(value["image_base64"], validate=True)
+    if (
+        value["request_id"] != row["request_id"]
+        or value["input_fingerprint"] != row["input_fingerprint"]
+        or value["provider"] != row["provider"]
+        or value["model"] != row["model"]
+        or row["status"] not in {"remote_started", "ambiguous", "succeeded"}
+        or not value["provider_request_id"]
+        or row["provider_request_id"] not in {None, value["provider_request_id"]}
+        or sha256(data).hexdigest() != value["sha256"]
+        or value["mime_type"] != "image/png"
+    ):
+        raise ValueError("retained image response differs from its immutable request")
+    return ProviderResult(
+        image_bytes=data, mime_type=value["mime_type"],
+        provider_request_id=value["provider_request_id"], response_metadata=value["metadata"],
+    )
+
+
+def retain_image_response(
+    config: RuntimeConfig, database: Database, request_id: str, result: ProviderResult,
+) -> None:
+    """Fsync and atomically retain bytes plus identity before fallible image ingestion.
+
+    This is response evidence for the existing ledger, never a submission queue. It
+    is safe to retain a returned result after lease loss; admission still needs the lease.
+    """
+    with closing(database.connect()) as db:
+        row = db.execute(
+            "SELECT * FROM generation_requests WHERE request_id=?", (request_id,),
+        ).fetchone()
+    if row is None or row["status"] != "remote_started":
+        raise ValueError("image response requires an existing remote-start receipt")
+    if row["provider_request_id"] not in {None, result.provider_request_id}:
+        raise ValueError("returned image task identity differs")
+    prior = returned_image_response(config, row)
+    if prior is not None:
+        if prior.image_bytes != result.image_bytes or (
+            prior.provider_request_id != result.provider_request_id
+        ):
+            raise ValueError("cannot replace retained image response")
+        return
+    value = {
+        "request_id": request_id, "input_fingerprint": row["input_fingerprint"],
+        "provider": row["provider"], "model": row["model"],
+        "provider_request_id": result.provider_request_id, "mime_type": result.mime_type,
+        "sha256": sha256(result.image_bytes).hexdigest(),
+        "image_base64": base64.b64encode(result.image_bytes).decode("ascii"),
+        "metadata": {key: result.response_metadata[key] for key in (
+            "seed", "workflow_sha256", "width", "height", "steps"
+        ) if key in result.response_metadata},
+    }
+    path = _response_path(config, request_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         delete=False) as pending:
+            pending_path = Path(pending.name)
+            json.dump(value, pending, sort_keys=True)
+            pending.flush()
+            os.fsync(pending.fileno())
+        os.replace(pending_path, path)
+    finally:
+        if "pending_path" in locals():
+            pending_path.unlink(missing_ok=True)
+
+
+def has_returned_image(config: RuntimeConfig, db: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    """Recognize ingest-before-receipt and return-before-ingest interruptions read-only."""
+    source = db.execute(
+        "SELECT 1 FROM artifact_versions WHERE episode_id=? AND kind='visual_asset_source' "
+        "AND slot_key=? AND json_extract(provenance_json,'$.local_request_id')=?",
+        (row["episode_id"], row["slot_key"], row["request_id"]),
+    ).fetchone()
+    return bool(source) or returned_image_response(config, row) is not None
 
 
 def authorize_image_retry(
@@ -57,6 +153,8 @@ def authorize_image_retry(
                     "provider_effects": 0,
                 }
             source = _retained_image_checks(db, old, request_id)
+            if returned_image_response(config, old) is not None:
+                raise ValueError("image already has a returned response; recover it")
             evidence = None
             if native_crash_evidence is not None:
                 if source is None:
@@ -173,6 +271,8 @@ def recheck_native_image_successor(
         ):
             raise ValueError("native crash successor identity or authorization evidence differs")
         _retained_image_checks(db, old, request_id)
+        if returned_image_response(config, old) is not None:
+            raise ValueError("original image has a returned response; recover it")
     evidence = json.loads(grant["evidence_json"])
     _native_crash_checks(config, old, evidence)
 

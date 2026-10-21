@@ -1,0 +1,38 @@
+{
+  "method": "Read-only nvidia-smi and Win32_OperatingSystem; no service start or generation",
+  "initial_observation": {
+    "observation_date": "2026-10-20",
+    "timezone": "Europe/Istanbul",
+    "timestamp_precision": "date",
+    "gpu_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "total_mib": 8188,
+    "used_mib": 1009,
+    "free_mib": 6940,
+    "driver_version": "617.42",
+    "notes": "No Python compute process appeared in the initial nvidia-smi process list."
+  },
+  "later_observation": {
+    "observed_at_utc": "2026-10-20T17:40:01.7275157Z",
+    "method": "Read-only nvidia-smi and Win32_OperatingSystem; no service start or generation",
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+      "memory.total [MiB]": "8188",
+      "memory.used [MiB]": "4984",
+      "memory.free [MiB]": "2965",
+      "driver_version": "617.42"
+    },
+    "ram_total_kib": 33251128,
+    "ram_free_kib": 13179764,
+    "provider_generation_calls": 0,
+    "live_peak_fit": "unverified pending owner authorization",
+    "per_process_memory": "unavailable under WDDM",
+    "installed_cli_declares": [
+      "--disable-dynamic-vram",
+      "--lowvram"
+    ]
+  },
+  "notes": "The later increase is associated with an unrelated external Python application. No ToviTunes inference service was started or stopped; external process untouched. Desktop/WDDM and external applications make idle snapshots variable. Neither snapshot measures Qwen peak sampling memory.",
+  "generation_requests": 0,
+  "monetary_inference_cost": 0,
+  "live_peak_fit": "unverified pending owner authorization"
+}

@@ -35,6 +35,7 @@ class StageContext:
         music_provider: MusicProvider | None = None,
         image_provider: ImageProvider | None = None,
         progress: Callable[[str, str], None] | None = None,
+        before_music: Callable[[], None] | None = None,
     ) -> None:
         self.config, self.ownership = config, ownership
         self.database = Database(config.database_path)
@@ -55,6 +56,7 @@ class StageContext:
             image_provider,
         )
         self.progress = progress
+        self.before_music = before_music
 
     @contextmanager
     def _creative(self) -> Iterator[CreativeService]:

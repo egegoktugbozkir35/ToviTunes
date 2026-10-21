@@ -14,6 +14,7 @@ from tovitunes.errors import ProductionStop
 from tovitunes.music.ace_step import AceStepLocalProvider
 from tovitunes.music.benchmark import MusicBenchmark
 from tovitunes.music.benchmark import plan as plan_music
+from tovitunes.music.providers import MusicProvider
 from tovitunes.pipeline.duration_source import admit_duration_source, uses_duration_path
 from tovitunes.pipeline.music_adapter import creative_music_spec
 from tovitunes.pipeline.production import (
@@ -26,6 +27,13 @@ from tovitunes.services.context import StageContext
 
 
 class MusicService(StageContext):
+    def _provider(self) -> MusicProvider:
+        if self.music_provider is not None:
+            return self.music_provider
+        if self.before_music is not None:
+            self.before_music()
+        return AceStepLocalProvider(self.config.music_generation)
+
     def _music(
         self,
         episode: Episode,
@@ -76,9 +84,7 @@ class MusicService(StageContext):
                     result = benchmark.reconcile(request["request_id"])
                 elif request["status"] == "ambiguous":
                     if request["provider_request_id"]:
-                        provider = self.music_provider or AceStepLocalProvider(
-                            self.config.music_generation
-                        )
+                        provider = self._provider()
                         result = benchmark.provider_resume(request["request_id"], provider)
                     else:
                         raise ProductionStop(
@@ -98,9 +104,7 @@ class MusicService(StageContext):
                         {"request_id": request["request_id"]},
                     )
                 else:
-                    provider = self.music_provider or AceStepLocalProvider(
-                        self.config.music_generation
-                    )
+                    provider = self._provider()
                     if request["remote_started_at"]:
                         if not request["provider_request_id"]:
                             raise ProductionStop(
@@ -124,7 +128,7 @@ class MusicService(StageContext):
                 raise ProductionStop(
                     "BLOCKED", "New production music requires configured ace_step_local"
                 )
-            provider = self.music_provider or AceStepLocalProvider(self.config.music_generation)
+            provider = self._provider()
             item = plan_music(canonical.brief, canonical.lyrics, [provider], attempt=1)[0]
             request = benchmark.prepare(item)
             with closing(self.database.connect()) as db:

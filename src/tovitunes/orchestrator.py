@@ -22,6 +22,7 @@ from tovitunes.persistence.db import Database
 from tovitunes.pipeline.targets import ProductionTarget, stages_for, steps_for
 from tovitunes.progress import PipelineProgress, ProgressReporter, report_progress
 from tovitunes.publication.service import PublicationService
+from tovitunes.render.environment_recovery import resume_environment_sources
 from tovitunes.render.episode_assets import ImageStageBlocked, generate_assets
 from tovitunes.render.models import parse_manifest
 from tovitunes.render.production import load_inputs, validate_manifest
@@ -61,6 +62,8 @@ class Orchestrator:
         render_factory: ServiceFactory,
         publisher_factory: PublisherFactory,
         progress_reporter: ProgressReporter | None = None,
+        prepare_images: Callable[[ProductionExecutionOwnership, str, str], None] | None = None,
+        finish_images: Callable[[ProductionExecutionOwnership, str], None] | None = None,
     ) -> None:
         self.config = config
         self.database = Database(config.database_path)
@@ -72,6 +75,8 @@ class Orchestrator:
         }
         self._publisher_factory = publisher_factory
         self._reporter = progress_reporter
+        self._prepare_images = prepare_images
+        self._finish_images = finish_images
         self._milestone_percent = 0
 
     def _progress(
@@ -280,6 +285,12 @@ class Orchestrator:
                     plan_id = selected.identity.artifact_id
                     visual_plan = parse_visual_plan(context.store.read_json(plan_id))
                     if stage == "VISUAL_ASSETS":
+                        try:
+                            resume_environment_sources(self.config, episode.episode_id, owner)
+                        except (ValueError, OSError, KeyError) as exc:
+                            raise ProductionStop(
+                                "BLOCKED", "Retained environment source needs local recovery",
+                            ) from exc
                         if self.config.lesson_object_generation.provider != "qwen_comfyui":
                             raise ProductionStop(
                                 "BLOCKED", "Production illustrations require qwen_comfyui"
@@ -295,9 +306,23 @@ class Orchestrator:
                             context.image_provider,
                             progress=context.progress,
                             assert_owner=owner.assert_owned,
+                            before_submit=(lambda: self._prepare_images(
+                                owner, key, self.config.lesson_object_generation.base_url,
+                            ) if self._prepare_images else None),
                         )
+                        if self._prepare_images and self._environment_needs_provider(
+                            context, episode.episode_id, visual_plan.world_contract,
+                            visual_plan.reuse_shared_environment,
+                        ):
+                            self._prepare_images(
+                                owner, key, self.config.environment_generation.base_url,
+                            )
                         visual._environment(episode, visual_plan, plan_id)
+                        if self._finish_images:
+                            self._finish_images(owner, key)
                     elif stage == "STORYBOARD":
+                        if self._finish_images:
+                            self._finish_images(owner, key)
                         with closing(self.database.connect()) as db:
                             request = db.execute(
                                 "SELECT request_id FROM episode_music_bindings WHERE episode_id=?",
@@ -364,6 +389,27 @@ class Orchestrator:
             except BaseException:
                 history.finish(diagnostic_id, "interrupted")
                 raise
+
+    def _environment_needs_provider(
+        self, context: StageContext, episode_id: str, world: str, reuse_shared: bool,
+    ) -> bool:
+        if context.store.selected("episode", episode_id, "episode_environment", "main"):
+            return False
+        if reuse_shared:
+            from tovitunes.render.environment_sets import selected_set
+
+            try:
+                if selected_set(self.config)[0].theme == world:
+                    return False
+            except ValueError:
+                pass  # The domain service reports invalid selections; never replaces them.
+        with closing(self.database.connect()) as db:
+            rows = db.execute(
+                "SELECT role FROM environment_requests WHERE episode_id=? AND (status='succeeded' "
+                "OR request_id IN (SELECT request_id FROM environment_source_reconciliations))",
+                (episode_id,),
+            ).fetchall()
+        return len({row[0] for row in rows}) < 4
 
     def _accept_render(
         self,
@@ -451,6 +497,47 @@ def build_orchestrator(
 ) -> Orchestrator:
     """MPT composition root; construct each stage dependency only when it is required."""
 
+    # Resolve lazily: constructing/planning a workflow never starts or stops a service.
+    from tovitunes.web.supervisor import LocalServiceSupervisor
+
+    supervisors: list[LocalServiceSupervisor] = []
+
+    def supervisor() -> LocalServiceSupervisor:
+        if not supervisors:
+            supervisors.append(
+                LocalServiceSupervisor.existing(config) or LocalServiceSupervisor(config)
+            )
+        return supervisors[0]
+
+    def prepare_images(owner: ProductionExecutionOwnership, key: str, endpoint: str) -> None:
+        def admit_music() -> None:
+            retained = plan_continuation(config, key, target=ProductionTarget.RENDER)
+            complete = {s["name"] for s in retained["stages"] if s["status"] == "COMPLETE"}
+            if not {"MUSIC", "AUDIO_ANALYSIS"} <= complete or retained.get("historical"):
+                raise ProductionStop("BLOCKED", "Retained music has not passed source admission")
+
+        manager = supervisor()
+        name = next((name for name, url in manager.urls.items() if
+                     name.startswith("comfyui") and url == endpoint + "/system_stats"), None)
+        if name is None:
+            raise ProductionStop("BLOCKED", "Image service endpoint is not configured")
+        manager.prepare_gpu(name, assert_owner=owner.assert_owned, admit_music=admit_music)
+
+    def finish_images(owner: ProductionExecutionOwnership, key: str) -> None:
+        manager = supervisors[0] if supervisors else LocalServiceSupervisor.existing(config)
+        if manager is None:
+            return
+        retained = plan_continuation(config, key, target=ProductionTarget.RENDER)
+        if "VISUAL_ASSETS" not in retained["reusable_stages"]:
+            raise ProductionStop("BLOCKED", "Image sources have not passed durable admission")
+        for name in manager.urls:
+            if name.startswith("comfyui") and manager.status(refresh=False)[name]["owned"]:
+                owner.assert_owned()
+                if not manager.stop(name):
+                    raise ProductionStop("BLOCKED", "Image service shutdown is unconfirmed", {
+                        "service": name,
+                    })
+
     def factory(cls: type[StageContext]) -> ServiceFactory:
         return lambda owner, progress: cls(
             config,
@@ -459,6 +546,9 @@ def build_orchestrator(
             music_provider=music_provider,
             image_provider=image_provider,
             progress=progress,
+            before_music=lambda: supervisor().prepare_gpu(
+                "ace_step", assert_owner=owner.assert_owned,
+            ),
         )
 
     return Orchestrator(
@@ -470,4 +560,6 @@ def build_orchestrator(
         publisher_factory=publisher_factory
         or (lambda owner: PublicationService(config, ownership=owner)),
         progress_reporter=progress_reporter,
+        prepare_images=prepare_images if image_provider is None else None,
+        finish_images=finish_images if image_provider is None else None,
     )
