@@ -1,0 +1,55 @@
+{
+  "method": "Read-only SQLite mode=ro/query_only plus complete table digests; streamed file SHA-256; originals never migrated",
+  "files": 2252,
+  "bytes_hashed": 13782162544,
+  "registered_artifacts": 955,
+  "before_sha256": "1d4f5cd71dcf18d722ac6ab9c2240827dc310ea29edb4eb4f2e874eb0db7a638",
+  "after_sha256": "1d4f5cd71dcf18d722ac6ab9c2240827dc310ea29edb4eb4f2e874eb0db7a638",
+  "unchanged": true,
+  "changed_files": [],
+  "databases": {
+    "production": {
+      "tables": 52,
+      "artifacts": 292,
+      "valid_artifacts": true,
+      "quick_check": "ok",
+      "foreign_key_violations": [],
+      "migrations": 29,
+      "pending": [
+        "0030_image_native_crash_abandonments.sql"
+      ],
+      "checksum_mismatches": []
+    },
+    "acceptance": {
+      "tables": 53,
+      "artifacts": 301,
+      "valid_artifacts": true,
+      "quick_check": "ok",
+      "foreign_key_violations": [],
+      "migrations": 30,
+      "pending": [],
+      "checksum_mismatches": []
+    },
+    "retained-acceptance": {
+      "tables": 52,
+      "artifacts": 362,
+      "valid_artifacts": true,
+      "quick_check": "ok",
+      "foreign_key_violations": [],
+      "migrations": 29,
+      "pending": [
+        "0030_image_native_crash_abandonments.sql"
+      ],
+      "checksum_mismatches": []
+    }
+  },
+  "original_ambiguous_request": "036c3a81-23e9-40d1-8ac3-947f2989eba7",
+  "original_status": "ambiguous",
+  "retained_successor_source_sha256": "3ae836f2ec5b5bb1d14f1c380069460f5c27664d9d94c6a666ed099da570e0ff",
+  "selected_wav_sha256": "036fc491fa67f7ee0863201715b84c9f332772dfdb1631caaed633f432176be9",
+  "publication_boundary": "No authorizations, selections, release/upload/publication records changed",
+  "configured_model_config_files": 30,
+  "model_files_unchanged": true,
+  "model_before_sha256": "697e332a65884773bf459db59844c39a586c9eff3ddd395a5a264fe4ac11bbe4",
+  "model_after_sha256": "697e332a65884773bf459db59844c39a586c9eff3ddd395a5a264fe4ac11bbe4"
+}

@@ -26,6 +26,8 @@ from tovitunes.pipeline.targets import STAGES, ProductionTarget, stages_for
 from tovitunes.publication.models import PublicationState, publication_state
 from tovitunes.publication.preflight import evaluate_release
 from tovitunes.render.admission_v3 import load_v3_evidence
+from tovitunes.render.environment_recovery import returned_environment_source
+from tovitunes.render.image_recovery import has_returned_image
 from tovitunes.render.models import parse_manifest
 from tovitunes.render.production import validate_manifest
 from tovitunes.render.visual_evidence import validate_visual_receipt
@@ -319,7 +321,20 @@ def plan_continuation(
                             "ORDER BY r.rowid DESC LIMIT 1",
                             (eid, key),
                         ).fetchone()
-                        if image_request and not image_request["source_artifact_id"]:
+                        returned = False
+                        if image_request:
+                            try:
+                                returned = has_returned_image(config, db, image_request)
+                            except (ValueError, OSError, KeyError, TypeError):
+                                by_name["VISUAL_ASSETS"].update(
+                                    status="BLOCKED", evidence={
+                                        "request_id": image_request["request_id"],
+                                        "reason": "Retained image response identity is invalid",
+                                    },
+                                )
+                                continue
+                        if (image_request and not image_request["source_artifact_id"]
+                                and not returned):
                             if image_request["status"] in {"remote_started", "ambiguous"}:
                                 by_name["VISUAL_ASSETS"]["status"] = "AMBIGUOUS"
                             elif image_request["status"] == "failed":
@@ -339,7 +354,7 @@ def plan_continuation(
                                 )
                     env_request = (
                         db.execute(
-                            "SELECT status,request_id FROM environment_requests "
+                            "SELECT * FROM environment_requests "
                             "WHERE episode_id=? "
                             "AND status NOT IN ('prepared','succeeded') "
                             + (
@@ -347,27 +362,43 @@ def plan_continuation(
                                 "environment_source_reconciliations) "
                                 if "environment_source_reconciliations" in tables else ""
                             )
-                            + "ORDER BY rowid LIMIT 1",
+                            + "ORDER BY rowid",
                             (eid,),
-                        ).fetchone()
+                        ).fetchall()
                         if "production_image_receipts" in tables
-                        else None
+                        else []
                     )
-                    if env_request:
+                    for pending_env in env_request:
+                        try:
+                            if (pending_env["status"] in {"remote_started", "ambiguous"}
+                                    and returned_environment_source(store, pending_env)):
+                                by_name["VISUAL_ASSETS"]["evidence"].setdefault(
+                                    "retained_environment_sources", [],
+                                ).append(pending_env["request_id"])
+                                continue
+                        except (ValueError, OSError, KeyError):
+                            by_name["VISUAL_ASSETS"].update(
+                                status="BLOCKED", evidence={
+                                    "reason": "Retained environment source is invalid",
+                                    "request_id": pending_env["request_id"],
+                                },
+                            )
+                            break
                         by_name["VISUAL_ASSETS"].update(
                             status="AMBIGUOUS"
-                            if env_request["status"] in {"remote_started", "ambiguous"}
+                            if pending_env["status"] in {"remote_started", "ambiguous"}
                             else "FAILED",
                             evidence={
-                                "request_id": env_request["request_id"],
+                                "request_id": pending_env["request_id"],
                                 "missing_assets": missing,
                                 "subsystem": "environment",
                                 "error_kind": "environment_provider_failure",
                                 "retry_state": "ambiguous"
-                                if env_request["status"] in {"remote_started", "ambiguous"}
+                                if pending_env["status"] in {"remote_started", "ambiguous"}
                                 else "requires_recovery",
                             },
                         )
+                        break
                 board_row = artifacts.get(("timed_storyboard", "main"))
                 if board_row and duration_path:
                     try:
