@@ -24,14 +24,22 @@ from tovitunes.render.image_recovery import retain_image_response, returned_imag
 from tovitunes.render.lesson_objects import (
     WHITE_BACKGROUND_V1,
     WHITE_BACKGROUND_V2,
+    WHITE_BACKGROUND_V3,
     _prepare_qwen_white_background,
     _provider,
+    art_direction,
     normalize,
 )
 from tovitunes.render.props import dotted_circle_brushing
 
 LEGACY_IMAGE_PROMPT = "episode_illustration_v2"
-IMAGE_PROMPT = "episode_illustration_v3"
+PREVIOUS_IMAGE_PROMPT = "episode_illustration_v3"
+IMAGE_PROMPT = "episode_illustration_v4"
+NORMALIZATION_VERSIONS = {
+    LEGACY_IMAGE_PROMPT: WHITE_BACKGROUND_V1,
+    PREVIOUS_IMAGE_PROMPT: WHITE_BACKGROUND_V2,
+    IMAGE_PROMPT: WHITE_BACKGROUND_V3,
+}
 
 
 def swatch(color: str, size: int = 1024) -> Image.Image:
@@ -63,7 +71,7 @@ def image_spec(
     visual_direction: str,
     *, prompt_version: str = IMAGE_PROMPT,
 ) -> CanonicalImageSpec:
-    if prompt_version not in {LEGACY_IMAGE_PROMPT, IMAGE_PROMPT}:
+    if prompt_version not in NORMALIZATION_VERSIONS:
         raise ValueError("unsupported episode illustration prompt version")
     spec = CanonicalImageSpec(
         benchmark_version="episode_visual_assets_v1",
@@ -110,7 +118,7 @@ def image_spec(
     )
     if prompt_version == LEGACY_IMAGE_PROMPT:
         return spec
-    return spec.model_copy(update={
+    spec = spec.model_copy(update={
         "scene_brief": requirement.description,
         "teaching_check": (
             f"Illustrate exactly this subject: {requirement.semantic_label}. "
@@ -136,6 +144,17 @@ def image_spec(
         ),
         "negative_constraints": (
             "No photorealism, plastic 3D, dramatic lighting or franchise imitation.",
+        ),
+    })
+    if prompt_version == PREVIOUS_IMAGE_PROMPT:
+        return spec
+    return spec.model_copy(update={
+        "common_brief": art_direction(visual_direction) + (
+            " Use natural proportions and a complete, simple readable silhouette. "
+            "Keep essential subject details distinct at phone size."
+        ),
+        "identity_rules": (
+            "Exactly the complete described subject, isolated on removable plain white padding.",
         ),
     })
 
@@ -217,6 +236,8 @@ def generate_assets(
     before_submit: Callable[[], None] | None = None,
     assert_owner: Callable[[], None],
 ) -> dict[str, str]:
+    if image_prompt not in NORMALIZATION_VERSIONS:
+        raise ValueError("unsupported episode illustration prompt version")
     if not visual.required_assets:
         assert_owner()
         return {}
@@ -321,22 +342,53 @@ def generate_assets(
         provider = provider or _provider(config)
         if provider.provider != "qwen_comfyui":
             raise ValueError("production illustrations require the existing Qwen adapter")
-        spec = image_spec(episode, requirement, visual_direction, prompt_version=image_prompt)
-        translated = provider.translate(spec)  # Local workflow loading only; never network.
-        profile: dict[str, Any] = {
-            "canonical": spec.model_dump(mode="json"),
-            "translated": translated.model_dump(mode="json"),
-        }
-        if image_prompt == IMAGE_PROMPT:
-            profile["normalization_version"] = WHITE_BACKGROUND_V2
-        fingerprint = sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
         with closing(store.database.connect()) as db:
             prior = db.execute(
                 "SELECT * FROM generation_requests WHERE episode_id=? "
                 "AND kind='visual_asset' AND slot_key=? ORDER BY rowid DESC LIMIT 1",
                 (episode.episode_id, slot),
             ).fetchone()
-        if prior and prior["input_fingerprint"] != fingerprint:
+            historical = db.execute(
+                "SELECT spec_json FROM production_image_receipts WHERE request_id=?",
+                (prior["request_id"],),
+            ).fetchone() if prior else None
+            retained_plan_source = db.execute(
+                "SELECT 1 FROM artifact_versions v JOIN artifact_dependencies d "
+                "ON d.consumer_artifact_id=v.artifact_id WHERE v.episode_id=? "
+                "AND v.kind='visual_asset_source' AND v.slot_key=? "
+                "AND json_extract(v.provenance_json,'$.local_request_id')=? "
+                "AND d.input_artifact_id=? AND d.input_sha256=?",
+                (episode.episode_id, slot, prior["request_id"], plan_id, store.get(plan_id).sha256),
+            ).fetchone() if prior else None
+        effective_prompt = image_prompt
+        if (
+            image_prompt == IMAGE_PROMPT and prior and historical and retained_plan_source
+            and prior["status"] in {"remote_started", "ambiguous", "succeeded"}
+        ):
+            stored_spec = json.loads(historical["spec_json"])
+            stored_version = (
+                stored_spec.get("prompt_version") if isinstance(stored_spec, dict) else None
+            )
+            if stored_version in {LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT}:
+                # Reuse only a source bound to this exact original plan. The full
+                # old profile is recomputed below; no changed input is grandfathered.
+                effective_prompt = stored_version
+        normalization_version = NORMALIZATION_VERSIONS[effective_prompt]
+        spec = image_spec(episode, requirement, visual_direction, prompt_version=effective_prompt)
+        translated = provider.translate(spec)  # Local workflow loading only; never network.
+        profile: dict[str, Any] = {
+            "canonical": spec.model_dump(mode="json"),
+            "translated": translated.model_dump(mode="json"),
+        }
+        if effective_prompt != LEGACY_IMAGE_PROMPT:
+            profile["normalization_version"] = normalization_version
+        if effective_prompt == IMAGE_PROMPT:
+            profile["visual_plan"] = {"artifact_id": plan_id, "sha256": store.get(plan_id).sha256}
+        fingerprint = sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
+        if prior and (
+            prior["input_fingerprint"] != fingerprint
+            or prior["provider"] != provider.provider or prior["model"] != provider.model
+        ):
             raise ValueError("image request inputs changed; explicit reconciliation required")
         request_id = (
             prior["request_id"]
@@ -360,6 +412,11 @@ def generate_assets(
             receipt = db.execute(
                 "SELECT * FROM production_image_receipts WHERE request_id=?", (request_id,)
             ).fetchone()
+            if (
+                receipt["spec_json"] != spec.canonical_json()
+                or json.loads(receipt["provider_profile_json"]) != profile
+            ):
+                raise ImageStageBlocked("BLOCKED", request_id, "retained_request_profile_invalid")
             # Recover ingest-before-receipt crashes from provenance, without another call.
             source = db.execute(
                 "SELECT artifact_id FROM artifact_versions WHERE episode_id=? "
@@ -367,14 +424,23 @@ def generate_assets(
                 "AND json_extract(provenance_json,'$.local_request_id')=?",
                 (episode.episode_id, slot, request_id),
             ).fetchone()
+            source_plan = db.execute(
+                "SELECT 1 FROM artifact_dependencies WHERE consumer_artifact_id=? "
+                "AND input_artifact_id=? AND input_sha256=?",
+                (receipt["source_artifact_id"] or (source[0] if source else None),
+                 plan_id, store.get(plan_id).sha256),
+            ).fetchone()
         source_record = store.get(receipt["source_artifact_id"] or source[0]) if (
             receipt["source_artifact_id"] or source
         ) else None
         if source_record is not None and (
-            source_record.identity.owner_id != episode.episode_id
+            not source_plan
+            or source_record.identity.owner_scope != "episode"
+            or source_record.identity.owner_id != episode.episode_id
             or source_record.identity.kind != "visual_asset_source"
             or source_record.identity.slot_key != slot
             or source_record.provenance.local_request_id != request_id
+            or source_record.provenance.prompt_version != effective_prompt
             or source_record.provenance.provider != provider.provider
             or source_record.provenance.model != provider.model
             or prior and prior["provider_request_id"] not in {
@@ -453,7 +519,7 @@ def generate_assets(
                         model=provider.model,
                         local_request_id=request_id,
                         request_id=result.provider_request_id,
-                        prompt_version=image_prompt,
+                        prompt_version=effective_prompt,
                         input_artifact_ids=(plan_id,),
                     ),
                     dependencies=[InputDependency(plan_id, "visual_plan")],
@@ -515,26 +581,27 @@ def generate_assets(
                     category,
                 ) from exc
         assert_owner()
-        store.admit_preview(source_record.identity.artifact_id)
         try:
             image = normalize(
                 _prepare_qwen_white_background(
                     store.path_for(source_record.identity.artifact_id).read_bytes(), "image/png",
-                    version=WHITE_BACKGROUND_V2
-                    if image_prompt == IMAGE_PROMPT else WHITE_BACKGROUND_V1,
+                    version=normalization_version,
                 )
             )
         except (ValueError, OSError) as exc:
             blocked = ImageStageBlocked("BLOCKED", request_id, "image_processing_failure")
-            blocked.evidence["diagnostic"] = (
+            blocked.evidence["diagnostic"] = str(exc) + ". " + (
                 "Inspect the retained raw image, white padding and isolated backdrop artifacts. "
                 "A pale subject needs "
                 "a distinct continuous contour; an indistinguishable white subject cannot "
                 "be extracted safely. Any new source requires explicit operator approval."
             )
             blocked.evidence["source_artifact_id"] = source_record.identity.artifact_id
+            blocked.evidence["normalization_version"] = normalization_version
             raise blocked from exc
         image.save(path)
+        assert_owner()
+        store.admit_preview(source_record.identity.artifact_id)
         assert_owner()
         record = persist_file(
             store,

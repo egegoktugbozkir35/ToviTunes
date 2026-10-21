@@ -271,7 +271,7 @@ WHITE_BACKGROUND_V3 = "qwen_white_exterior_v3"
 
 # Shared direction describes the visual language, never an episode location,
 # anatomy, subject inventory or camera layout. Frozen historical prompts do not
-# consume it. The episode foreground consumer awaits Gate 1's whole-file release.
+# consume it. New versioned foreground and environment consumers opt in explicitly.
 ART_DIRECTION_V1 = (
     "Preschool 2D illustration: rounded forms, soft tonal contours, gentle "
     "dimensional shading, warm even light and a bright controlled palette."

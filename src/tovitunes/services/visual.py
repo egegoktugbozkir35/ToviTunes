@@ -26,6 +26,8 @@ from tovitunes.domain.visual_plan import EpisodeVisualPlan, validate_visual_plan
 from tovitunes.errors import ProductionStop
 from tovitunes.render.environment_sets import (
     EPISODE_PROMPT_VERSION,
+    LEGACY_EPISODE_PROMPT_VERSION,
+    PROMPT_VERSION,
     generate_set,
     selected_set,
 )
@@ -217,7 +219,15 @@ class VisualService(StageContext):
             aid = str(payload["environment_set_artifact_id"])
             shared_binding = payload.get("ownership") == "shared_selected"
         else:
+            role_briefs: dict[str, str] = {
+                env.role: env.description for env in visual.environments
+            }
+            environment_prompt = EPISODE_PROMPT_VERSION
             with closing(self.database.connect()) as db:
+                retained_requests = db.execute(
+                    "SELECT role,spec_json FROM environment_requests WHERE episode_id=?",
+                    (episode.episode_id,),
+                ).fetchall()
                 unresolved = db.execute(
                     "SELECT status,request_id FROM environment_requests "
                     "WHERE episode_id=? "
@@ -226,6 +236,18 @@ class VisualService(StageContext):
                     "environment_source_reconciliations) ORDER BY rowid LIMIT 1",
                     (episode.episode_id,),
                 ).fetchone()
+            if retained_requests:
+                specs = [(row["role"], json.loads(row["spec_json"])) for row in retained_requests]
+                versions = {spec["prompt_version"] for _, spec in specs}
+                if len(versions) != 1 or not versions <= {
+                    PROMPT_VERSION, LEGACY_EPISODE_PROMPT_VERSION, EPISODE_PROMPT_VERSION,
+                } or any(
+                    spec["scene_brief"] != role_briefs.get(role) for role, spec in specs
+                ):
+                    raise ValueError(
+                        "retained environment differs from the original planned setting"
+                    )
+                environment_prompt = versions.pop()
             if unresolved:
                 raise ProductionStop(
                     "AMBIGUOUS"
@@ -260,9 +282,10 @@ class VisualService(StageContext):
                         self.config,
                         confirmed=True,
                         episode_id=episode.episode_id,
-                        role_briefs={env.role: env.description for env in visual.environments},
-                        prompt_version=EPISODE_PROMPT_VERSION,
-                        visual_direction=self.catalog.creative_bible.visual_direction,
+                        role_briefs=role_briefs,
+                        prompt_version=environment_prompt,
+                        visual_direction=self.catalog.creative_bible.visual_direction
+                        if environment_prompt == EPISODE_PROMPT_VERSION else "",
                         assert_owner=self.ownership.assert_owned,
                     )
                 except ProviderFailure as exc:

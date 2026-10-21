@@ -28,6 +28,7 @@ from tovitunes.render.environment_sets import (
 from tovitunes.render.episode_assets import (
     IMAGE_PROMPT,
     LEGACY_IMAGE_PROMPT,
+    PREVIOUS_IMAGE_PROMPT,
     generate_assets,
     image_spec,
     persist_file,
@@ -258,8 +259,9 @@ def test_foreground_prompt_scopes_subject_and_protects_unspecified_pale_parts():
 
 
 @pytest.mark.parametrize("crash_before_normalization", [False, True])
+@pytest.mark.parametrize("historical_prompt", [LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT])
 def test_historical_foreground_reuse_never_reinterprets_or_resends(
-    runtime, episode, tmp_path, monkeypatch, crash_before_normalization,
+    runtime, episode, tmp_path, monkeypatch, crash_before_normalization, historical_prompt,
 ):
     from types import SimpleNamespace
 
@@ -291,26 +293,25 @@ def test_historical_foreground_reuse_never_reinterprets_or_resends(
             raise SystemExit("raw source retained before normalization")
         monkeypatch.setattr(episode_assets, "_prepare_qwen_white_background", crash)
         with pytest.raises(SystemExit):
-            generate_assets(*args, image_prompt=LEGACY_IMAGE_PROMPT, assert_owner=lambda: None)
+            generate_assets(*args, image_prompt=historical_prompt, assert_owner=lambda: None)
         monkeypatch.setattr(episode_assets, "_prepare_qwen_white_background", original)
     else:
-        generate_assets(*args, image_prompt=LEGACY_IMAGE_PROMPT, assert_owner=lambda: None)
+        generate_assets(*args, image_prompt=historical_prompt, assert_owner=lambda: None)
     with closing(store.database.connect()) as conn:
         receipt_before = dict(conn.execute("SELECT * FROM production_image_receipts").fetchone())
         request_before = dict(conn.execute("SELECT * FROM generation_requests").fetchone())
     source_id = receipt_before["source_artifact_id"]
     raw_before = store.path_for(source_id).read_bytes()
-    if crash_before_normalization:
-        with pytest.raises(ValueError, match="explicit reconciliation"):
-            generate_assets(*args, assert_owner=lambda: None)
-        generate_assets(*args, image_prompt=LEGACY_IMAGE_PROMPT, assert_owner=lambda: None)
-    else:
-        generate_assets(*args, assert_owner=lambda: None)
+    def forbidden_submit():
+        pytest.fail("retained historical source must not warm or submit to a provider")
+
+    generate_assets(*args, assert_owner=lambda: None, before_submit=forbidden_submit)
     assert provider.calls == ["cup"]
     assert store.path_for(source_id).read_bytes() == raw_before
     selected = store.selected("episode", episode.episode_id, "visual_asset", "cup")
     assert Image.open(store.path_for(selected.identity.artifact_id)).tobytes() == normalize(
-        original(raw_before, "image/png")
+        original(raw_before, "image/png", version=WHITE_BACKGROUND_V1
+                 if historical_prompt == LEGACY_IMAGE_PROMPT else WHITE_BACKGROUND_V2)
     ).tobytes()
     with closing(store.database.connect()) as conn:
         receipt_after = dict(conn.execute("SELECT * FROM production_image_receipts").fetchone())
@@ -512,3 +513,242 @@ def test_old_environment_normalizer_cannot_bypass_scene_v3_source_admission(
         validate_environment_assets(
             store, generated['manifest_artifact_id'], episode.episode_id, shared=False,
         )
+
+
+@pytest.fixture
+def asset_case(runtime, episode, tmp_path):
+    from types import SimpleNamespace
+
+    store = AssetStore(
+        runtime.data_root, Database(runtime.database_path),
+        generated_source_roots=[tmp_path], local_preview=True,
+    )
+    path = tmp_path / 'plan.json'
+    path.write_text('{}')
+    plan_id = persist_file(
+        store, episode, 'episode_visual_plan', 'main', path, (),
+    ).identity.artifact_id
+    visual = SimpleNamespace(required_assets=(VisualRequirement(
+        asset_key='cup', kind='scene_element', display_name='cup', semantic_label='cup',
+        description='One pale cup', educational_role='supporting',
+    ),))
+    return store, plan_id, visual
+
+
+@pytest.mark.parametrize('unsafe', [False, True])
+def test_production_v4_uses_v3_extraction_and_never_resubmits_rejected_source(
+    runtime, episode, tmp_path, asset_case, unsafe,
+):
+    from tovitunes.render.episode_assets import ImageStageBlocked
+    from tovitunes.render.lesson_objects import WHITE_BACKGROUND_V3
+
+    store, plan_id, visual = asset_case
+    raw = Image.new('RGB', (128, 128), 'white')
+    draw = ImageDraw.Draw(raw)
+    draw.ellipse((24, 24, 103, 90), fill='white', outline='#f7f7f7', width=4)
+    if unsafe:
+        draw.rectangle((64, 115, 65, 116), fill='#dddddd')
+
+    class Provider(FakeReviewedQwen):
+        def translate(self, spec):
+            return spec
+
+        def generate(self, *args, **kwargs):
+            return super().generate(*args, **kwargs).model_copy(update={'image_bytes': png(raw)})
+
+    provider = Provider()
+    starts = []
+    args = (runtime, store, episode, visual, plan_id, tmp_path, 'Preschool art.', provider)
+    kwargs = dict(assert_owner=lambda: None, before_submit=lambda: starts.append('start'))
+    if unsafe:
+        for _ in range(2):
+            with pytest.raises(ImageStageBlocked) as blocked:
+                generate_assets(*args, **kwargs)
+            assert blocked.value.evidence['normalization_version'] == WHITE_BACKGROUND_V3
+            assert 'detached backdrop specks' in blocked.value.evidence['diagnostic']
+        assert store.selected('episode', episode.episode_id, 'visual_asset', 'cup') is None
+    else:
+        aid = generate_assets(*args, **kwargs)['cup']
+        assert generate_assets(*args, **kwargs)['cup'] == aid
+        actual = Image.open(store.path_for(aid)).convert('RGBA')
+        assert actual.getpixel((512, 600)) == (255, 255, 255, 255)
+    assert provider.calls == ['cup'] and starts == ['start']
+    with closing(store.database.connect()) as db:
+        receipt = db.execute('SELECT * FROM production_image_receipts').fetchone()
+        profile = json.loads(receipt['provider_profile_json'])
+        assert profile['canonical']['prompt_version'] == IMAGE_PROMPT
+        assert profile['normalization_version'] == WHITE_BACKGROUND_V3
+        assert profile['visual_plan'] == {
+            'artifact_id': plan_id, 'sha256': store.get(plan_id).sha256,
+        }
+        source = receipt['source_artifact_id']
+        assert store.path_for(source).read_bytes() == png(raw)
+        if unsafe:
+            assert db.execute(
+                'SELECT 1 FROM preview_admissions WHERE artifact_id=?', (source,),
+            ).fetchone() is None
+
+
+@pytest.mark.parametrize('version', [LEGACY_IMAGE_PROMPT, PREVIOUS_IMAGE_PROMPT, IMAGE_PROMPT])
+def test_retained_foreground_cannot_move_to_a_different_plan(
+    runtime, episode, tmp_path, monkeypatch, asset_case, version,
+):
+    from tovitunes.render import episode_assets
+
+    store, plan_id, visual = asset_case
+
+    class Provider(FakeReviewedQwen):
+        def translate(self, spec):
+            return spec
+
+    provider = Provider()
+    args = (runtime, store, episode, visual, plan_id, tmp_path, 'Preschool art.', provider)
+    with monkeypatch.context() as patch:
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt('raw source retained before normalization')
+        patch.setattr(episode_assets, 'normalize', interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            generate_assets(*args, image_prompt=version, assert_owner=lambda: None)
+    path = tmp_path / 'changed-plan.json'
+    path.write_text('{"changed":true}')
+    new_plan = persist_file(
+        store, episode, 'episode_visual_plan', 'main', path, (),
+    ).identity.artifact_id
+    with pytest.raises(ValueError, match='explicit reconciliation'):
+        generate_assets(
+            runtime, store, episode, visual, new_plan, tmp_path, 'Preschool art.', provider,
+            assert_owner=lambda: None,
+        )
+    assert provider.calls == ['cup']
+
+
+@pytest.mark.parametrize('environment_prompt', [PROMPT_VERSION, 'environment_scene_v2'])
+def test_historical_environment_sources_bind_without_new_calls(
+    runtime, episode, monkeypatch, environment_prompt,
+):
+    from types import SimpleNamespace
+
+    from tovitunes.execution import ProductionExecutionOwnership
+    from tovitunes.services import visual as visual_module
+
+    database = Database(runtime.database_path)
+    provider = FakeProvider()
+    briefs = dict.fromkeys(ROLES, 'One quiet indoor classroom')
+    with ProductionExecutionOwnership(database, operation='offline-gate2-binding') as owner:
+        service = visual_module.VisualService(runtime, owner)
+        plan = service._json(episode, 'episode_visual_plan', {}, ())
+        generated = generate_set(
+            runtime, confirmed=True, provider=provider, episode_id=episode.episode_id,
+            role_briefs=briefs, prompt_version=environment_prompt,
+            assert_owner=owner.assert_owned,
+        )
+        original = visual_module.generate_set
+        monkeypatch.setattr(
+            visual_module, 'generate_set', lambda *args, **kwargs:
+            original(*args, provider=provider, **kwargs),
+        )
+        visual = SimpleNamespace(
+            environments=tuple(
+                SimpleNamespace(role=role, description=briefs[role]) for role in ROLES
+            ),
+            world_contract=THEME, reuse_shared_environment=False,
+        )
+        with closing(database.connect()) as db:
+            before = [tuple(r) for r in db.execute('SELECT * FROM environment_requests')]
+        assert service._environment(episode, visual, plan.identity.artifact_id) == (
+            generated['manifest_artifact_id']
+        )
+        assert service._environment(episode, visual, plan.identity.artifact_id) == (
+            generated['manifest_artifact_id']
+        )
+        assert provider.calls == 4
+        with closing(database.connect()) as db:
+            assert [tuple(r) for r in db.execute('SELECT * FROM environment_requests')] == before
+
+
+@pytest.mark.parametrize('version,expected', [
+    (LEGACY_IMAGE_PROMPT, 'd4be04e17bb7f32528cb253357b42f22c56026593ce5af307eba55ba74d68fd1'),
+    (PREVIOUS_IMAGE_PROMPT, '232beb892652e7340c61b6d82e1037d1a576ad72071307b9f7d7db97f44c6f1e'),
+])
+def test_frozen_foreground_prompt_fingerprints(version, expected):
+    from types import SimpleNamespace
+
+    episode = SimpleNamespace(
+        objective='One cup', character_packs=[SimpleNamespace(revision_id='pack')],
+        brand_revision_id='brand',
+    )
+    requirement = VisualRequirement(
+        asset_key='cup', kind='scene_element', display_name='cup', semantic_label='cup',
+        description='One pale cup', educational_role='supporting',
+    )
+    assert image_spec(
+        episode, requirement, 'Soft preschool art.', prompt_version=version,
+    ).fingerprint() == expected
+
+
+@pytest.mark.parametrize('state', ['prepared', 'ambiguous'])
+def test_contract_upgrade_cannot_reissue_an_old_request_without_returned_source(
+    runtime, episode, tmp_path, asset_case, state,
+):
+    from tovitunes.benchmark.providers import ProviderFailure
+    from tovitunes.render.episode_assets import ImageStageBlocked
+
+    store, plan_id, visual = asset_case
+
+    class Provider(FakeReviewedQwen):
+        def translate(self, spec):
+            return spec
+
+        def generate(self, spec, reference_paths, *, on_remote_start=None):
+            self.calls.append(spec.case_id)
+            on_remote_start()
+            raise ProviderFailure('fixture uncertain request', outcome='ambiguous')
+
+    provider = Provider()
+    args = (runtime, store, episode, visual, plan_id, tmp_path, 'Preschool art.', provider)
+
+    def startup_failed():
+        raise OSError('fixture startup failure before remote submission')
+
+    with pytest.raises(OSError if state == 'prepared' else ImageStageBlocked):
+        generate_assets(
+            *args, image_prompt=PREVIOUS_IMAGE_PROMPT, assert_owner=lambda: None,
+            before_submit=startup_failed if state == 'prepared' else None,
+        )
+    with closing(store.database.connect()) as db:
+        before = tuple(db.execute('SELECT * FROM generation_requests').fetchone())
+    with pytest.raises(ValueError, match='explicit reconciliation'):
+        generate_assets(*args, assert_owner=lambda: None)
+    assert provider.calls == ([] if state == 'prepared' else ['cup'])
+    with closing(store.database.connect()) as db:
+        assert tuple(db.execute('SELECT * FROM generation_requests').fetchone()) == before
+
+
+@pytest.mark.parametrize('field', ['spec_json', 'provider_profile_json'])
+def test_retained_source_refuses_contradictory_request_receipt(
+    runtime, episode, tmp_path, monkeypatch, asset_case, field,
+):
+    from tovitunes.render import episode_assets
+    from tovitunes.render.episode_assets import ImageStageBlocked
+
+    store, plan_id, visual = asset_case
+
+    class Provider(FakeReviewedQwen):
+        def translate(self, spec):
+            return spec
+
+    provider = Provider()
+    args = (runtime, store, episode, visual, plan_id, tmp_path, 'Preschool art.', provider)
+    with monkeypatch.context() as patch:
+        def interrupted(*args, **kwargs):
+            raise KeyboardInterrupt('retained raw source')
+        patch.setattr(episode_assets, 'normalize', interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            generate_assets(*args, assert_owner=lambda: None)
+    with closing(store.database.connect()) as db, db:
+        # These two known column names are test parameters, never external SQL.
+        db.execute(f'UPDATE production_image_receipts SET {field}=?', ('{}',))
+    with pytest.raises(ImageStageBlocked) as blocked:
+        generate_assets(*args, assert_owner=lambda: None)
+    assert blocked.value.evidence['error_kind'] == 'retained_request_profile_invalid'
+    assert provider.calls == ['cup']
