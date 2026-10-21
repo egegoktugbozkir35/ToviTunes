@@ -380,7 +380,9 @@ class LocalServiceSupervisor:
                         job = _WindowsJob()
                         self._jobs[name] = job
                         # The bootstrap cannot spawn the actual service until assigned to our job.
-                        argv = [sys.executable, "-c", (
+                        # A Windows venv redirector can spawn its base interpreter before
+                        # assignment. Run the inert bootstrap in the base executable itself.
+                        argv = [getattr(sys, "_base_executable", sys.executable), "-c", (
                             "import subprocess,sys; "
                             "ready=sys.stdin.buffer.readline(); "
                             "sys.exit(1) if ready != b'go\\n' else "

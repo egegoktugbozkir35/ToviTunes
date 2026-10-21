@@ -436,7 +436,8 @@ def generate_assets(
                     raise ValueError("image provider omitted remote-start tracking")
                 if current["status"] == "prepared":
                     retain_image_response(config, store.database, request_id, result)
-                assert_owner()
+                # Preserve immutable returned evidence even after lease loss. The existing
+                # ownership fence below still forbids admission, normalization and selection.
                 source_path = working / f"{request_id}_source.png"
                 source_path.write_bytes(result.image_bytes)
                 source_record = store.ingest(

@@ -725,14 +725,32 @@ def test_busy_owned_comfyui_is_not_terminated_for_music(context, monkeypatch):
 
 @pytest.mark.skipif(__import__("os").name != "nt", reason="Windows process ownership")
 def test_windows_shutdown_uses_owned_job_handles_and_preserves_unrelated_cpu_child(
-    context, tmp_path,
+    context, tmp_path, monkeypatch,
 ):
+    import ctypes
     import sys
+    from ctypes import wintypes
+
+    from tovitunes.web.supervisor import _WindowsJob
+
+    assign = _WindowsJob.assign
+
+    def delayed_assignment(self, process):
+        time.sleep(0.3)  # Force interpreter initialization before the job assignment.
+        assign(self, process)
+
+    monkeypatch.setattr(_WindowsJob, "assign", delayed_assignment)
+    api = ctypes.WinDLL("kernel32", use_last_error=True)
+    api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    api.OpenProcess.restype = wintypes.HANDLE
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    api.CloseHandle.argtypes = [wintypes.HANDLE]
 
     marker = tmp_path / "service-started"
     command = (sys.executable, "-c", (
-        "from pathlib import Path; import time; "
-        f"Path({str(marker)!r}).touch(); time.sleep(90)"
+        "from pathlib import Path; import time,os; "
+        f"Path({str(marker)!r}).write_text(str(os.getpid())); time.sleep(90)"
     ))
     config = context[0].model_copy(update={"local_services": LocalServicesConfig(
         ace_step=LocalServiceLaunchConfig(command=command, startup_timeout_seconds=0.1),
@@ -740,18 +758,27 @@ def test_windows_shutdown_uses_owned_job_handles_and_preserves_unrelated_cpu_chi
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"],
                                  creationflags=subprocess.CREATE_NO_WINDOW)
     manager = LocalServiceSupervisor(config, probe=lambda _: False)
+    service_handle = None
     try:
         manager.start("ace_step")  # CPU-only sentinel; intentionally has no HTTP endpoint.
         deadline = time.monotonic() + 5
         while not marker.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert marker.exists()
+        # Retain the actual service's handle, independent of the bootstrap/venv launcher.
+        service_handle = api.OpenProcess(0x100001, False, int(marker.read_text()))
+        assert service_handle
         job = manager._jobs["ace_step"]
         assert job.active()
         assert manager.stop("ace_step")
+        assert api.WaitForSingleObject(service_handle, 5000) == 0
         assert not manager._processes and unrelated.poll() is None
     finally:
         manager.close()
+        if service_handle:
+            if api.WaitForSingleObject(service_handle, 0) != 0:
+                api.TerminateProcess(service_handle, 1)  # Only this test's CPU sentinel.
+            api.CloseHandle(service_handle)
         unrelated.terminate()
         unrelated.wait(timeout=5)
 
